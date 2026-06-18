@@ -14,17 +14,17 @@ begin;
 
 -- Users -----------------------------------------------------------------------
 insert into users (id, email, full_name, phone, role) values
-  ('11111111-1111-1111-1111-111111111111', 'admin@bla.test',      ' Admin',       '+977 98712345671', 'admin'),
-  ('22222222-2222-2222-2222-222222222222', 'dispatch@bla.test',   ' Dispatcher',  '+977 98712345672', 'dispatcher'),
-  ('33333333-3333-3333-3333-333333333333', 'driver1@bla.test',    ' Driver',      '+977 98712345673', 'driver'),
-  ('44444444-4444-4444-4444-444444444444', 'driver2@bla.test',    ' Pilot',     '+977 98712345674', 'driver'),
-  ('55555555-5555-5555-5555-555555555555', 'customer1@bla.test',  ' Customer',   '+977 98712345675', 'customer')
+  ('11111111-1111-1111-1111-111111111111', 'admin@bla.test',      'Ava Admin',       '+919000000001', 'admin'),
+  ('22222222-2222-2222-2222-222222222222', 'dispatch@bla.test',   'Dev Dispatcher',  '+919000000002', 'dispatcher'),
+  ('33333333-3333-3333-3333-333333333333', 'driver1@bla.test',    'Dan Driver',      '+919000000003', 'driver'),
+  ('44444444-4444-4444-4444-444444444444', 'driver2@bla.test',    'Priya Pilot',     '+919000000004', 'driver'),
+  ('55555555-5555-5555-5555-555555555555', 'customer1@bla.test',  'Carl Customer',   '+919000000005', 'customer')
 on conflict (id) do nothing;
 
 -- Warehouses ------------------------------------------------------------------
 insert into warehouses (id, code, name, address, city, postal_code, latitude, longitude) values
-  ('a1111111-1111-1111-1111-111111111111', 'WH-BLR-01', 'KTM Central Hub',
-   '100 MG Road', 'KTM', '560001', 12.9759, 77.6063)
+  ('a1111111-1111-1111-1111-111111111111', 'WH-BLR-01', 'Bangalore Central Hub',
+   '100 MG Road', 'Bengaluru', '560001', 12.9759, 77.6063)
 on conflict (id) do nothing;
 
 -- Vehicles --------------------------------------------------------------------
@@ -37,17 +37,17 @@ on conflict (id) do nothing;
 insert into drivers (id, user_id, warehouse_id, vehicle_id, name, phone, license_number, is_available, current_latitude, current_longitude, last_seen_at) values
   ('d1111111-1111-1111-1111-111111111111', '33333333-3333-3333-3333-333333333333',
    'a1111111-1111-1111-1111-111111111111', 'b1111111-1111-1111-1111-111111111111',
-   'Dan Driver', '+977 98712345673', 'DL-KA-001', true, 12.9759, 77.6063, now()),
+   'Dan Driver', '+919000000003', 'DL-KA-001', true, 12.9759, 77.6063, now()),
   ('d2222222-2222-2222-2222-222222222222', '44444444-4444-4444-4444-444444444444',
    'a1111111-1111-1111-1111-111111111111', 'b2222222-2222-2222-2222-222222222222',
-   'Priya Pilot', '+977 98712345674', 'DL-KA-002', true, 12.9352, 77.6245, now())
+   'Priya Pilot', '+919000000004', 'DL-KA-002', true, 12.9352, 77.6245, now())
 on conflict (id) do nothing;
 
 -- Customers -------------------------------------------------------------------
 insert into customers (id, user_id, name, email, phone, address_line1, city, state, postal_code, country, latitude, longitude) values
   ('c1111111-1111-1111-1111-111111111111', '55555555-5555-5555-5555-555555555555',
-   'Carl Customer', 'customer1@bla.test', '+977 98712345675',
-   '42 Indiranagar 100ft Rd', 'KTM', 'Karnataka', '560038', 'IN', 12.9719, 77.6412)
+   'Carl Customer', 'customer1@bla.test', '+919000000005',
+   '42 Indiranagar 100ft Rd', 'Bengaluru', 'Karnataka', '560038', 'IN', 12.9719, 77.6412)
 on conflict (id) do nothing;
 
 -- Orders ----------------------------------------------------------------------
@@ -59,14 +59,14 @@ insert into orders (
 ) values
   ('e1111111-1111-1111-1111-111111111111', 'BLA-2026-0001',
    'c1111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'received',
-   '100 MG Road, KTM', 12.9759, 77.6063,
-   '42 Indiranagar 100ft Rd, KTM', 12.9719, 77.6412,
-   'Carl Customer', '+977 98712345675', 3.5, 499.00, 'Ring the bell twice'),
+   '100 MG Road, Bengaluru', 12.9759, 77.6063,
+   '42 Indiranagar 100ft Rd, Bengaluru', 12.9719, 77.6412,
+   'Carl Customer', '+919000000005', 3.5, 499.00, 'Ring the bell twice'),
   ('e2222222-2222-2222-2222-222222222222', 'BLA-2026-0002',
    'c1111111-1111-1111-1111-111111111111', 'a1111111-1111-1111-1111-111111111111', 'out_for_delivery',
-   '100 MG Road, KTM', 12.9759, 77.6063,
-   '8 Koramangala 5th Block, KTM', 12.9352, 77.6245,
-   'Carl Customer', '+977 98712345675', 1.2, 199.00, 'Leave at reception')
+   '100 MG Road, Bengaluru', 12.9759, 77.6063,
+   '8 Koramangala 5th Block, Bengaluru', 12.9352, 77.6245,
+   'Carl Customer', '+919000000005', 1.2, 199.00, 'Leave at reception')
 on conflict (id) do nothing;
 
 -- Order items -----------------------------------------------------------------
