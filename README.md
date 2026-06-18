@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # BLA — Delivery Operations Platform
 
 A monolithic, cost-optimized delivery operations platform (think a lean,
@@ -274,3 +275,7 @@ stateless and can already scale reads without extra infrastructure.
    and background job queues.
 
 Until then, leave `REDIS_URL` empty — the platform runs entirely on free tiers.
+=======
+# BLA
+![App Banner](https://github.com/sanjeevRae/MYfiles/blob/main/BLA.svg)
+>>>>>>> 0db6a09a31d879a29e330518916d24f775bc854a
