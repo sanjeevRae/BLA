@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Track your delivery — BLA</title>
+
+    <!-- MapTiler GL JS (no framework) -->
+    <link
+      rel="stylesheet"
+      href="https://cdn.maptiler.com/maptiler-sdk-js/v2.4.0/maptiler-sdk.css"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>BLA Delivery Tracking</h1>
+    </header>
+
+    <main class="container">
+      <form id="lookup" class="lookup">
+        <input
+          id="tracking-input"
+          type="text"
+          placeholder="Enter order number, e.g. BLA-2026-0002"
+          autocomplete="off"
+        />
+        <button type="submit">Track</button>
+      </form>
+
+      <p id="error" class="error" hidden></p>
+
+      <section id="result" hidden>
+        <div class="card">
+          <div class="order-head">
+            <div>
+              <div class="muted">Order</div>
+              <div id="order-number" class="order-number">—</div>
+            </div>
+            <div id="status-badge" class="badge">—</div>
+          </div>
+
+          <!-- Status progression -->
+          <ol id="progress" class="progress">
+            <li data-step="received"><span class="dot"></span>Received</li>
+            <li data-step="on_place"><span class="dot"></span>On place</li>
+            <li data-step="went_for_delivery"><span class="dot"></span>Went for delivery</li>
+            <li data-step="out_for_delivery"><span class="dot"></span>Out for delivery</li>
+            <li data-step="delivered"><span class="dot"></span>Delivered</li>
+          </ol>
+
+          <div id="eta" class="muted"></div>
+        </div>
+
+        <div class="card map-card">
+          <div class="muted map-label">Driver location (live)</div>
+          <div id="map"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Libraries from CDN (no build step) -->
+    <script src="https://cdn.maptiler.com/maptiler-sdk-js/v2.4.0/maptiler-sdk.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+
+    <!-- Public config (copy config.example.js -> config.js) -->
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

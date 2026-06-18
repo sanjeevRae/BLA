@@ -1,0 +1,31 @@
+name: GPS tracking cleanup
+
+# Prunes old rows from gps_tracking to stay within the Supabase free-tier
+# 500 MB database limit. Calls the backend's /tasks/cleanup-gps endpoint, which
+# runs the cleanup_gps_tracking() SQL function defined in db/schema.sql.
+#
+# ALTERNATIVE: Render Cron Jobs (see backend/render.yaml).
+
+on:
+  schedule:
+    - cron: '0 2 * * *' # 02:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: 'Days of GPS history to keep'
+        default: '7'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger GPS cleanup
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+          CRON_TOKEN: ${{ secrets.CRON_TOKEN }}
+          RETENTION_DAYS: ${{ github.event.inputs.retention_days || '7' }}
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent -X POST \
+            "${API_BASE_URL}/tasks/cleanup-gps?retention_days=${RETENTION_DAYS}" \
+            -H "X-Cron-Token: ${CRON_TOKEN}"

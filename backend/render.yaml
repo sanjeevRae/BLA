@@ -1,0 +1,94 @@
+# Render Blueprint for the BLA FastAPI backend.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Single web instance on the FREE tier (spins down after 15 min of inactivity
+# and cold-starts on the next request). Upgrade `plan` to `starter` ($7) or
+# `standard` ($19) for always-on 24/7 operation.
+#
+# Secrets are NOT stored here — set them in the Render dashboard or a synced
+# Environment Group. `sync: false` tells Render to prompt for the value once
+# and never overwrite it from the repo.
+
+services:
+  - type: web
+    name: bla-api
+    runtime: python
+    plan: free                # -> starter ($7) / standard ($19) for always-on
+    region: oregon            # pick the region closest to your users
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    # numInstances: 1         # >>> set >1 (paid plans) to scale horizontally;
+                              #     then also provision Redis below and set REDIS_URL.
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: CORS_ORIGINS
+        sync: false           # e.g. https://admin.example.com,https://track.example.com
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: MAPTILER_API_KEY
+        sync: false
+      - key: OPENROUTESERVICE_API_KEY
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: EMAILJS_SERVICE_ID
+        sync: false
+      - key: EMAILJS_TEMPLATE_ID
+        sync: false
+      - key: EMAILJS_USER_ID
+        sync: false
+      - key: EMAILJS_PRIVATE_KEY
+        sync: false
+      - key: TEXTLOCAL_API_KEY
+        sync: false
+      - key: TEXTLOCAL_SENDER
+        sync: false
+      - key: CRON_TOKEN
+        generateValue: true   # shared secret for /tasks/* endpoints
+      # - key: REDIS_URL        # >>> uncomment when scaling to multiple instances
+      #   fromService:
+      #     type: redis
+      #     name: bla-redis
+      #     property: connectionString
+
+# Render Cron Jobs (alternative to GitHub Actions for background work).
+# These hit the protected /tasks endpoints on a schedule. Uncomment to use.
+#
+#  - type: cron
+#    name: bla-daily-report
+#    runtime: docker            # or use a tiny curl image
+#    schedule: "30 1 * * *"     # 01:30 UTC daily
+#    rootDir: backend
+#    buildCommand: pip install httpx
+#    startCommand: >
+#      python -c "import os,httpx;
+#      httpx.post(os.environ['API_BASE']+'/tasks/daily-report',
+#      params={'to_email': os.environ['REPORT_EMAIL']},
+#      headers={'X-Cron-Token': os.environ['CRON_TOKEN']}, timeout=60)"
+#
+#  - type: cron
+#    name: bla-gps-cleanup
+#    runtime: docker
+#    schedule: "0 2 * * *"      # 02:00 UTC daily
+#    startCommand: >
+#      python -c "import os,httpx;
+#      httpx.post(os.environ['API_BASE']+'/tasks/cleanup-gps',
+#      params={'retention_days': 7},
+#      headers={'X-Cron-Token': os.environ['CRON_TOKEN']}, timeout=60)"
+
+# >>> SCALING: a managed Redis instance (only needed for multi-instance) <<<
+#  databases: []  # Supabase is the primary DB (external), not provisioned here.
+#
+#  Redis (deferred — ~$32/mo):
+#  - type: redis
+#    name: bla-redis
+#    plan: starter
+#    ipAllowList: []           # restrict as needed
