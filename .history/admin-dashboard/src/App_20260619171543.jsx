@@ -231,16 +231,15 @@ export default function App() {
               className={`grid transition-all duration-300 ease-in-out ${orderFormOpen ? 'mt-3 grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}
             >
               <div className="overflow-hidden">
-                <div className="max-h-[70vh] overflow-y-auto border-t border-slate-100 pt-3 pr-1">
-                  <form onSubmit={submitOrder} className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-slate-800">{formTitle}</h3>
-                      {editingOrder ? (
-                        <button
-                          type="button"
-                          onClick={resetForm}
-                          className="text-xs text-slate-500 hover:text-slate-700"
-                        >
+                <form onSubmit={submitOrder} className="space-y-3 border-t border-slate-100 pt-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-slate-800">{formTitle}</h3>
+                    {editingOrder ? (
+                      <button
+                        type="button"
+                        onClick={resetForm}
+                        className="text-xs text-slate-500 hover:text-slate-700"
+                      >
                         Cancel edit
                       </button>
                     ) : null}
@@ -343,16 +342,15 @@ export default function App() {
                     rows={3}
                     className="w-full rounded border border-slate-300 p-2 text-sm"
                   />
-                    <button
-                      type="submit"
-                      disabled={orderBusy}
-                      className="w-full rounded bg-slate-900 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                    >
-                      {orderBusy ? 'Saving…' : editingOrder ? 'Update order' : 'Create order'}
-                    </button>
-                    {orderMessage ? <p className="text-xs text-slate-600">{orderMessage}</p> : null}
-                  </form>
-                </div>
+                  <button
+                    type="submit"
+                    disabled={orderBusy}
+                    className="w-full rounded bg-slate-900 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {orderBusy ? 'Saving…' : editingOrder ? 'Update order' : 'Create order'}
+                  </button>
+                  {orderMessage ? <p className="text-xs text-slate-600">{orderMessage}</p> : null}
+                </form>
               </div>
             </div>
           </div>

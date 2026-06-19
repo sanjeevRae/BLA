@@ -70,57 +70,6 @@ def get_order(order_id: str) -> Optional[dict[str, Any]]:
     return res.data[0] if res.data else None
 
 
-async def update_order(order_id: str, payload: OrderCreate | Any) -> Optional[dict[str, Any]]:
-    sb = get_supabase()
-
-    total_weight = sum(i.weight_kg * i.quantity for i in payload.items)
-    total_amount = sum(i.unit_price * i.quantity for i in payload.items)
-
-    order_row = {
-        "customer_id": str(payload.customer_id) if payload.customer_id else None,
-        "warehouse_id": str(payload.warehouse_id) if payload.warehouse_id else None,
-        "pickup_address": payload.pickup_address,
-        "pickup_latitude": payload.pickup_latitude,
-        "pickup_longitude": payload.pickup_longitude,
-        "delivery_address": payload.delivery_address,
-        "delivery_latitude": payload.delivery_latitude,
-        "delivery_longitude": payload.delivery_longitude,
-        "recipient_name": payload.recipient_name,
-        "recipient_phone": payload.recipient_phone,
-        "total_weight_kg": total_weight,
-        "total_amount": total_amount,
-        "notes": payload.notes,
-        "scheduled_at": payload.scheduled_at.isoformat() if payload.scheduled_at else None,
-        "status": payload.status.value if hasattr(payload.status, "value") else payload.status,
-    }
-    res = sb.table("orders").update(order_row).eq("id", order_id).execute()
-    if not res.data:
-        return None
-
-    sb.table("order_items").delete().eq("order_id", order_id).execute()
-    if payload.items:
-        items = [
-            {
-                "order_id": order_id,
-                "sku": i.sku,
-                "description": i.description,
-                "quantity": i.quantity,
-                "unit_price": i.unit_price,
-                "weight_kg": i.weight_kg,
-            }
-            for i in payload.items
-        ]
-        sb.table("order_items").insert(items).execute()
-
-    return res.data[0]
-
-
-def delete_order(order_id: str) -> bool:
-    sb = get_supabase()
-    res = sb.table("orders").delete().eq("id", order_id).execute()
-    return bool(res.data)
-
-
 def list_orders(
     status: Optional[str] = None, limit: int = 100, offset: int = 0
 ) -> list[dict[str, Any]]:
@@ -213,19 +162,6 @@ async def assign_driver(
     # Mark driver busy.
     sb.table("drivers").update({"is_available": False}).eq("id", driver_id).execute()
     return res.data[0]
-
-
-def get_order_assignment(order_id: str) -> Optional[dict[str, Any]]:
-    sb = get_supabase()
-    res = (
-        sb.table("delivery_assignments")
-        .select("*")
-        .eq("order_id", order_id)
-        .order("assigned_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    return res.data[0] if res.data else None
 
 
 def driver_assignments(driver_id: str, active_only: bool = True) -> list[dict[str, Any]]:
