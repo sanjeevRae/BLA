@@ -81,15 +81,6 @@ def list_orders(
     return res.data or []
 
 
-def list_drivers(available_only: bool = False) -> list[dict[str, Any]]:
-    sb = get_supabase()
-    query = sb.table("drivers").select("id, name, is_available, vehicle_id").order("name")
-    if available_only:
-        query = query.eq("is_available", True)
-    res = query.execute()
-    return res.data or []
-
-
 async def update_order_status(
     order_id: str,
     status: str,
