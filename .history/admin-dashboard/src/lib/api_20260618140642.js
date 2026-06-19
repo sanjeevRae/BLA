@@ -16,17 +16,11 @@ async function request(path, options = {}) {
 export const api = {
   listOrders: (status) =>
     request(`/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`),
-  listDrivers: (availableOnly = false) =>
-    request(`/drivers${availableOnly ? '?available_only=true' : ''}`),
   getOverview: () => request('/analytics/overview'),
   assignDriver: (orderId, driverId, vehicleId) =>
     request(`/orders/${orderId}/assign`, {
       method: 'POST',
-      body: JSON.stringify({
-        order_id: orderId,
-        driver_id: driverId,
-        vehicle_id: vehicleId,
-      }),
+      body: JSON.stringify({ order_id: orderId, driver_id: driverId, vehicle_id: vehicleId }),
     }),
   updateOrderStatus: (orderId, status) =>
     request(`/orders/${orderId}/status`, {

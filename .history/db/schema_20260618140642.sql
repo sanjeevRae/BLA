@@ -330,9 +330,8 @@ $$ language plpgsql;
 
 drop trigger if exists trg_orders_status_history on orders;
 create trigger trg_orders_status_history
-  after insert or update of status on orders
+  before insert or update of status on orders
   for each row execute function log_order_status_change();
-
 
 -- =============================================================================
 -- ROW LEVEL SECURITY

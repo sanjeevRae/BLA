@@ -81,15 +81,6 @@ def list_orders(
     return res.data or []
 
 
-def list_drivers(available_only: bool = False) -> list[dict[str, Any]]:
-    sb = get_supabase()
-    query = sb.table("drivers").select("id, name, is_available, vehicle_id").order("name")
-    if available_only:
-        query = query.eq("is_available", True)
-    res = query.execute()
-    return res.data or []
-
-
 async def update_order_status(
     order_id: str,
     status: str,
@@ -112,7 +103,16 @@ async def update_order_status(
         return None
     order = res.data[0]
 
-
+    if any(v is not None for v in (lat, lon, note)):
+        sb.table("delivery_status_history").insert(
+            {
+                "order_id": order_id,
+                "status": status,
+                "latitude": lat,
+                "longitude": lon,
+                "note": note,
+            }
+        ).execute()
 
     await notifications.notify_status_update(order, status)
     return order
