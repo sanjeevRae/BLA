@@ -29,9 +29,8 @@ def overview() -> dict[str, Any]:
     delivered = status_count(("delivered",))
     in_transit = status_count(_IN_TRANSIT)
     pending = status_count(_PENDING)
-    # Active drivers = available drivers ready for assignment
     active_drivers = _count(
-        sb.table("drivers").select("id", count="exact").eq("is_available", True)
+        sb.table("drivers").select("id", count="exact").eq("is_available", False)
     )
 
     return {
