@@ -88,16 +88,10 @@ alter table orders enable trigger trg_orders_status_history;
 -- Explicitly seed delivery status history to match current order status
 -- (so realtime/customer views have initial history rows).
 insert into delivery_status_history (order_id, status, changed_by)
-select * from (values
-  ('e1111111-1111-1111-1111-111111111111'::uuid, 'received'::order_status, null::uuid),
-  ('e2222222-2222-2222-2222-222222222222'::uuid, 'out_for_delivery'::order_status, null::uuid)
-) as v(order_id, status, changed_by)
-where not exists (
-  select 1 from delivery_status_history dsh
-  where dsh.order_id = v.order_id
-    and dsh.status = v.status
-);
-
+values
+  ('e1111111-1111-1111-1111-111111111111', 'received', null),
+  ('e2222222-2222-2222-2222-222222222222', 'out_for_delivery', null)
+on conflict (order_id, status) do nothing;
 
 
 -- Order items -----------------------------------------------------------------
