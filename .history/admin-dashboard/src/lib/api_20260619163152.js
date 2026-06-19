@@ -16,21 +16,6 @@ async function request(path, options = {}) {
 export const api = {
   listOrders: (status) =>
     request(`/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`),
-  createOrder: (payload) =>
-    request('/orders', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-  updateOrder: (orderId, payload) =>
-    request(`/orders/${orderId}`, {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    }),
-  deleteOrder: (orderId) =>
-    request(`/orders/${orderId}`, {
-      method: 'DELETE',
-    }),
-  getOrderAssignment: (orderId) => request(`/orders/${orderId}/assignment`),
   listDrivers: (availableOnly = false) =>
     request(`/drivers${availableOnly ? '?available_only=true' : ''}`),
   getOverview: () => request('/analytics/overview'),

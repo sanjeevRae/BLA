@@ -343,16 +343,15 @@ export default function App() {
                     rows={3}
                     className="w-full rounded border border-slate-300 p-2 text-sm"
                   />
-                    <button
-                      type="submit"
-                      disabled={orderBusy}
-                      className="w-full rounded bg-slate-900 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                    >
-                      {orderBusy ? 'Saving…' : editingOrder ? 'Update order' : 'Create order'}
-                    </button>
-                    {orderMessage ? <p className="text-xs text-slate-600">{orderMessage}</p> : null}
-                  </form>
-                </div>
+                  <button
+                    type="submit"
+                    disabled={orderBusy}
+                    className="w-full rounded bg-slate-900 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {orderBusy ? 'Saving…' : editingOrder ? 'Update order' : 'Create order'}
+                  </button>
+                  {orderMessage ? <p className="text-xs text-slate-600">{orderMessage}</p> : null}
+                </form>
               </div>
             </div>
           </div>
