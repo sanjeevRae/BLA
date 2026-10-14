@@ -3,6 +3,10 @@
 .env.local
 **/.env
 !**/.env.example
+backend/.env
+
+# Editor history / backups (never commit)
+.history/
 
 # Python
 __pycache__/

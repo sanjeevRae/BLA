@@ -2,21 +2,24 @@
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.core.auth import require_staff
 from app.schemas.assignments import AssignmentCreate, AssignmentOut
 from app.schemas.orders import OrderCreate, OrderOut, OrderStatusUpdate, OrderUpdate
 from app.services import orders as order_service
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
+_staff = Depends(require_staff)
 
-@router.post("", response_model=OrderOut, status_code=201)
+
+@router.post("", response_model=OrderOut, status_code=201, dependencies=[_staff])
 async def create_order(payload: OrderCreate):
     return await order_service.create_order(payload)
 
 
-@router.put("/{order_id}", response_model=OrderOut)
+@router.put("/{order_id}", response_model=OrderOut, dependencies=[_staff])
 async def update_order(order_id: UUID, payload: OrderUpdate):
     order = await order_service.update_order(str(order_id), payload)
     if not order:
@@ -24,7 +27,7 @@ async def update_order(order_id: UUID, payload: OrderUpdate):
     return order
 
 
-@router.delete("/{order_id}", status_code=204)
+@router.delete("/{order_id}", status_code=204, dependencies=[_staff])
 def delete_order(order_id: UUID):
     deleted = order_service.delete_order(str(order_id))
     if not deleted:
@@ -39,6 +42,14 @@ def list_orders(
     offset: int = Query(default=0, ge=0),
 ):
     return order_service.list_orders(status=status, limit=limit, offset=offset)
+
+
+@router.get("/by-number/{order_number}", response_model=OrderOut)
+def get_order_by_number(order_number: str):
+    order = order_service.get_order_by_number(order_number)
+    if not order:
+        raise HTTPException(status_code=404, detail="order not found")
+    return order
 
 
 @router.get("/{order_id}", response_model=OrderOut)
@@ -57,7 +68,7 @@ def get_order_assignment(order_id: UUID):
     return assignment
 
 
-@router.patch("/{order_id}/status", response_model=OrderOut)
+@router.patch("/{order_id}/status", response_model=OrderOut, dependencies=[_staff])
 async def update_status(order_id: UUID, payload: OrderStatusUpdate):
     order = await order_service.update_order_status(
         str(order_id),
@@ -71,7 +82,9 @@ async def update_status(order_id: UUID, payload: OrderStatusUpdate):
     return order
 
 
-@router.post("/{order_id}/assign", response_model=AssignmentOut, status_code=201)
+@router.post(
+    "/{order_id}/assign", response_model=AssignmentOut, status_code=201, dependencies=[_staff]
+)
 async def assign_driver(order_id: UUID, payload: AssignmentCreate):
     if str(payload.order_id) != str(order_id):
         raise HTTPException(status_code=400, detail="order_id mismatch")

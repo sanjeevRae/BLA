@@ -53,6 +53,10 @@ services:
         sync: false
       - key: CRON_TOKEN
         generateValue: true   # shared secret for /tasks/* endpoints
+      - key: REQUIRE_AUTH
+        value: 'true'         # enforce Supabase JWT on write routes in prod
+      - key: SUPABASE_JWT_SECRET
+        sync: false           # Supabase dashboard -> Settings -> API -> JWT Secret
       # - key: REDIS_URL        # >>> uncomment when scaling to multiple instances
       #   fromService:
       #     type: redis

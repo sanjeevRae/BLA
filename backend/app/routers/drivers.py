@@ -1,13 +1,14 @@
 """Driver-facing endpoints: fetch assignments, update status, push GPS, upload POD.
 
-In production these are protected by Supabase Auth JWTs; the driver app sends
-its bearer token and a gateway/dependency verifies it. For brevity the auth
-dependency is left as a clearly-marked TODO so the routes stay runnable in dev.
+Auth: write routes (GPS, assignment status, POD) require a Supabase JWT when
+REQUIRE_AUTH=true; in dev (false) they run open for local testing.
 """
+from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.core.auth import require_user
 from app.schemas.assignments import (
     AssignmentOut,
     AssignmentStatusUpdate,
@@ -18,6 +19,8 @@ from app.services import realtime, storage
 from app.core.supabase_client import get_supabase
 
 router = APIRouter(prefix="/drivers", tags=["drivers"])
+
+_user = Depends(require_user)
 
 
 @router.get("")
@@ -32,7 +35,11 @@ def get_assignments(driver_id: UUID, active_only: bool = True):
     return order_service.driver_assignments(str(driver_id), active_only=active_only)
 
 
-@router.patch("/assignments/{assignment_id}/status", response_model=AssignmentOut)
+@router.patch(
+    "/assignments/{assignment_id}/status",
+    response_model=AssignmentOut,
+    dependencies=[_user],
+)
 def update_assignment_status(assignment_id: UUID, payload: AssignmentStatusUpdate):
     assignment = order_service.update_assignment_status(
         str(assignment_id), payload.status.value
@@ -42,7 +49,7 @@ def update_assignment_status(assignment_id: UUID, payload: AssignmentStatusUpdat
     return assignment
 
 
-@router.post("/gps", status_code=201)
+@router.post("/gps", status_code=201, dependencies=[_user])
 def push_gps(ping: GpsPing):
     """Drivers POST a GPS ping (every ~5s).
 
@@ -69,7 +76,7 @@ def push_gps(ping: GpsPing):
     return {"id": saved.get("id"), "ok": True}
 
 
-@router.post("/pod", status_code=201)
+@router.post("/pod", status_code=201, dependencies=[_user])
 async def upload_proof_of_delivery(
     package_id: UUID = Form(...),
     signed_by: str = Form(""),
@@ -88,7 +95,7 @@ async def upload_proof_of_delivery(
             {
                 "pod_photo_url": url,
                 "pod_signed_by": signed_by or None,
-                "pod_signed_at": "now()",
+                "pod_signed_at": datetime.now(timezone.utc).isoformat(),
             }
         )
         .eq("id", str(package_id))

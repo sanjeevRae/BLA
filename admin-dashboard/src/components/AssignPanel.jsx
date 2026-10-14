@@ -24,7 +24,7 @@ export default function AssignPanel({ order, onAssigned }) {
 
   if (!order) {
     return (
-      <div className="rounded-3xl border border-dashed border-slate-300 p-6 text-sm text-slate-400">
+      <div className="border border-dashed border-line p-6 text-sm text-slate2">
         Select an order to assign a driver.
       </div>
     );
@@ -62,20 +62,26 @@ export default function AssignPanel({ order, onAssigned }) {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-3xl bg-slate-950 p-4 text-white shadow-lg">
-        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Selected order</div>
-        <div className="mt-2 text-base font-semibold">{order.order_number}</div>
-        <div className="mt-1 text-sm text-slate-300">{order.delivery_address}</div>
+      <div className="rounded-md bg-cream p-4">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
+          Selected order
+        </p>
+        <p className="mt-2 text-[13px] font-bold text-ink">{order.order_number}</p>
+        <p className="mt-1 text-[13px] text-slate2">{order.delivery_address}</p>
       </div>
 
-      <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-        <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+      <div className="border border-line bg-surface p-4">
+        <label
+          htmlFor="assign-driver"
+          className="mb-2 block text-[13px] font-semibold uppercase tracking-[0.18em] text-brand"
+        >
           Assign driver
         </label>
         <select
+          id="assign-driver"
           value={driverId}
           onChange={(e) => setDriverId(e.target.value)}
-          className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm outline-none transition focus:border-slate-400"
+          className="h-11 w-full border border-line bg-surface px-3 text-sm text-ink focus:border-ink"
         >
           <option value="">Select a driver…</option>
           {drivers.map((d) => (
@@ -87,23 +93,23 @@ export default function AssignPanel({ order, onAssigned }) {
         <button
           onClick={assign}
           disabled={busy || !driverId}
-          className="mt-3 w-full rounded-2xl bg-slate-950 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+          className="mt-3 h-11 w-full bg-brand text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
         >
           Assign route
         </button>
       </div>
 
-      <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
-        <label className="mb-3 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+      <div className="border border-line bg-surface p-4">
+        <p className="mb-3 text-[13px] font-semibold uppercase tracking-[0.18em] text-brand">
           Quick status update
-        </label>
+        </p>
         <div className="flex flex-wrap gap-2">
           {['on_place', 'went_for_delivery', 'out_for_delivery', 'delivered'].map((s) => (
             <button
               key={s}
               onClick={() => setStatus(s)}
               disabled={busy}
-              className="rounded-full border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
+              className="h-9 border border-line bg-surface px-3 text-xs font-semibold text-ink transition hover:border-ink hover:bg-cream disabled:opacity-50"
             >
               {s.replace(/_/g, ' ')}
             </button>
@@ -111,7 +117,7 @@ export default function AssignPanel({ order, onAssigned }) {
         </div>
       </div>
 
-      {msg && <p className="text-xs text-slate-600">{msg}</p>}
+      {msg && <p className="text-[13px] text-slate2">{msg}</p>}
     </div>
   );
 }

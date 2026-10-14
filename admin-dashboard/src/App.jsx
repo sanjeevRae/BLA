@@ -1,10 +1,45 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import StatsBar from './components/StatsBar';
 import OrdersList from './components/OrdersList';
 import AssignPanel from './components/AssignPanel';
 import LiveMap from './components/LiveMap';
+import TopBar from './components/TopBar';
+import Sidebar, { NAV_ITEMS } from './components/Sidebar';
+import PageHeader from './components/PageHeader';
+import DataTable from './components/DataTable';
+import Dashboard from './components/Dashboard';
+import {
+  ItemsPage,
+  DriversPage,
+  PackagesPage,
+  PaymentsPage,
+  VehiclesPage,
+  WarehousesPage,
+} from './components/Pages';
 import { supabase } from './lib/supabase';
 import { api } from './lib/api';
+
+const CLIENT_COLUMNS = [
+  {
+    key: 'name',
+    label: 'Name',
+    render: (r) => <span className="font-semibold text-ink">{r.name || 'Unnamed'}</span>,
+  },
+  { key: 'email', label: 'Email' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'city', label: 'City' },
+  {
+    key: 'created_at',
+    label: 'Created',
+    render: (r) =>
+      r.created_at
+        ? new Date(r.created_at).toLocaleDateString(undefined, {
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+          })
+        : '—',
+  },
+];
 
 const EMPTY_ORDER_FORM = {
   delivery_address: '',
@@ -29,9 +64,16 @@ const ORDER_STATUSES = [
   'failed',
 ];
 
+const FIELD_CLASS =
+  'h-11 w-full border border-line bg-surface px-3 text-sm text-ink focus:border-ink';
+
 export default function App() {
   const [stats, setStats] = useState(null);
+  const [cashflow, setCashflow] = useState(null);
+  const [adminFeed, setAdminFeed] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [orders, setOrders] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [selected, setSelected] = useState(null);
   const [editingOrder, setEditingOrder] = useState(null);
   const [orderFormOpen, setOrderFormOpen] = useState(false);
@@ -39,17 +81,82 @@ export default function App() {
   const [orderBusy, setOrderBusy] = useState(false);
   const [orderMessage, setOrderMessage] = useState('');
   const [landmarkBusy, setLandmarkBusy] = useState(null);
+  const [search, setSearch] = useState('');
+  const [tab, setTab] = useState('orders');
+  const [refreshing, setRefreshing] = useState(false);
+  const [page, setPage] = useState('dashboard');
+  const [days, setDays] = useState(120);
+
+  const dateLabel = useMemo(() => {
+    const fmt = (d) =>
+      d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - (days - 1));
+    return `${fmt(start)} – ${fmt(end)}`;
+  }, [days]);
 
   const refresh = useCallback(async () => {
+    setRefreshing(true);
     try {
-      const [ov, list] = await Promise.all([api.getOverview(), api.listOrders()]);
+      const [ov, list, flow, feed, cust, prof] = await Promise.all([
+        api.getOverview(),
+        api.listOrders(),
+        api.getCashflow(),
+        api.getAdminFeed(),
+        api.listCustomers(''),
+        api.getProfile(),
+      ]);
       setStats(ov);
       setOrders(list);
+      setCashflow(flow);
+      setAdminFeed(feed);
+      setCustomers(cust);
+      setProfile(prof);
       setSelected((prev) => list.find((o) => o.id === prev?.id) ?? null);
     } catch (e) {
       console.error(e);
+    } finally {
+      setRefreshing(false);
     }
   }, []);
+
+  const visibleOrders = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const base =
+      tab === 'attention'
+        ? orders.filter((o) => ['failed', 'cancelled'].includes(o.status) || o.status === 'received')
+        : orders;
+    if (!q) return base;
+    return base.filter((o) =>
+      [o.order_number, o.delivery_address, o.recipient_name, o.recipient_phone, o.status]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    );
+  }, [orders, search, tab]);
+
+  const visibleCustomers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return customers;
+    return customers.filter((c) =>
+      [c.name, c.email, c.phone, c.city]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(q))
+    );
+  }, [customers, search]);
+
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        const list = await api.listCustomers(search.trim());
+        setCustomers(list);
+      } catch (error) {
+        console.error(error);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     refresh();
@@ -77,6 +184,13 @@ export default function App() {
     setOrderFormOpen(false);
   }
 
+  function openCreate() {
+    setEditingOrder(null);
+    setOrderForm(EMPTY_ORDER_FORM);
+    setOrderMessage('');
+    setOrderFormOpen(true);
+  }
+
   function startEdit(order) {
     setEditingOrder(order);
     setOrderFormOpen(true);
@@ -94,6 +208,7 @@ export default function App() {
     });
     setOrderMessage('');
   }
+
 
   async function fillCoordinatesFromLandmark(prefix) {
     const address = orderForm[`${prefix}_address`]?.trim();
@@ -185,171 +300,290 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f6f7fb] text-slate-900">
-      <header className="border-b border-white/60 bg-white/80 backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] items-center justify-between px-4 py-4 lg:px-6">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.35em] text-slate-400">
-              Delivery control
-            </p>
-            <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-950">
-              BLA Operations Dashboard
-            </h1>
-          </div>
-          <button
-            onClick={refresh}
-            className="rounded-full bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
-          >
-            Refresh
-          </button>
-        </div>
-      </header>
+    <div className="flex min-h-screen bg-page text-ink">
+      <Sidebar page={page} onPageChange={setPage} profile={profile} />
 
-      <div className="mx-auto max-w-[1600px] px-4 py-5 lg:px-6 lg:py-6">
-        <StatsBar stats={stats} />
-
-        <main className="mt-6 grid gap-5 xl:grid-cols-[340px_minmax(0,1fr)_360px]">
-          <section className="flex min-h-[calc(100vh-220px)] flex-col overflow-hidden rounded-[28px] border border-white/80 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-            <div className="border-b border-slate-100 px-4 py-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-                    Orders
-                  </p>
-                  <h2 className="mt-1 text-lg font-semibold text-slate-900">Order management</h2>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (orderFormOpen && !editingOrder) {
-                      setOrderFormOpen(false);
-                      setOrderMessage('');
-                    } else {
-                      setEditingOrder(null);
-                      setOrderForm(EMPTY_ORDER_FORM);
-                      setOrderMessage('');
-                      setOrderFormOpen(true);
-                    }
-                  }}
-                  className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-950 text-xl text-white shadow-lg shadow-slate-300/50 transition hover:bg-slate-800"
-                  aria-label="Toggle order form"
-                >
-                  {orderFormOpen ? '−' : '+'}
-                </button>
-              </div>
-
-              <div
-                className={`grid transition-all duration-300 ease-in-out ${
-                  orderFormOpen ? 'mt-4 grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+      <div className="min-w-0 flex-1">
+        {/* Mobile section nav */}
+        <nav className="border-b border-line bg-surface px-3 py-2 lg:hidden" aria-label="Sections">
+          <div className="flex gap-1 overflow-x-auto">
+            {NAV_ITEMS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setPage(item.id)}
+                className={`h-9 shrink-0 rounded-md px-3 text-xs font-semibold transition ${
+                  page === item.id ? 'bg-accentbg text-brand' : 'text-slate2 hover:bg-cream'
                 }`}
               >
-                <div className="overflow-hidden">
-                  <div className="max-h-[72vh] overflow-y-auto rounded-[24px] border border-slate-200 bg-slate-50 p-4">
-                    <form onSubmit={submitOrder} className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-semibold text-slate-900">{formTitle}</h3>
-                        {editingOrder ? (
-                          <button
-                            type="button"
-                            onClick={resetForm}
-                            className="text-xs font-medium text-slate-500 transition hover:text-slate-800"
-                          >
-                            Cancel edit
-                          </button>
-                        ) : null}
-                      </div>
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </nav>
 
-                      <div className="space-y-2">
-                        <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                          Delivery address
-                        </label>
-                        <input
-                          value={orderForm.delivery_address}
-                          onChange={(e) => updateForm('delivery_address', e.target.value)}
-                          placeholder="Delivery address or landmark"
-                          required
-                          className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
-                        />
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => fillCoordinatesFromLandmark('delivery')}
-                            disabled={landmarkBusy === 'delivery'}
-                            className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
-                          >
-                            {landmarkBusy === 'delivery' ? 'Finding…' : 'Auto fill lat/lon'}
-                          </button>
-                          <span className="text-[11px] text-slate-500">Landmark based</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <input
-                            value={orderForm.delivery_latitude}
-                            onChange={(e) => updateForm('delivery_latitude', e.target.value)}
-                            placeholder="Latitude"
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
-                          />
-                          <input
-                            value={orderForm.delivery_longitude}
-                            onChange={(e) => updateForm('delivery_longitude', e.target.value)}
-                            placeholder="Longitude"
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
-                          />
-                        </div>
-                      </div>
+        <div className="mx-auto max-w-content px-4 py-6 lg:px-8 lg:py-8">
+          <TopBar
+            search={search}
+            onSearchChange={setSearch}
+            dateLabel={dateLabel}
+            operator={profile?.operator}
+            notifCount={profile?.badges?.notifications ?? 0}
+          />
 
-                      <div className="space-y-2">
-                        <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                          Pickup address
-                        </label>
-                        <input
-                          value={orderForm.pickup_address}
-                          onChange={(e) => updateForm('pickup_address', e.target.value)}
-                          placeholder="Pickup address or landmark"
-                          className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
-                        />
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => fillCoordinatesFromLandmark('pickup')}
-                            disabled={landmarkBusy === 'pickup'}
-                            className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
-                          >
-                            {landmarkBusy === 'pickup' ? 'Finding…' : 'Auto fill lat/lon'}
-                          </button>
-                          <span className="text-[11px] text-slate-500">Landmark based</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <input
-                            value={orderForm.pickup_latitude}
-                            onChange={(e) => updateForm('pickup_latitude', e.target.value)}
-                            placeholder="Latitude"
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
-                          />
-                          <input
-                            value={orderForm.pickup_longitude}
-                            onChange={(e) => updateForm('pickup_longitude', e.target.value)}
-                            placeholder="Longitude"
-                            className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
-                          />
-                        </div>
-                      </div>
+          {page === 'dashboard' && (
+            <Dashboard
+              days={days}
+              onOpenPage={(id) => setPage(id)}
+              onCreateOrder={openCreate}
+              onAssignDriver={() => setPage('orders')}
+              onOpenCustomers={() => setPage('clients')}
+              onAddItem={() => setPage('inventory')}
+              online={profile?.online}
+            />
+          )}
 
+          {page === 'orders' && (
+            <>
+
+
+        {/* Live operations: orders + map + dispatch */}
+        <section className="mt-5 rounded-lg border border-line bg-surface">
+          <div className="flex flex-wrap items-end justify-between gap-3 px-5 pt-4">
+            <div>
+              <h2 className="text-[15px] font-bold text-ink">Orders and dispatch</h2>
+              <p className="mt-0.5 text-xs text-faint">Live from Supabase · {visibleOrders.length} shown</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <div role="tablist" aria-label="Order views" className="flex rounded-full bg-[#F1F5F9] p-1">
+                {[
+                  { id: 'orders', label: `All · ${orders.length}` },
+                  { id: 'attention', label: 'Attention' },
+                ].map((t) => (
+                  <button
+                    key={t.id}
+                    role="tab"
+                    aria-selected={tab === t.id}
+                    onClick={() => setTab(t.id)}
+                    className={`h-8 rounded-full px-3.5 text-xs font-semibold transition ${
+                      tab === t.id ? 'bg-surface text-ink shadow-sm' : 'text-slate2 hover:text-ink'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={openCreate}
+                className="h-9 rounded-md bg-brand px-4 text-[13px] font-semibold text-white transition hover:brightness-110"
+              >
+                New order
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-0 lg:grid-cols-[330px_minmax(0,1fr)_340px]">
+            {/* Orders column */}
+            <div className="flex min-h-[480px] flex-col border-b border-line p-4 lg:border-b-0 lg:border-r">
+              <OrdersList
+                orders={visibleOrders}
+                selectedId={selected?.id}
+                onSelect={setSelected}
+                onEdit={startEdit}
+                onDelete={removeOrder}
+              />
+            </div>
+
+            {/* Map column */}
+            <div className="min-h-[480px] border-b border-line lg:border-b-0 lg:border-r">
+              <LiveMap
+                order={selected}
+                onSelectDriver={(driver) => {
+                  if (driver && driver !== '__open__') setPage('drivers');
+                }}
+              />
+            </div>
+
+            {/* Dispatch column */}
+            <div className="min-h-[480px] p-4">
+              <div className="mt-1">
+                <AssignPanel order={selected} onAssigned={refresh} />
+              </div>
+            </div>
+          </div>
+        </section>
+            </>
+          )}
+
+          {page === 'clients' && (
+            <div className="mt-5 rounded-lg border border-line bg-surface pb-5">
+              <PageHeader
+                eyebrow="CRM"
+                title="Clients"
+                description="Customer records from the backend — search by name, email, phone or city."
+              />
+              <div className="px-6 pt-4">
+                <p className="mb-3 text-[13px] text-slate2">
+                  {visibleCustomers.length} client{visibleCustomers.length === 1 ? '' : 's'}
+                  {search.trim() ? ` matching “${search.trim()}”` : ''}
+                </p>
+                <DataTable
+                  columns={CLIENT_COLUMNS}
+                  rows={visibleCustomers}
+                  emptyText="No clients found."
+                />
+              </div>
+            </div>
+          )}
+
+          {page === 'inventory' && <ItemsPage search={search} />}
+          {page === 'drivers' && <DriversPage search={search} />}
+          {page === 'packages' && <PackagesPage search={search} />}
+          {page === 'payments' && <PaymentsPage search={search} />}
+          {page === 'vehicles' && <VehiclesPage search={search} />}
+          {page === 'warehouses' && <WarehousesPage search={search} />}
+
+        {/* Order create/edit dialog */}
+        {orderFormOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto border border-line bg-surface">
+              <div className="border-b border-line px-6 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
+                  {editingOrder ? 'Edit order' : 'New order'}
+                </p>
+                <h2 className="mt-1 text-[20px] font-bold text-ink">{formTitle}</h2>
+              </div>
+              <div className="px-6 py-5">
+                <form onSubmit={submitOrder} className="space-y-4">
+                  <div>
+                    <label htmlFor="f-delivery-address" className="mb-1 block text-sm font-semibold text-ink">
+                      Delivery address
+                    </label>
+                    <input
+                      id="f-delivery-address"
+                      value={orderForm.delivery_address}
+                      onChange={(e) => updateForm('delivery_address', e.target.value)}
+                      placeholder="Delivery address or landmark"
+                      required
+                      className={FIELD_CLASS}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fillCoordinatesFromLandmark('delivery')}
+                      disabled={landmarkBusy === 'delivery'}
+                      className="mt-2 h-9 border border-line bg-surface px-3 text-xs font-semibold text-ink transition hover:border-ink hover:bg-cream disabled:opacity-50"
+                    >
+                      {landmarkBusy === 'delivery' ? 'Finding...' : 'Auto fill lat/lon'}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="f-del-lat" className="mb-1 block text-sm font-semibold text-ink">
+                        Delivery latitude
+                      </label>
                       <input
+                        id="f-del-lat"
+                        value={orderForm.delivery_latitude}
+                        onChange={(e) => updateForm('delivery_latitude', e.target.value)}
+                        placeholder="Latitude"
+                        className={FIELD_CLASS}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="f-del-lon" className="mb-1 block text-sm font-semibold text-ink">
+                        Delivery longitude
+                      </label>
+                      <input
+                        id="f-del-lon"
+                        value={orderForm.delivery_longitude}
+                        onChange={(e) => updateForm('delivery_longitude', e.target.value)}
+                        placeholder="Longitude"
+                        className={FIELD_CLASS}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="f-pickup-address" className="mb-1 block text-sm font-semibold text-ink">
+                      Pickup address
+                    </label>
+                    <input
+                      id="f-pickup-address"
+                      value={orderForm.pickup_address}
+                      onChange={(e) => updateForm('pickup_address', e.target.value)}
+                      placeholder="Pickup address or landmark"
+                      className={FIELD_CLASS}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fillCoordinatesFromLandmark('pickup')}
+                      disabled={landmarkBusy === 'pickup'}
+                      className="mt-2 h-9 border border-line bg-surface px-3 text-xs font-semibold text-ink transition hover:border-ink hover:bg-cream disabled:opacity-50"
+                    >
+                      {landmarkBusy === 'pickup' ? 'Finding...' : 'Auto fill lat/lon'}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="f-pick-lat" className="mb-1 block text-sm font-semibold text-ink">
+                        Pickup latitude
+                      </label>
+                      <input
+                        id="f-pick-lat"
+                        value={orderForm.pickup_latitude}
+                        onChange={(e) => updateForm('pickup_latitude', e.target.value)}
+                        placeholder="Latitude"
+                        className={FIELD_CLASS}
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="f-pick-lon" className="mb-1 block text-sm font-semibold text-ink">
+                        Pickup longitude
+                      </label>
+                      <input
+                        id="f-pick-lon"
+                        value={orderForm.pickup_longitude}
+                        onChange={(e) => updateForm('pickup_longitude', e.target.value)}
+                        placeholder="Longitude"
+                        className={FIELD_CLASS}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="f-recipient" className="mb-1 block text-sm font-semibold text-ink">
+                        Recipient name
+                      </label>
+                      <input
+                        id="f-recipient"
                         value={orderForm.recipient_name}
                         onChange={(e) => updateForm('recipient_name', e.target.value)}
                         placeholder="Recipient name"
-                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
+                        className={FIELD_CLASS}
                       />
+                    </div>
+                    <div>
+                      <label htmlFor="f-phone" className="mb-1 block text-sm font-semibold text-ink">
+                        Recipient phone
+                      </label>
                       <input
+                        id="f-phone"
                         value={orderForm.recipient_phone}
                         onChange={(e) => updateForm('recipient_phone', e.target.value)}
                         placeholder="Recipient phone"
-                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
+                        className={FIELD_CLASS}
                       />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="f-status" className="mb-1 block text-sm font-semibold text-ink">
+                        Status
+                      </label>
                       <select
+                        id="f-status"
                         value={orderForm.status}
                         onChange={(e) => updateForm('status', e.target.value)}
-                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
+                        className={FIELD_CLASS}
                       >
                         {ORDER_STATUSES.map((status) => (
                           <option key={status} value={status}>
@@ -357,50 +591,44 @@ export default function App() {
                           </option>
                         ))}
                       </select>
+                    </div>
+                    <div>
+                      <label htmlFor="f-notes" className="mb-1 block text-sm font-semibold text-ink">
+                        Notes
+                      </label>
                       <textarea
+                        id="f-notes"
                         value={orderForm.notes}
                         onChange={(e) => updateForm('notes', e.target.value)}
                         placeholder="Notes"
-                        rows={3}
-                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm outline-none transition focus:border-slate-400"
+                        rows={2}
+                        className="w-full border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-ink"
                       />
-                      <button
-                        type="submit"
-                        disabled={orderBusy}
-                        className="w-full rounded-2xl bg-slate-950 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
-                      >
-                        {orderBusy ? 'Saving…' : editingOrder ? 'Update order' : 'Create order'}
-                      </button>
-                      {orderMessage ? <p className="text-xs text-slate-600">{orderMessage}</p> : null}
-                    </form>
+                    </div>
                   </div>
-                </div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="submit"
+                      disabled={orderBusy}
+                      className="h-11 flex-1 bg-brand text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
+                    >
+                      {orderBusy ? 'Saving...' : editingOrder ? 'Update order' : 'Create order'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resetForm}
+                      className="h-11 border border-line bg-surface px-6 text-sm font-semibold text-ink transition hover:bg-cream"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {orderMessage ? <p className="text-[13px] text-slate2">{orderMessage}</p> : null}
+                </form>
               </div>
             </div>
-
-            <OrdersList
-              orders={orders}
-              selectedId={selected?.id}
-              onSelect={setSelected}
-              onEdit={startEdit}
-              onDelete={removeOrder}
-            />
-          </section>
-
-          <section className="min-h-[calc(100vh-220px)] overflow-hidden rounded-[32px] border border-white/80 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-            <LiveMap order={selected} />
-          </section>
-
-          <section className="min-h-[calc(100vh-220px)] overflow-y-auto rounded-[28px] border border-white/80 bg-white p-4 shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
-            <div className="mb-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">
-                Dispatch
-              </p>
-              <h2 className="mt-1 text-lg font-semibold text-slate-900">Driver control</h2>
-            </div>
-            <AssignPanel order={selected} onAssigned={refresh} />
-          </section>
-        </main>
+          </div>
+        ) : null}
+        </div>
       </div>
     </div>
   );

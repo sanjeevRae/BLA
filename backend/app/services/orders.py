@@ -17,6 +17,22 @@ def _generate_order_number() -> str:
     return f"BLA-{year}-{suffix:04d}"
 
 
+def _generate_unique_order_number(sb, *, attempts: int = 10) -> str:
+    """Generate an order_number not already present in the orders table."""
+    for _ in range(attempts):
+        candidate = _generate_order_number()
+        existing = (
+            sb.table("orders")
+            .select("id")
+            .eq("order_number", candidate)
+            .limit(1)
+            .execute()
+        )
+        if not existing.data:
+            return candidate
+    raise RuntimeError("could not generate a unique order number")
+
+
 async def create_order(payload: OrderCreate) -> dict[str, Any]:
     """Create an order (+ items), then fire-and-forget a confirmation."""
     sb = get_supabase()
@@ -25,7 +41,7 @@ async def create_order(payload: OrderCreate) -> dict[str, Any]:
     total_amount = sum(i.unit_price * i.quantity for i in payload.items)
 
     order_row = {
-        "order_number": _generate_order_number(),
+        "order_number": _generate_unique_order_number(sb),
         "customer_id": str(payload.customer_id) if payload.customer_id else None,
         "warehouse_id": str(payload.warehouse_id) if payload.warehouse_id else None,
         "status": "received",
@@ -67,6 +83,19 @@ async def create_order(payload: OrderCreate) -> dict[str, Any]:
 def get_order(order_id: str) -> Optional[dict[str, Any]]:
     sb = get_supabase()
     res = sb.table("orders").select("*").eq("id", order_id).limit(1).execute()
+    return res.data[0] if res.data else None
+
+
+def get_order_by_number(order_number: str) -> Optional[dict[str, Any]]:
+    """Lookup used by the public tracking page (order_number is unique)."""
+    sb = get_supabase()
+    res = (
+        sb.table("orders")
+        .select("*")
+        .eq("order_number", order_number.strip())
+        .limit(1)
+        .execute()
+    )
     return res.data[0] if res.data else None
 
 
@@ -167,7 +196,19 @@ async def update_order_status(
         return None
     order = res.data[0]
 
-
+    # Rich history row (coordinates + note); DB trigger already logs basic row.
+    try:
+        sb.table("delivery_status_history").insert(
+            {
+                "order_id": order_id,
+                "status": status,
+                "latitude": lat,
+                "longitude": lon,
+                "note": note,
+            }
+        ).execute()
+    except Exception:
+        pass
 
     await notifications.notify_status_update(order, status)
     return order

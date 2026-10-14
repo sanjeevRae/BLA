@@ -2,9 +2,86 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --color-page: #f5f7fa;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f1f5f9;
+  --color-text: #0f172a;
+  --color-text-muted: #64748b;
+  --color-brand: #2563eb;
+  --color-border: #e6ebf0;
+  --color-success-bg: #e8f7ee;
+  --color-success-text: #16a34a;
+  --color-badge-bg: #f1f5f9;
+  --color-badge-text: #64748b;
+}
+
 html,
 body,
 #root {
   height: 100%;
   margin: 0;
 }
+
+body {
+  background: var(--color-page);
+  color: var(--color-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color-scheme: light;
+}
+
+/* ---------------------------------------------------------------------------
+   Fallback safety net for the design tokens.
+   These mirror the custom colors in tailwind.config.js and are placed AFTER
+   @tailwind utilities, so they win ties. If the dev server ever runs with a
+   stale Tailwind config (e.g. started before the colors were added), the
+   structural colors still resolve and text is never invisible on its band.
+   Higher-specificity rules (hover:*, bg-white active states) still override.
+   --------------------------------------------------------------------------- */
+.bg-page { background-color: #f5f7fa; }
+.bg-surface { background-color: #ffffff; }
+.bg-cream { background-color: #f1f5f9; }
+.bg-ink { background-color: #0f172a; }
+.bg-badgebg { background-color: #f1f5f9; }
+.bg-successbg { background-color: #e8f7ee; }
+.text-ink { color: #0f172a; }
+.text-slate2 { color: #64748b; }
+.text-brand { color: #2563eb; }
+.text-successtx { color: #16a34a; }
+.text-badgetx { color: #64748b; }
+.border-line { border-color: #e6ebf0; }
+
+::selection {
+  background: #dbeafe;
+  color: #0f172a;
+}
+
+/* Visible keyboard focus everywhere */
+*:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+/* Tabular numerals for metrics */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Thin quiet scrollbars inside panels */
+.quiet-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.quiet-scroll::-webkit-scrollbar-thumb {
+  background: #e4dcd4;
+}
+.quiet-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* MapTiler canvas should fill its flat panel */
+.map-shell canvas {
+  display: block;
+}
+

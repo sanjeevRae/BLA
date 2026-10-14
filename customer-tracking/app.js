@@ -77,7 +77,18 @@
   }
 
   async function lookupOrder(orderNumber) {
-    // Prefer Supabase direct read (RLS allows public status read for tracking).
+    // Prefer backend by-number lookup (single row, exact match).
+    if (cfg.API_BASE_URL) {
+      try {
+        const res = await fetch(
+          `${cfg.API_BASE_URL}/orders/by-number/${encodeURIComponent(orderNumber)}`
+        );
+        if (res.ok) return res.json();
+      } catch (err) {
+        console.warn('Backend lookup failed, trying Supabase direct read.', err);
+      }
+    }
+    // Fallback: Supabase direct read (RLS allows public status read for tracking).
     if (sb) {
       const { data, error } = await sb
         .from('orders')
@@ -88,11 +99,7 @@
       if (error) throw new Error(error.message);
       return data;
     }
-    // Fallback: backend API.
-    const res = await fetch(`${cfg.API_BASE_URL}/orders?status=`);
-    if (!res.ok) throw new Error('Lookup failed');
-    const list = await res.json();
-    return list.find((o) => o.order_number === orderNumber) || null;
+    throw new Error('Lookup failed: set API_BASE_URL or Supabase keys in config.js');
   }
 
   async function loadLatestGps(orderId) {

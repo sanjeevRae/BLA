@@ -1,0 +1,31 @@
+name: Backend checks
+
+on:
+  push:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend-checks.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+  workflow_dispatch: {}
+
+jobs:
+  backend-checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install -r requirements.txt
+      - name: Syntax check
+        run: python -c "import ast, pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('app').rglob('*.py')]; print('parse-ok')"
+      - name: Smoke tests (no Supabase needed)
+        run: python -m pytest tests/test_smoke.py -q
+      - name: Import app
+        run: python -c "import app.main; print('routes:', len(list(app.main.app.routes)))"

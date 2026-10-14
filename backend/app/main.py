@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routers import analytics, drivers, orders, tasks
+from app.routers import analytics, customers, drivers, ops, orders, tasks
 
 logging.basicConfig(level=logging.INFO)
 
@@ -40,6 +40,8 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 app.include_router(orders.router)
 app.include_router(drivers.router)
+app.include_router(customers.router)
+app.include_router(ops.router)
 app.include_router(analytics.router)
 app.include_router(tasks.router)
 

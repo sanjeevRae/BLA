@@ -12,7 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # backend/.env (local) wins; repo-root ../.env is fallback for monorepo.
+        env_file=(".env", "../.env"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
@@ -60,6 +61,21 @@ class Settings(BaseSettings):
     # --- Textlocal (SMS) ---------------------------------------------------
     textlocal_api_key: str = Field(default="", validation_alias="TEXTLOCAL_API_KEY")
     textlocal_sender: str = Field(default="TXTLCL", validation_alias="TEXTLOCAL_SENDER")
+
+# --- Auth (Supabase JWT, optional in dev) ------------------------------------
+    # When REQUIRE_AUTH=true the backend validates Supabase JWTs on write routes.
+    # Dev default false so local testing works without a login flow.
+    require_auth: bool = Field(default=False, validation_alias="REQUIRE_AUTH")
+    # Supabase JWT secret (HS256) for local verification. Found in Supabase
+    # dashboard -> Settings -> API -> JWT Secret.
+    supabase_jwt_secret: Optional[str] = Field(default=None, validation_alias="SUPABASE_JWT_SECRET")
+
+    # --- Cron / background tasks ------------------------------------------------
+    # Shared secret required by /tasks/* endpoints (GitHub Actions / Render Cron).
+    cron_token: str = Field(default="", validation_alias="CRON_TOKEN")
+
+    # Direct Postgres connection string (used by psql to apply schema/seed).
+    supabase_db_url: Optional[str] = Field(default=None, validation_alias="SUPABASE_DB_URL")
 
     # --- Redis (DEFERRED — only needed for multi-instance scaling) ---------
     # When you add a Render load balancer + multiple web instances, set this to

@@ -3,8 +3,6 @@
 These are protected by a shared secret header (X-Cron-Token) so they can be
 called from a scheduler without a full user session.
 """
-import os
-
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.core.config import settings
@@ -14,12 +12,10 @@ from app.services import notifications
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
-# Optional shared secret; set CRON_TOKEN in the environment to require it.
-_CRON_TOKEN = os.getenv("CRON_TOKEN", "")
-
 
 def _check_token(token: str | None) -> None:
-    if _CRON_TOKEN and token != _CRON_TOKEN:
+    expected = settings.cron_token
+    if expected and token != expected:
         raise HTTPException(status_code=401, detail="invalid cron token")
 
 

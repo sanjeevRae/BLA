@@ -272,6 +272,41 @@ create table if not exists payments (
   updated_at      timestamptz not null default now()
 );
 
+create table if not exists admin_notifications (
+  id          uuid primary key default gen_random_uuid(),
+  title       text not null,
+  body        text,
+  type        text not null default 'info' check (type in ('info', 'success', 'warning', 'error')),
+  created_at  timestamptz not null default now()
+);
+
+create table if not exists admin_messages (
+  id           uuid primary key default gen_random_uuid(),
+  sender_name  text not null,
+  body         text not null,
+  created_at   timestamptz not null default now()
+);
+
+create table if not exists admin_settings (
+  id            uuid primary key default gen_random_uuid(),
+  setting_key   text not null unique,
+  setting_value jsonb not null default '{}'::jsonb,
+  updated_at    timestamptz not null default now()
+);
+
+create table if not exists admin_help (
+  id          uuid primary key default gen_random_uuid(),
+  title       text not null,
+  body        text,
+  link        text,
+  created_at  timestamptz not null default now()
+);
+
+insert into admin_help (title, body, link) values
+  ('How cashflow is calculated', 'Paid payments summed per delivery; pending shown separately.', '/analytics/cashflow'),
+  ('How to manage customers', 'Search, create, edit, and delete customers from the admin panel.', '/customers')
+on conflict do nothing;
+
 -- =============================================================================
 -- INDEXES
 -- =============================================================================
@@ -313,16 +348,30 @@ begin
   end loop;
 end $$;
 
--- Log every order status change into delivery_status_history automatically.
+-- Set delivered_at automatically (BEFORE trigger: mutating NEW.* is allowed).
+create or replace function set_delivered_at()
+returns trigger as $$
+begin
+  if new.status = 'delivered' and new.delivered_at is null then
+    new.delivered_at = now();
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists trg_orders_delivered_at on orders;
+create trigger trg_orders_delivered_at
+  before insert or update of status on orders
+  for each row execute function set_delivered_at();
+
+-- Log every order status change into delivery_status_history automatically
+-- (AFTER trigger: history insert only; auth.uid() may be NULL for seeds).
 create or replace function log_order_status_change()
 returns trigger as $$
 begin
   if (tg_op = 'INSERT') or (new.status is distinct from old.status) then
     insert into delivery_status_history(order_id, status, changed_by)
     values (new.id, new.status, auth.uid());
-    if new.status = 'delivered' and new.delivered_at is null then
-      new.delivered_at = now();
-    end if;
   end if;
   return new;
 end;
@@ -385,6 +434,10 @@ alter table delivery_assignments     enable row level security;
 alter table gps_tracking             enable row level security;
 alter table delivery_status_history  enable row level security;
 alter table payments                 enable row level security;
+alter table admin_notifications      enable row level security;
+alter table admin_messages           enable row level security;
+alter table admin_settings           enable row level security;
+alter table admin_help               enable row level security;
 
 -- users: read own row; staff reads all; users update own profile -------------
 drop policy if exists users_select on users;
@@ -530,6 +583,35 @@ create policy payments_select on payments for select
   );
 drop policy if exists payments_staff_write on payments;
 create policy payments_staff_write on payments for all
+  using (is_staff()) with check (is_staff());
+
+-- admin_notifications/messages/settings: staff full read/write ----------------
+drop policy if exists admin_notifications_select on admin_notifications;
+create policy admin_notifications_select on admin_notifications for select
+  using (is_staff());
+drop policy if exists admin_notifications_write on admin_notifications;
+create policy admin_notifications_write on admin_notifications for all
+  using (is_staff()) with check (is_staff());
+
+drop policy if exists admin_messages_select on admin_messages;
+create policy admin_messages_select on admin_messages for select
+  using (is_staff());
+drop policy if exists admin_messages_write on admin_messages;
+create policy admin_messages_write on admin_messages for all
+  using (is_staff()) with check (is_staff());
+
+drop policy if exists admin_settings_select on admin_settings;
+create policy admin_settings_select on admin_settings for select
+  using (is_staff());
+drop policy if exists admin_settings_write on admin_settings;
+create policy admin_settings_write on admin_settings for all
+  using (is_staff()) with check (is_staff());
+
+drop policy if exists admin_help_select on admin_help;
+create policy admin_help_select on admin_help for select
+  using (is_staff());
+drop policy if exists admin_help_write on admin_help;
+create policy admin_help_write on admin_help for all
   using (is_staff()) with check (is_staff());
 
 -- =============================================================================

@@ -47,15 +47,30 @@ Interactive docs at <http://localhost:8000/docs>.
 |--------|------------------------------------------|---------------------------------|
 | POST   | `/orders`                                | Create order (+ items, confirm) |
 | GET    | `/orders?status=`                        | List orders                     |
+| GET    | `/orders/by-number/{n}`                  | Tracking lookup by order number |
 | PATCH  | `/orders/{id}/status`                    | Update status (SMS customer)    |
 | POST   | `/orders/{id}/assign`                    | Assign driver + compute route   |
+| GET    | `/customers`                             | List/search customers           |
+| POST   | `/customers`                             | Create customer                 |
+| PUT    | `/customers/{id}`                        | Update customer                 |
+| DELETE | `/customers/{id}`                        | Delete customer                 |
+| GET    | `/ops/warehouses`                        | List warehouses                 |
+| GET    | `/ops/vehicles`                          | List vehicles                   |
+| GET    | `/ops/inventory`                         | List inventory                  |
+| GET    | `/ops/payments`                          | List payments                   |
+| GET    | `/ops/packages`                          | List packages                   |
 | GET    | `/drivers/{id}/assignments`              | Driver fetches assignments      |
 | PATCH  | `/drivers/assignments/{id}/status`       | Driver updates assignment       |
 | POST   | `/drivers/gps`                           | Driver pushes a GPS ping        |
 | POST   | `/drivers/pod`                           | Upload proof-of-delivery photo  |
 | GET    | `/analytics/overview`                    | Dashboard summary cards         |
+| GET    | `/analytics/cashflow`                    | Earnings overview               |
+| GET    | `/analytics/admin-feed`                  | Notifications/messages/settings |
 | POST   | `/tasks/daily-report`                    | Cron: email daily summary       |
 | POST   | `/tasks/cleanup-gps`                     | Cron: prune old GPS rows        |
+
+Run tests: `pytest tests/test_smoke.py -q` (no Supabase needed).
+Auth: `REQUIRE_AUTH=false` locally; set `true` + `SUPABASE_JWT_SECRET` in prod.
 
 The backend uses the Supabase **service role** key and therefore bypasses RLS;
 it is the trusted authority. Never ship the service key to a browser.
