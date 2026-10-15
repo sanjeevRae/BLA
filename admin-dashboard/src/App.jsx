@@ -438,7 +438,6 @@ export default function App() {
             {/* Map column */}
             <div className="min-h-[480px] border-b border-line lg:border-b-0 lg:border-r">
               <LiveMap
-                order={selected}
                 onSelectDriver={(driver) => {
                   if (driver && driver !== '__open__') setPage('drivers');
                 }}

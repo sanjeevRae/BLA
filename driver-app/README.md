@@ -7,8 +7,10 @@ Static mobile-first PWA-style page for the two driver roles:
   input at the door.
 - **Big drivers** — active trip from `/trips` with the trip status track,
   checkpoint logging, cancel.
-- **GPS toggle** — streams position to `/drivers/gps` every few seconds. Big
-  drivers show up on the admin live map; micro drivers intentionally do not.
+- **GPS toggle** — sends one location ping to `/drivers/gps` immediately, then
+  every **5 minutes** (spec cadence). Big drivers show up on the admin live map
+  as a marker plus a driver→destination trip line; micro drivers intentionally
+  do not appear on that map.
 
 ## Run locally
 

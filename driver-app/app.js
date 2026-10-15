@@ -292,20 +292,12 @@
     }
   });
 
-  // --- GPS streaming ---------------------------------------------------------
-  gpsBtn.addEventListener('click', () => {
-    if (watchId != null) {
-      navigator.geolocation.clearWatch(watchId);
-      watchId = null;
-      gpsBtn.textContent = 'GPS off';
-      gpsBtn.classList.remove('on');
-      return;
-    }
-    if (!driver || !navigator.geolocation) {
-      whoEl.textContent = 'GPS unavailable';
-      return;
-    }
-    watchId = navigator.geolocation.watchPosition(
+  // --- GPS: one location ping every 5 minutes --------------------------------
+  const PING_MS = 5 * 60 * 1000; // spec: big drivers report every 5 min
+
+  function sendPing() {
+    if (!driver || !navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
       (pos) => {
         api('/drivers/gps', {
           method: 'POST',
@@ -316,14 +308,36 @@
             accuracy_m: pos.coords.accuracy,
             speed_kmh: pos.coords.speed != null ? pos.coords.speed * 3.6 : null,
           }),
-        }).catch(() => {});
+        })
+          .then(() => {
+            const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            whoEl.textContent = `Location sent at ${t} · next ping in 5 min`;
+          })
+          .catch(() => {});
       },
       () => {
         whoEl.textContent = 'Location permission denied';
       },
-      { enableHighAccuracy: true, maximumAge: 4000 },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 },
     );
-    gpsBtn.textContent = 'GPS on';
+  }
+
+  gpsBtn.addEventListener('click', () => {
+    if (watchId != null) {
+      clearInterval(watchId);
+      watchId = null;
+      gpsBtn.textContent = 'GPS off';
+      gpsBtn.classList.remove('on');
+      return;
+    }
+    if (!driver || !navigator.geolocation) {
+      whoEl.textContent = 'GPS unavailable';
+      return;
+    }
+    sendPing(); // immediate first ping
+    watchId = setInterval(sendPing, PING_MS); // then every 5 minutes
+    gpsBtn.textContent = 'GPS · 5 min';
     gpsBtn.classList.add('on');
+    whoEl.textContent = 'GPS on — sending location every 5 minutes';
   });
 })();

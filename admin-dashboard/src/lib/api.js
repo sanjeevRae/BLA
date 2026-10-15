@@ -48,7 +48,8 @@ export const api = {
     request(`/orders/${orderId}`, {
       method: 'DELETE',
     }),
-  getOrderAssignment: (orderId) => request(`/orders/${orderId}/assignment`),
+  // NOTE: getOrderAssignment (server-side ORS route polyline) removed with the
+  // map redesign — the live map draws driver -> destination trip lines instead.
   listDrivers: (availableOnly = false) =>
     request(`/drivers${availableOnly ? '?available_only=true' : ''}`),
   getOverview: () => request('/analytics/overview'),

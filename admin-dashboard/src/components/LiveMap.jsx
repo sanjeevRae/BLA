@@ -20,20 +20,28 @@ function markerStyle(available) {
 }
 
 
-// Live map of drivers plus the selected order route.
+// Live map of big drivers on warehouse-to-warehouse trips.
+//
+// Lightweight by design: NO server-side (ORS) route polylines. What renders:
+//   * big-driver markers + GPS trails (Supabase realtime)
+//   * origin / destination warehouse markers for active trips
+//   * a straight line from each big driver's current position to its trip
+//     destination — refreshed on every GPS ping (drivers ping every 5 min)
 //
 // Modes:
-//   default (Orders page): tall map, click a marker to select the driver,
-//     show its trail and jump to the Drivers page.
-//   compact (dashboard): mini live overview; the whole map click-through goes
-//     to the Orders page. Set `interactive={false}` to render a static preview.
-export default function LiveMap({ order, compact = false, interactive = true, onSelectDriver }) {
+//   default (Orders page): tall map, click a marker to select the driver.
+//   compact (dashboard): mini live overview; set `interactive={false}` for a
+//     static preview.
+export default function LiveMap({ compact = false, interactive = true, onSelectDriver }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef(new Map());
-  const routeLoadedRef = useRef(false);
+  const fittedRef = useRef(false);
   const driversRef = useRef(new Map());
   const trailsRef = useRef(new Map());
+  // driver_id -> { dest: [lon, lat], destName, origin: [lon, lat], originName }
+  const tripsRef = useRef(new Map());
+  const whMarkersRef = useRef(new Map());
   const [message, setMessage] = useState('');
   const [selectedDriver, setSelectedDriver] = useState(null);
   const [trailOn, setTrailOn] = useState(true);
@@ -50,10 +58,15 @@ export default function LiveMap({ order, compact = false, interactive = true, on
     const seen = driver?.last_seen_at
       ? new Date(driver.last_seen_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       : '—';
+    const trip = tripsRef.current.get(String(driver?.id));
+    const tripLine = trip
+      ? `<div style="font-size:11px;color:#16A34A;margin-top:4px">→ ${trip.destName || 'destination hub'}</div>`
+      : '';
     return (
       `<div style="min-width:150px;font-family:inherit">` +
       `<div style="font-weight:700;font-size:13px;color:#0F172A">${name}</div>` +
       `<div style="font-size:11px;color:#64748B;margin-top:2px">${status} · seen ${seen}</div>` +
+      tripLine +
       `<div style="font-size:11px;color:#2563EB;margin-top:4px">Click marker for trail</div>` +
       `</div>`
     );
@@ -123,9 +136,86 @@ export default function LiveMap({ order, compact = false, interactive = true, on
       if (trailOn && id === selectedDriver) {
         drawTrail(id);
       }
+
+      // Trip line: driver's current position -> active trip destination.
+      drawTripLine(id);
     },
     [rememberDriver, popupHtml, selectDriver, selectedDriver, trailOn]
   );
+
+  // Straight line from the driver's last position to its trip destination.
+  function drawTripLine(driverId) {
+    const map = mapRef.current;
+    if (!map) return;
+    const id = String(driverId);
+    const layerId = `trip-line-${id}`;
+    const trip = tripsRef.current.get(id);
+    const driver = driversRef.current.get(id);
+    const remove = () => {
+      if (map.getLayer(layerId)) map.removeLayer(layerId);
+      if (map.getSource(layerId)) map.removeSource(layerId);
+    };
+    if (!trip?.dest || driver?.current_latitude == null || driver?.current_longitude == null) {
+      remove();
+      return;
+    }
+    const from = [driver.current_longitude, driver.current_latitude];
+    const coords =
+      trip.origin &&
+      (trip.origin[0] !== trip.dest[0] || trip.origin[1] !== trip.dest[1])
+        ? [trip.origin, from, trip.dest]
+        : [from, trip.dest];
+    if (map.getSource(layerId)) {
+      map.getSource(layerId).setData({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: coords },
+        properties: {},
+      });
+      return;
+    }
+    map.addSource(layerId, {
+      type: 'geojson',
+      data: {
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: coords },
+        properties: {},
+      },
+    });
+    map.addLayer({
+      id: layerId,
+      type: 'line',
+      source: layerId,
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': ROUTE_COLOR, 'line-width': 3, 'line-opacity': 0.9 },
+    });
+  }
+
+  // Amber square marker for a warehouse hub (origin / destination).
+  function upsertWarehouseMarker(whId, lon, lat, name) {
+    const map = mapRef.current;
+    if (!map || lon == null || lat == null) return;
+    const id = String(whId);
+    if (whMarkersRef.current.has(id)) return;
+    const el = document.createElement('div');
+    el.style.cssText =
+      'width:14px;height:14px;border-radius:3px;' +
+      'background:#F59E0B;border:2px solid #fff;transform:rotate(45deg);' +
+      'box-shadow:0 0 0 1px rgba(15,23,42,.25);cursor:pointer';
+    const marker = new maptilersdk.Marker({ element: el }).setLngLat([lon, lat]).addTo(map);
+    marker.getElement().addEventListener('click', (e) => {
+      e.stopPropagation();
+      new maptilersdk.Popup({ offset: 14, closeButton: false })
+        .setLngLat([lon, lat])
+        .setHTML(
+          `<div style="min-width:130px;font-family:inherit">` +
+            `<div style="font-weight:700;font-size:13px;color:#0F172A">${name || 'Warehouse'}</div>` +
+            `<div style="font-size:11px;color:#64748B;margin-top:2px">Hub (warehouse)</div>` +
+            `</div>`,
+        )
+        .addTo(map);
+    });
+    whMarkersRef.current.set(id, { marker });
+  }
 
   function clearTrail(id) {
     const map = mapRef.current;
@@ -180,7 +270,8 @@ export default function LiveMap({ order, compact = false, interactive = true, on
       mapRef.current?.remove();
       mapRef.current = null;
       markersRef.current.clear();
-      routeLoadedRef.current = false;
+      whMarkersRef.current.clear();
+      fittedRef.current = false;
     };
   }, []);
 
@@ -191,8 +282,39 @@ export default function LiveMap({ order, compact = false, interactive = true, on
 
     async function loadDrivers() {
       try {
-        const drivers = await api.listDrivers();
+        const [drivers, trips, warehouses] = await Promise.all([
+          api.listDrivers(),
+          api.listTrips().catch(() => []),
+          api.listWarehouses().catch(() => []),
+        ]);
         if (cancelled) return;
+
+        // Warehouse lookup + hub markers for every active trip.
+        const whById = new Map();
+        (warehouses ?? []).forEach((w) => {
+          if (w.latitude != null && w.longitude != null) {
+            whById.set(String(w.id), { name: w.name, point: [w.longitude, w.latitude] });
+          }
+        });
+        const tripPoints = [];
+        (trips ?? []).forEach((t) => {
+          const origin = t.origin_warehouse_id ? whById.get(String(t.origin_warehouse_id)) : null;
+          const dest = t.dest_warehouse_id ? whById.get(String(t.dest_warehouse_id)) : null;
+          if (!dest) return;
+          tripsRef.current.set(String(t.big_driver_id), {
+            dest: dest.point,
+            destName: dest.name,
+            origin: origin?.point ?? null,
+            originName: origin?.name ?? null,
+          });
+          if (origin) {
+            upsertWarehouseMarker(t.origin_warehouse_id, origin.point[0], origin.point[1], origin.name);
+            tripPoints.push(origin.point);
+          }
+          upsertWarehouseMarker(t.dest_warehouse_id, dest.point[0], dest.point[1], dest.name);
+          tripPoints.push(dest.point);
+        });
+
         const points = [];
         (drivers ?? []).forEach((d) => {
           rememberDriver(d);
@@ -202,17 +324,22 @@ export default function LiveMap({ order, compact = false, interactive = true, on
           if (d.current_latitude != null && d.current_longitude != null) {
             const point = [d.current_longitude, d.current_latitude];
             points.push(point);
+            // upsertMarker also draws the driver -> destination trip line.
             upsertMarker(d.id, d.current_longitude, d.current_latitude, d);
           }
         });
 
-        if (points.length && !routeLoadedRef.current) {
-          fitToPoints(points);
-        } else if (!points.length) {
+        const allPoints = [...points, ...tripPoints];
+        if (allPoints.length && !fittedRef.current) {
+          fitToPoints(allPoints);
+          fittedRef.current = true;
+        } else if (!allPoints.length) {
           setMessage('No live driver locations found in Supabase yet.');
+        } else if (!points.length) {
+          setMessage('Hubs loaded — waiting for the first big-driver ping.');
         }
       } catch (e) {
-        if (!cancelled) setMessage(`Failed to load live driver positions: ${e.message}`);
+        if (!cancelled) setMessage(`Failed to load live map: ${e.message}`);
       }
     }
 
@@ -242,73 +369,11 @@ export default function LiveMap({ order, compact = false, interactive = true, on
       cancelled = true;
       supabase.removeChannel(channel);
     };
-  }, [order?.id]);
+  }, []);
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    if (map.getLayer('selected-route-line')) {
-      map.removeLayer('selected-route-line');
-    }
-    if (map.getSource('selected-route')) {
-      map.removeSource('selected-route');
-    }
-    routeLoadedRef.current = false;
-
-    if (!order?.id) return;
-
-    api
-      .getOrderAssignment(order.id)
-      .then((assignment) => {
-        const geometry = assignment?.route_geometry;
-        if (!geometry || geometry.type !== 'LineString' || !Array.isArray(geometry.coordinates)) {
-          setMessage('No route available for the selected order yet.');
-          return;
-        }
-
-        setMessage('');
-        const drawRoute = () => {
-          if (!map.getSource('selected-route')) {
-            map.addSource('selected-route', {
-              type: 'geojson',
-              data: {
-                type: 'Feature',
-                geometry,
-                properties: {},
-              },
-            });
-          }
-
-          map.addLayer({
-            id: 'selected-route-line',
-            type: 'line',
-            source: 'selected-route',
-            layout: {
-              'line-join': 'round',
-              'line-cap': 'round',
-            },
-            paint: {
-              'line-color': ROUTE_COLOR,
-              'line-width': 4,
-              'line-opacity': 0.9,
-            },
-          });
-
-          fitToPoints(geometry.coordinates);
-          routeLoadedRef.current = true;
-        };
-
-        if (map.isStyleLoaded()) {
-          drawRoute();
-        } else {
-          map.once('load', drawRoute);
-        }
-      })
-      .catch(() => {
-        setMessage('No route available for the selected order yet.');
-      });
-  }, [order?.id]);
+  // NOTE: the old server-side route polyline (OpenRouteService fetch +
+  // 'selected-route-line' layer) was removed on purpose — it was the heavy
+  // part of this map. Trip lines (driver -> destination) are drawn above.
 
   const sel = selectedDriver ? driversRef.current.get(selectedDriver) : null;
 
