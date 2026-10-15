@@ -167,11 +167,23 @@ Highlights:
 
 ### 1. Database (Supabase)
 ```bash
-# Apply schema, then seed (use your project's direct connection string).
+# Fresh install: schema, then seed (use your project's direct connection string).
 psql "$SUPABASE_DB_URL" -f db/schema.sql
 psql "$SUPABASE_DB_URL" -f db/seed.sql
 ```
 Or paste each file into the Supabase **SQL Editor** and run.
+
+**Existing database (incremental migrations)** — run each file as its own
+SQL Editor execution, in this exact order:
+
+1. `db/phase1a_enum_roles.sql` — adds the 5 new `user_role` values
+2. `db/phase1_identity.sql` — role helpers, `vendors` table, RLS policies
+3. `db/phase1_seed.sql` — demo vendor + role assignments
+4. `db/phase2_identity.sql` — 4 status tracks + 11 parcel-lifecycle tables
+5. `db/phase2_seed.sql` — demo parcels, driver task, trip
+
+> Postgres forbids *using* a brand-new enum value in the same transaction
+> that added it (error `55P04`) — separate executions avoid this.
 
 ### 2. Backend (FastAPI)
 ```bash

@@ -1,9 +1,21 @@
 // Thin wrapper around the FastAPI backend.
+import { supabase } from './supabase';
+
 const BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
 
 async function request(path, options = {}) {
+  // Attach the Supabase session token when signed in (needed for role-guarded
+  // endpoints when REQUIRE_AUTH=true in production).
+  let authHeader = {};
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (token) authHeader = { Authorization: `Bearer ${token}` };
+  } catch {
+    // ignore — call still works in dev (auth disabled)
+  }
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: { 'Content-Type': 'application/json', ...authHeader, ...(options.headers || {}) },
     ...options,
   });
   if (!res.ok) {
@@ -62,6 +74,12 @@ export const api = {
   listPackages: () => request('/ops/packages'),
   // Shell profile: operator identity + per-section counts + system status.
   getProfile: () => request('/ops/profile'),
+  // Business vendors (staff read; super-admin write).
+  listVendors: (q) => request(`/vendors${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  createVendor: (payload) =>
+    request('/vendors', { method: 'POST', body: JSON.stringify(payload) }),
+  updateVendor: (id, payload) =>
+    request(`/vendors/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   updateOrderStatus: (orderId, status) =>
     request(`/orders/${orderId}/status`, {
       method: 'PATCH',
@@ -72,4 +90,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  // ---- Phase 2: parcel lifecycle ----
+  listShipments: (status) =>
+    request(`/shipments${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+  getShipment: (id) => request(`/shipments/${id}`),
+  createShipment: (payload) =>
+    request('/shipments', { method: 'POST', body: JSON.stringify(payload) }),
+  updateShipmentStatus: (id, status, note) =>
+    request(`/shipments/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, note }),
+    }),
+  getShipmentEvents: (id) => request(`/shipments/${id}/events`),
+  scanShipment: (id, scan_type, location) =>
+    request(`/warehouse/scan/${id}`, {
+      method: 'POST',
+      body: JSON.stringify({ scan_type, location }),
+    }),
+  listScans: () => request('/warehouse/scans'),
+  listTransfers: () => request('/warehouse/transfers'),
+  listHandovers: () => request('/warehouse/handovers'),
+  listDriverTasks: () => request('/driver-tasks'),
+  listTrips: () => request('/trips'),
+  listTripManifest: (tripId) => request(`/trips/${tripId}/manifest`),
 };

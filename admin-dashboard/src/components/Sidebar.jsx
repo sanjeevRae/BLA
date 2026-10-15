@@ -21,6 +21,10 @@ export const NAV_ITEMS = [
   { id: 'payments', label: 'Payments', countKey: 'payments', icon: 'M3 5h14v10H3z M3 8h14 M6 12h3' },
   { id: 'vehicles', label: 'Vehicles', countKey: 'vehicles', icon: 'M2 6h11v7H2z M13 9h4l1 2v2h-5z M5 16h.01 M16 16h.01' },
   { id: 'warehouses', label: 'Warehouses', countKey: 'warehouses', icon: 'M3 9l7-5 7 5v8H3z M8 17v-5h4v5' },
+  { id: 'parcels', label: 'Parcels', countKey: 'shipments', icon: 'M3 6h14v11H3z M3 9h14 M8 6V3h4v3' },
+  { id: 'trips', label: 'Trips', countKey: 'trips', icon: 'M2 6h11v7H2z M13 9h4l1 2v2h-5z M5 16h.01 M16 16h.01' },
+  { id: 'vendors', label: 'Vendors', countKey: 'vendors', icon: 'M4 7h16l-1 10H5z M8 7V5a2 2 0 0 1 4 0v2' },
+  { id: 'tasks', label: 'Tasks', icon: 'M4 5h12v14H4z M7 9h6 M7 13h6 M16 5l4 4 M19 4l2 2-6 6' },
 ];
 
 export default function Sidebar({ page, onPageChange, profile }) {

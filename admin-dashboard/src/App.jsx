@@ -14,9 +14,14 @@ import {
   PaymentsPage,
   VehiclesPage,
   WarehousesPage,
+  ShipmentsPage,
+  TripsPage,
+  DriverTasksPage,
+  VendorsPage,
 } from './components/Pages';
 import { supabase } from './lib/supabase';
 import { api } from './lib/api';
+import Login from './components/Login';
 
 const CLIENT_COLUMNS = [
   {
@@ -86,6 +91,28 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [page, setPage] = useState('dashboard');
   const [days, setDays] = useState(120);
+
+  // Supabase session: undefined = still checking, null = signed out.
+  const [session, setSession] = useState(undefined);
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (mounted) setSession(data?.session ?? null);
+      })
+      .catch(() => {
+        if (mounted) setSession(null);
+      });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next ?? null);
+    });
+    return () => {
+      mounted = false;
+      listener?.subscription?.unsubscribe();
+    };
+  }, []);
 
   const dateLabel = useMemo(() => {
     const fmt = (d) =>
@@ -299,6 +326,19 @@ export default function App() {
     }
   }
 
+  // Production auth gate: when the backend requires auth and there is no
+  // Supabase session, show the sign-in screen. Dev (REQUIRE_AUTH=false) is open.
+  if (profile?.auth_required) {
+    if (session === undefined) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-page text-sm text-slate2">
+          Loading…
+        </div>
+      );
+    }
+    if (!session) return <Login />;
+  }
+
   return (
     <div className="flex min-h-screen bg-page text-ink">
       <Sidebar page={page} onPageChange={setPage} profile={profile} />
@@ -329,6 +369,7 @@ export default function App() {
             dateLabel={dateLabel}
             operator={profile?.operator}
             notifCount={profile?.badges?.notifications ?? 0}
+            onSignOut={session ? () => supabase.auth.signOut() : undefined}
           />
 
           {page === 'dashboard' && (
@@ -442,6 +483,10 @@ export default function App() {
           {page === 'payments' && <PaymentsPage search={search} />}
           {page === 'vehicles' && <VehiclesPage search={search} />}
           {page === 'warehouses' && <WarehousesPage search={search} />}
+          {page === 'parcels' && <ShipmentsPage search={search} />}
+          {page === 'trips' && <TripsPage search={search} />}
+          {page === 'vendors' && <VendorsPage search={search} />}
+          {page === 'tasks' && <DriverTasksPage search={search} />}
 
         {/* Order create/edit dialog */}
         {orderFormOpen ? (

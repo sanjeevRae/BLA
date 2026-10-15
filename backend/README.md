@@ -68,9 +68,41 @@ Interactive docs at <http://localhost:8000/docs>.
 | GET    | `/analytics/admin-feed`                  | Notifications/messages/settings |
 | POST   | `/tasks/daily-report`                    | Cron: email daily summary       |
 | POST   | `/tasks/cleanup-gps`                     | Cron: prune old GPS rows        |
+| GET    | `/shipments`                             | List parcels (all 4 tracks)     |
+| POST   | `/shipments`                             | Register a parcel               |
+| GET    | `/shipments/{id}/events`                 | Parcel audit trail              |
+| PATCH  | `/shipments/{id}/status`                 | Move parcel status forward      |
+| POST   | `/warehouse/scan/{id}`                   | Warehouse scan event            |
+| GET    | `/warehouse/scans`                       | Scan history                    |
+| GET    | `/warehouse/transfers`                   | Inter-warehouse transfers       |
+| GET    | `/warehouse/handovers`                   | Driver ⇄ warehouse handovers    |
+| GET    | `/driver-tasks`                          | Micro-driver task list (COD)    |
+| GET    | `/trips`                                 | Big-driver trips                |
+| GET    | `/trips/{id}/manifest`                   | Trip manifest + checkpoints     |
+| GET/POST/PUT | `/vendors`                          | Business vendors (write: SA)    |
 
-Run tests: `pytest tests/test_smoke.py -q` (no Supabase needed).
+Run tests: `pytest -q` (no Supabase needed for the suite).
 Auth: `REQUIRE_AUTH=false` locally; set `true` + `SUPABASE_JWT_SECRET` in prod.
 
 The backend uses the Supabase **service role** key and therefore bypasses RLS;
 it is the trusted authority. Never ship the service key to a browser.
+
+## Roles (BLA Logistics v2)
+
+| Role | Access |
+|------|--------|
+| `super_admin` | Full control: vendors, staff, COD, settlements, reports, settings |
+| `warehouse_admin` | Parcels: registration, scanning, transfers, handovers, assignments |
+| `vendor` | Own shipments + COD only (RLS scopes to `vendor_id`) |
+| `micro_driver` | Task updates only — **not** shown on the admin live map |
+| `big_driver` | Inter-warehouse trips — shown on the admin live map |
+| `customer` | Public tracking page; no dashboard |
+
+Enforced two ways: **JWT role guards** in the API (`require_role`, `require_staff`,
+`require_super_admin` — active when `REQUIRE_AUTH=true`) and **Postgres RLS**
+policies in `db/schema.sql`. Dev mode (`REQUIRE_AUTH=false`) bypasses the guards
+so local tooling keeps working. Vendor creation/update is super-admin only;
+vendor list is staff-readable.
+
+To upgrade an existing database: run `db/phase1_identity.sql` then
+`db/phase1_seed.sql` (two separate executions).

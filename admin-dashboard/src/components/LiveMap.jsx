@@ -196,6 +196,9 @@ export default function LiveMap({ order, compact = false, interactive = true, on
         const points = [];
         (drivers ?? []).forEach((d) => {
           rememberDriver(d);
+          // Spec: micro drivers are NOT shown on the admin live map — only
+          // big drivers (inter-warehouse journeys) appear here.
+          if (d.driver_type !== 'big') return;
           if (d.current_latitude != null && d.current_longitude != null) {
             const point = [d.current_longitude, d.current_latitude];
             points.push(point);
@@ -225,6 +228,9 @@ export default function LiveMap({ order, compact = false, interactive = true, on
           const row = payload.new;
           if (row?.driver_id && row?.latitude != null && row?.longitude != null) {
             const id = String(row.driver_id);
+            // Big drivers only: micro-driver GPS stays off the admin map.
+            const known = driversRef.current.get(id);
+            if (known && known.driver_type !== 'big') return;
             pushTrailPoint(id, row.longitude, row.latitude);
             upsertMarker(id, row.longitude, row.latitude);
           }

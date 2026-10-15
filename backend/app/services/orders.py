@@ -165,7 +165,10 @@ def list_drivers(available_only: bool = False) -> list[dict[str, Any]]:
     sb = get_supabase()
     query = (
         sb.table("drivers")
-        .select("id, name, is_available, vehicle_id, current_latitude, current_longitude")
+        .select(
+            "id, name, is_available, vehicle_id, current_latitude, current_longitude, "
+            "driver_type, phone, license_number, last_seen_at"
+        )
         .order("name")
     )
     if available_only:

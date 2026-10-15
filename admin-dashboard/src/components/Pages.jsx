@@ -273,3 +273,147 @@ export function DriversPage({ search }) {
     />
   );
 }
+
+// ---- Phase 2: parcel lifecycle (4 independent status tracks) ----
+export function ShipmentsPage({ search }) {
+  return (
+    <ListPage
+      eyebrow="Logistics"
+      title="Parcels"
+      description="Registered shipments across the 4 status tracks — warehouse, driver task, trip, settlement."
+      loader={() => api.listShipments()}
+      keyField="tracking_code"
+      emptyText="No parcels registered yet — create one from an order or the API."
+      search={search}
+      columns={[
+        {
+          key: 'tracking_code',
+          label: 'Tracking',
+          render: (r) => (
+            <span className="font-mono text-[12px] font-semibold text-ink">{r.tracking_code}</span>
+          ),
+        },
+        {
+          key: 'parcel_status',
+          label: 'Status',
+          render: (r) => <Badge tone="neutral">{String(r.parcel_status || 'registered')}</Badge>,
+        },
+        { key: 'recipient_name', label: 'Recipient' },
+        { key: 'destination_address', label: 'Destination' },
+        {
+          key: 'weight_kg',
+          label: 'Weight',
+          render: (r) => (r.weight_kg ? `${Number(r.weight_kg)} kg` : '—'),
+        },
+        { key: 'created_at', label: 'Registered', render: (r) => fmtDate(r.created_at) },
+      ]}
+    />
+  );
+}
+
+export function TripsPage({ search }) {
+  return (
+    <ListPage
+      eyebrow="Long haul"
+      title="Big-driver trips"
+      description="Inter-warehouse journeys with manifests, checkpoints and big drivers only."
+      loader={() => api.listTrips()}
+      keyField="id"
+      emptyText="No trips yet. Assign a big driver to open one."
+      search={search}
+      columns={[
+        {
+          key: 'id',
+          label: 'Trip',
+          render: (r) => <span className="font-mono text-[12px]">{String(r.id).slice(0, 8)}</span>,
+        },
+        {
+          key: 'big_driver_id',
+          label: 'Big driver',
+          render: (r) => (
+            <span className="font-mono text-[12px]">{String(r.big_driver_id || '').slice(0, 8)}</span>
+          ),
+        },
+        {
+          key: 'status',
+          label: 'Status',
+          render: (r) => <Badge tone="neutral">{String(r.status || 'assigned')}</Badge>,
+        },
+        { key: 'departed_at', label: 'Departed', render: (r) => fmtDate(r.departed_at) },
+        { key: 'arrived_at', label: 'Arrived', render: (r) => fmtDate(r.arrived_at) },
+      ]}
+    />
+  );
+}
+
+export function DriverTasksPage({ search }) {
+  return (
+    <ListPage
+      eyebrow="Micro drivers"
+      title="Driver tasks"
+      description="Pickup / delivery tasks with COD collection status."
+      loader={() => api.listDriverTasks()}
+      keyField="id"
+      emptyText="No driver tasks yet."
+      search={search}
+      columns={[
+        {
+          key: 'task_type',
+          label: 'Type',
+          render: (r) => <Badge tone="neutral">{String(r.task_type)}</Badge>,
+        },
+        {
+          key: 'status',
+          label: 'Status',
+          render: (r) => <Badge tone="neutral">{String(r.status)}</Badge>,
+        },
+        {
+          key: 'driver_id',
+          label: 'Driver',
+          render: (r) => (
+            <span className="font-mono text-[12px]">{String(r.driver_id || '').slice(0, 8)}</span>
+          ),
+        },
+        {
+          key: 'cod_required',
+          label: 'COD',
+          render: (r) =>
+            r.cod_required ? <Badge tone="positive">{fmtMoney(r.cod_amount)}</Badge> : '—',
+        },
+        { key: 'created_at', label: 'Created', render: (r) => fmtDate(r.created_at) },
+      ]}
+    />
+  );
+}
+
+export function VendorsPage({ search }) {
+  return (
+    <ListPage
+      eyebrow="Business"
+      title="Vendors"
+      description="Business-vendor accounts (B2B shops) — they register parcels against orders."
+      loader={() => api.listVendors()}
+      keyField="id"
+      emptyText="No vendors registered yet."
+      search={search}
+      columns={[
+        {
+          key: 'name',
+          label: 'Vendor',
+          render: (r) => <span className="font-semibold text-ink">{r.name}</span>,
+        },
+        { key: 'contact_name', label: 'Contact' },
+        { key: 'email', label: 'Email' },
+        { key: 'phone', label: 'Phone' },
+        { key: 'city', label: 'City' },
+        {
+          key: 'is_active',
+          label: 'Status',
+          render: (r) =>
+            r.is_active ? <Badge tone="positive">Active</Badge> : <Badge tone="neutral">Inactive</Badge>,
+        },
+      ]}
+    />
+  );
+}
+

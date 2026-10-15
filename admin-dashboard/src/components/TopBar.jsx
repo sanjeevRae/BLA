@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function TopBar({ search, onSearchChange, dateLabel, operator, notifCount = 0 }) {
+export default function TopBar({ search, onSearchChange, dateLabel, operator, notifCount = 0, onSignOut }) {
   const displayName = operator?.name ?? 'Loading…';
   const displayRole = operator?.role ?? '';
   const initials = operator?.initials ?? '—';
@@ -61,6 +61,15 @@ export default function TopBar({ search, onSearchChange, dateLabel, operator, no
             <div className="text-[13px] font-semibold text-ink">{displayName}</div>
             <div className="text-[11px] text-slate2">{displayRole}</div>
           </div>
+          {onSignOut ? (
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="ml-1 h-9 rounded-md border border-line bg-surface px-3 text-xs font-semibold text-ink transition hover:bg-cream"
+            >
+              Sign out
+            </button>
+          ) : null}
         </div>
       </div>
     </header>
