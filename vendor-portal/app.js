@@ -20,6 +20,7 @@
   const msgEl = document.getElementById('msg');
   const parcelsEl = document.getElementById('parcels');
   const settlementsEl = document.getElementById('settlements');
+  const ordersEl = document.getElementById('orders');
   const registerForm = document.getElementById('register-form');
   const submitBtn = document.getElementById('r-submit');
 
@@ -114,12 +115,37 @@
 
   // --- rendering -------------------------------------------------------------
   async function renderAll() {
-    const [parcels, settlements] = await Promise.all([
+    const [parcels, settlements, orders] = await Promise.all([
       api('/shipments').catch(() => []),
       api('/settlements').catch(() => []),
+      api('/orders').catch(() => []),
     ]);
     renderParcels(parcels);
     renderSettlements(settlements);
+    renderOrders(orders);
+  }
+
+  function renderOrders(rows) {
+    if (!rows.length) {
+      ordersEl.innerHTML = '<p class="muted">No orders yet — submit your first above.</p>';
+      return;
+    }
+    ordersEl.innerHTML = rows
+      .map(
+        (r) => `
+      <div class="rowitem">
+        <div>
+          <span class="mono">${esc(r.order_number)}</span>
+          <div class="muted">${esc(r.recipient_name || '')} — ${esc(r.delivery_address || '')}</div>
+          <div class="muted">${esc(r.destination_district || '')} · ${esc(r.payment_method || 'cod')} · placed ${fmtDate(r.created_at)}</div>
+        </div>
+        <div style="text-align:right">
+          <span class="pill ${(r.approval_status || 'approved') === 'pending' ? '' : 'ok'}">${esc(r.approval_status || 'approved')}</span>
+          <div class="muted">${esc(r.status || '')}</div>
+        </div>
+      </div>`,
+      )
+      .join('');
   }
 
   function renderParcels(rows) {
@@ -164,32 +190,34 @@
       .join('');
   }
 
-  // --- register parcel -------------------------------------------------------
+  // --- new order (waits for admin approval) ----------------------------------
   registerForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     submitBtn.disabled = true;
     msgEl.hidden = true;
     try {
       const payload = {
-        destination_address: document.getElementById('r-address').value.trim(),
-        recipient_name: document.getElementById('r-recipient').value.trim() || undefined,
-        recipient_phone: document.getElementById('r-phone').value.trim() || undefined,
-        weight_kg: Number(document.getElementById('r-weight').value || 0),
-        declared_value: Number(document.getElementById('r-value').value || 0),
+        delivery_address: document.getElementById('r-order-address').value.trim(),
+        recipient_name: document.getElementById('r-order-recipient').value.trim() || undefined,
+        recipient_phone: document.getElementById('r-order-phone').value.trim() || undefined,
+        destination_district: document.getElementById('r-order-district').value.trim(),
+        payment_method: document.getElementById('r-order-payment').value,
+        total_amount: Number(document.getElementById('r-order-value').value || 0),
+        delivery_instructions: document.getElementById('r-order-notes').value.trim() || undefined,
       };
-      const shipment = await api('/shipments', {
+      const order = await api('/workflow/orders', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
       registerForm.reset();
       msgEl.style.color = 'var(--pos)';
       msgEl.hidden = false;
-      msgEl.textContent = `Registered ${shipment.tracking_code}`;
+      msgEl.textContent = `Order ${order.order_number} submitted — pending admin approval.`;
       await renderAll();
     } catch (err) {
       msgEl.style.color = 'var(--red)';
       msgEl.hidden = false;
-      msgEl.textContent = `Registration failed: ${err.message || err}`;
+      msgEl.textContent = `Order failed: ${err.message || err}`;
     } finally {
       submitBtn.disabled = false;
     }

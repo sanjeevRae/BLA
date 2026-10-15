@@ -136,6 +136,31 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
+  // ---- Phase 3: order workflow (approval → intake → dispatch → payment) ----
+  createWorkflowOrder: (payload) =>
+    request('/workflow/orders', { method: 'POST', body: JSON.stringify(payload) }),
+  pendingOrders: () => request('/workflow/orders/pending'),
+  approveOrder: (id, approval_status, note) =>
+    request(`/workflow/orders/${id}/approval`, {
+      method: 'PATCH',
+      body: JSON.stringify({ approval_status, note }),
+    }),
+  intakeOrder: (id, payload) =>
+    request(`/workflow/orders/${id}/intake`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  dispatchShipment: (payload) =>
+    request('/workflow/dispatch', { method: 'POST', body: JSON.stringify(payload) }),
+  updatePayment: (id, payload) =>
+    request(`/workflow/orders/${id}/payment`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+  getOrderDetail: (id) => request(`/workflow/orders/${id}/detail`),
+  // ---- Vehicles: fleet + per-vehicle detail ----
+  vehicleFleet: () => request('/vehicles/fleet'),
+  vehicleDetail: (id) => request(`/vehicles/${id}/detail`),
   listScans: () => request('/warehouse/scans'),
   listTransfers: () => request('/warehouse/transfers'),
   listHandovers: () => request('/warehouse/handovers'),

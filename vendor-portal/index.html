@@ -68,18 +68,30 @@
 
       <section id="app-view" class="hidden">
         <div class="card">
-          <h2>Register parcel</h2>
+          <h2>New order</h2>
+          <p class="muted">Orders stay <b>pending</b> until an admin reviews and approves them.</p>
           <form id="register-form" class="grid">
-            <input id="r-recipient" placeholder="Recipient name" />
-            <input id="r-phone" placeholder="Recipient phone" />
-            <input id="r-address" class="span2" placeholder="Destination address *" required />
-            <input id="r-weight" type="number" step="0.1" placeholder="Weight (kg)" />
-            <input id="r-value" type="number" placeholder="Declared value" />
+            <input id="r-order-recipient" placeholder="Recipient name" />
+            <input id="r-order-phone" placeholder="Recipient phone" />
+            <input id="r-order-address" class="span2" placeholder="Delivery address *" required />
+            <input id="r-order-district" placeholder="Destination district *" required />
+            <input id="r-order-value" type="number" placeholder="Order value" />
+            <select id="r-order-payment">
+              <option value="cod">Cash on delivery (COD)</option>
+              <option value="online">Paid online</option>
+              <option value="advance">Already paid in advance</option>
+            </select>
+            <input id="r-order-notes" class="span2" placeholder="Notes / delivery instructions" />
             <div class="span2" style="display:flex; justify-content:flex-end">
-              <button type="submit" class="primary" id="r-submit">Register</button>
+              <button type="submit" class="primary" id="r-order-submit">Submit order</button>
             </div>
           </form>
           <p id="msg" class="error" hidden></p>
+        </div>
+
+        <div class="card">
+          <h2>My orders</h2>
+          <div id="orders"><p class="muted">Loading…</p></div>
         </div>
 
         <div class="card">

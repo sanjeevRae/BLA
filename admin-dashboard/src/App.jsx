@@ -19,6 +19,8 @@ import {
   DriverTasksPage,
   VendorsPage,
 } from './components/Pages';
+import OrderDetail from './components/OrderDetail';
+import ApprovalQueue from './components/ApprovalQueue';
 import { supabase } from './lib/supabase';
 import { api } from './lib/api';
 import Login from './components/Login';
@@ -388,6 +390,9 @@ export default function App() {
             <>
 
 
+        {/* Admin approval queue (vendor orders awaiting review) */}
+        <ApprovalQueue onChanged={refresh} />
+
         {/* Live operations: orders + map + dispatch */}
         <section className="mt-5 rounded-lg border border-line bg-surface">
           <div className="flex flex-wrap items-end justify-between gap-3 px-5 pt-4">
@@ -452,6 +457,17 @@ export default function App() {
             </div>
           </div>
         </section>
+
+        {/* Selected order details: per-order map, journey, timeline, workflow */}
+        {selected && (
+          <div className="mt-5">
+            <OrderDetail
+              order={selected}
+              onChanged={refresh}
+              onClose={() => setSelected(null)}
+            />
+          </div>
+        )}
             </>
           )}
 

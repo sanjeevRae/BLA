@@ -1,7 +1,8 @@
 import React from 'react';
 
 // Light data table: faint header row, thin dividers, empty/loading states.
-export default function DataTable({ columns, rows, keyField = 'id', loading, error, emptyText }) {
+// Pass onRowClick to make rows clickable (fleet/detail drill-down).
+export default function DataTable({ columns, rows, keyField = 'id', loading, error, emptyText, onRowClick }) {
   if (loading) {
     return (
       <div className="rounded-md border border-line bg-surface p-8 text-center text-sm text-slate2">
@@ -38,7 +39,11 @@ export default function DataTable({ columns, rows, keyField = 'id', loading, err
         </thead>
         <tbody className="divide-y divide-[#F1F5F9]">
           {rows.map((row) => (
-            <tr key={row[keyField]} className="bg-surface">
+            <tr
+              key={row[keyField]}
+              className={`bg-surface ${onRowClick ? 'cursor-pointer transition hover:bg-cream/60' : ''}`}
+              onClick={onRowClick ? () => onRowClick(row) : undefined}
+            >
               {columns.map((col) => (
                 <td key={col.key} className="px-4 py-3 align-top text-slate2">
                   {col.render ? col.render(row) : row[col.key] ?? '—'}

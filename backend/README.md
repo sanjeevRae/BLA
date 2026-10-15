@@ -84,6 +84,15 @@ Interactive docs at <http://localhost:8000/docs>.
 | POST   | `/settlements`                           | Create settlement (super-admin)  |
 | PATCH  | `/settlements/{id}/status`               | Advance settlement status (SA)   |
 | GET    | `/settlements/cod`                       | COD collected at the door        |
+| POST   | `/workflow/orders`                       | Create order (vendor → pending)   |
+| GET    | `/workflow/orders/pending`               | Approval queue (admin review)     |
+| PATCH  | `/workflow/orders/{id}/approval`         | Approve / reject order            |
+| POST   | `/workflow/orders/{id}/intake`           | Warehouse intake (verify + route) |
+| POST   | `/workflow/dispatch`                     | Dispatch: micro driver or vehicle |
+| PATCH  | `/workflow/orders/{id}/payment`          | Payment status (≠ delivery)       |
+| GET    | `/workflow/orders/{id}/detail`           | Per-order map payload + timeline  |
+| GET    | `/vehicles/fleet`                        | Live fleet (trip/driver/cargo)    |
+| GET    | `/vehicles/{id}/detail`                  | Vehicle map, progress, shipments  |
 
 Run tests: `pytest -q` (no Supabase needed for the suite).
 Auth: `REQUIRE_AUTH=false` locally; set `true` + `SUPABASE_JWT_SECRET` in prod.

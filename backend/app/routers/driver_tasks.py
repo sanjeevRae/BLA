@@ -77,7 +77,13 @@ def list_tasks(
     effective = driver_id or own if own else driver_id
     query = (
         sb.table("driver_tasks")
-        .select("*, shipments(tracking_code, parcel_status, recipient_name, destination_address)")
+        .select(
+            "*, shipments("
+            "tracking_code, parcel_status, recipient_name, recipient_phone, "
+            "destination_address, destination_latitude, destination_longitude, "
+            "delivery_instructions, payment_method, payment_status, "
+            "quantity, parcel_type, declared_value)"
+        )
         .order("created_at", desc=True)
     )
     if effective:
@@ -87,11 +93,33 @@ def list_tasks(
     return query.execute().data or []
 
 
+def _ship_pay_of(sb, shipment_id: str | None) -> dict | None:
+    """Fetch the shipment's payment defaults (best-effort, no 404)."""
+    if not shipment_id:
+        return None
+    try:
+        res = (
+            sb.table("shipments")
+            .select("payment_method, declared_value, cod_required")
+            .eq("id", shipment_id)
+            .limit(1)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception:
+        return None
+
+
 @router.patch("/{task_id}/status", dependencies=[_user])
 def update_task_status(
     task_id: str,
     status: str = Query(...),
     cod_collected: float = Query(default=0),
+    payment_method: str | None = Query(default=None),
+    payment_amount: float = Query(default=0),
+    payment_collected: bool = Query(default=False),
+    proof_note: str | None = Query(default=None),
+    attempt_note: str | None = Query(default=None),
     user: dict = _user,
 ):
     sb = get_supabase()
@@ -113,11 +141,37 @@ def update_task_status(
 
     from datetime import datetime, timezone
 
+    # Normalize legacy pair (cod_collected) into the payment fields.
+    if payment_method is None:
+        shipment_for_pay = _ship_pay_of(sb, task.get("shipment_id")) or task
+        payment_method = shipment_for_pay.get("payment_method") or "cod"
+    if payment_collected is False and payment_amount == 0 and cod_collected:
+        payment_collected = True
+        payment_amount = float(cod_collected)
+
     update = {"status": status}
+    now = datetime.now(timezone.utc).isoformat()
     if status in ("delivered", "returned"):
-        update["completed_at"] = datetime.now(timezone.utc).isoformat()
-    if status == "delivered" and cod_collected:
-        update["cod_collected"] = cod_collected
+        update["completed_at"] = now
+    if status == "delivered" and payment_amount:
+        update["cod_collected"] = payment_amount
+    # Delivery attempts: every delivery_failed records an attempt.
+    if status == "delivery_failed":
+        update["failed_attempts"] = int(task.get("failed_attempts") or 0) + 1
+        update["last_attempt_at"] = now
+        if attempt_note is not None:
+            update["delivery_instructions"] = attempt_note
+    # Payment + proof are recorded on the task (task ≠ parcel delivery status).
+    if payment_method is not None:
+        if payment_method not in ("cod", "online", "advance"):
+            raise HTTPException(status_code=400, detail="invalid payment_method")
+        update["payment_method"] = payment_method
+    if payment_amount:
+        update["payment_amount"] = payment_amount
+    if payment_collected:
+        update["payment_collected"] = True
+    if proof_note is not None:
+        update["proof_note"] = proof_note
     updated = (
         sb.table("driver_tasks").update(update).eq("id", task_id).execute()
     )
@@ -139,16 +193,27 @@ def update_task_status(
             pass
 
     # COD audit row on payment at the door.
-    if status == "delivered" and cod_collected:
+    if status == "delivered" and payment_amount and payment_method == "cod":
         try:
             sb.table("cod_collections").insert(
                 {
                     "shipment_id": task.get("shipment_id"),
                     "driver_task_id": task_id,
                     "collected_by": task.get("driver_id"),
-                    "amount": cod_collected,
-                    "collected_at": datetime.now(timezone.utc).isoformat(),
+                    "amount": payment_amount,
+                    "collected_at": now,
                 }
+            ).execute()
+        except Exception:
+            pass
+
+    # Mirror payment collection onto the shipment payment record (delivery
+    # status itself is already handled above / by parcel linkage).
+    if payment_collected or (status == "delivered" and payment_amount):
+        try:
+            kind = "paid"
+            sb.table("shipments").update({"payment_status": kind}).eq(
+                "id", task.get("shipment_id")
             ).execute()
         except Exception:
             pass

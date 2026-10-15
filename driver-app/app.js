@@ -179,26 +179,40 @@
     const s = t.shipments || {};
     const next = nextOf(TASK_FLOW, t.status);
     const canFail = t.status === 'out_for_delivery';
-    const codBlock = t.cod_required
-      ? `<div class="row"><span class="muted">COD due</span>
-         <span class="cod">${Number(t.cod_amount || 0)}</span></div>` +
-        (next === 'delivered'
-          ? `<input data-cod="${esc(t.id)}" type="number" inputmode="decimal"
-               placeholder="COD collected amount" value="${Number(t.cod_amount || 0)}">`
-          : '')
-      : '';
+    const payMethod = s.payment_method || 'cod';
+    const mapsUrl = s.destination_latitude != null && s.destination_longitude != null
+      ? `https://www.google.com/maps/search/?api=1&query=${s.destination_latitude},${s.destination_longitude}`
+      : null;
+    const failed = ` · ${Number(t.failed_attempts || 0)} failed attempt(s)`;
+    const payBlock = `
+      <div class="row"><span class="muted">Payment (${esc(payMethod.toUpperCase())})</span>
+        <span class="cod">${Number(t.payment_amount || t.cod_amount || s.declared_value || 0)}</span></div>
+      <select data-pay="${esc(t.id)}">
+        <option value="cod" ${payMethod === 'cod' ? 'selected' : ''}>Cash on delivery (COD)</option>
+        <option value="online" ${payMethod === 'online' ? 'selected' : ''}>Paid online</option>
+        <option value="advance" ${payMethod === 'advance' ? 'selected' : ''}>Already paid in advance</option>
+      </select>
+      ${next === 'delivered'
+        ? `<input data-cod="${esc(t.id)}" type="number" inputmode="decimal"
+             placeholder="Amount collected / confirmed" value="${Number(t.payment_amount || t.cod_amount || s.declared_value || 0)}">
+           <input data-proof="${esc(t.id)}" type="text"
+             placeholder="Proof note (e.g. photo id, received by)"
+             value="${esc(t.proof_note || '')}">`
+        : ''}`;
     return `
       <div class="card stack">
         <div class="row">
           <span class="pill">${esc(t.task_type)}</span>
-          <span class="pill">${esc(t.status)}</span>
+          <span class="pill">${esc(t.status)}${esc(t.failed_attempts ? failed : '')}</span>
         </div>
         <div>
           <strong>${esc(s.tracking_code || 'Parcel')}</strong>
           <div class="muted">${esc(s.recipient_name || '')} — ${esc(s.destination_address || '')}</div>
-          <div class="muted">Parcel: ${esc(s.parcel_status || '')}</div>
+          <div class="muted">Parcel: ${esc(s.parcel_status || '')} · ${esc(s.quantity || 1)}× ${esc(s.parcel_type || 'package')}</div>
+          ${s.delivery_instructions ? `<div class="muted">Instructions: ${esc(s.delivery_instructions)}</div>` : ''}
+          ${mapsUrl ? `<a href="${mapsUrl}" target="_blank" rel="noopener">Open delivery location in Maps</a>` : ''}
         </div>
-        ${codBlock}
+        ${payBlock}
         <div class="actions">
           ${next ? `<button class="primary" data-task="${esc(t.id)}" data-status="${next}">${TASK_LABELS[next] || next}</button>` : ''}
           ${canFail ? `<button data-task="${esc(t.id)}" data-status="delivery_failed">${TASK_LABELS.delivery_failed}</button>` : ''}
@@ -249,13 +263,24 @@
     btn.disabled = true;
     try {
       if (btn.dataset.task) {
+        const paySel = content.querySelector(`[data-pay="${btn.dataset.task}"]`);
+        const payMethod = paySel ? paySel.value : undefined;
         let cod = 0;
         const codInput = content.querySelector(`[data-cod="${btn.dataset.task}"]`);
         if (status === 'delivered' && codInput) cod = Number(codInput.value || 0);
-        await api(
-          `/driver-tasks/${btn.dataset.task}/status?status=${encodeURIComponent(status)}&cod_collected=${cod}`,
-          { method: 'PATCH' },
-        );
+        const proofInput = content.querySelector(`[data-proof="${btn.dataset.task}"]`);
+        const proofNote = proofInput ? proofInput.value : undefined;
+        const qs = new URLSearchParams({
+          status,
+          cod_collected: String(cod),
+          payment_collected: status === 'delivered' ? 'true' : 'false',
+          payment_amount: String(cod),
+          ...(payMethod ? { payment_method: payMethod } : {}),
+          ...(proofNote ? { proof_note: proofNote } : {}),
+        });
+        await api(`/driver-tasks/${btn.dataset.task}/status?${qs.toString()}`, {
+          method: 'PATCH',
+        });
         await renderTasks();
       } else if (btn.dataset.trip) {
         await api(`/trips/${btn.dataset.trip}/status`, {

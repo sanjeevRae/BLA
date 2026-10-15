@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import PageHeader from './PageHeader';
 import DataTable, { Badge } from './DataTable';
+import VehicleDetail from './VehicleDetail';
 
 function fmtDate(value) {
   if (!value) return '—';
@@ -203,25 +204,129 @@ export function ItemsPage({ search }) {
 }
 
 export function VehiclesPage({ search }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [selected, setSelected] = useState(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    api
+      .vehicleFleet()
+      .then((d) => alive && setRows(Array.isArray(d) ? d : []))
+      .catch((e) => alive && setError(`Failed to load: ${e.message}`))
+      .finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+  }, [tick]);
+
+  const q = (search ?? '').trim().toLowerCase();
+  const visible = q
+    ? rows.filter((r) =>
+        [r.registration, r.type, r.driver?.name, r.trip_status, r.origin_warehouse?.name, r.dest_warehouse?.name]
+          .filter(Boolean)
+          .some((v) => String(v).toLowerCase().includes(q)),
+      )
+    : rows;
+
+  if (selected) {
+    return (
+      <div className="mt-5">
+        <VehicleDetail
+          vehicle={selected}
+          onChanged={() => setTick((t) => t + 1)}
+          onClose={() => setSelected(null)}
+        />
+      </div>
+    );
+  }
+
   return (
-    <ListPage
-      eyebrow="Fleet"
-      title="Vehicles"
-      description="Registered vehicles and their capacity."
-      loader={api.listVehicles}
-      search={search}
-      emptyText="No vehicles registered."
-      columns={[
-        { key: 'registration', label: 'Registration', render: (r) => <span className="font-semibold text-ink">{r.registration}</span> },
-        { key: 'type', label: 'Type', render: (r) => <Badge>{r.type}</Badge> },
-        { key: 'capacity_kg', label: 'Capacity (kg)', render: (r) => <span className="tnum">{r.capacity_kg ?? '—'}</span> },
-        {
-          key: 'warehouse',
-          label: 'Warehouse',
-          render: (r) => (r.warehouse_id ? String(r.warehouse_id).slice(0, 8) : '—'),
-        },
-      ]}
-    />
+    <div className="mt-5 rounded-lg border border-line bg-surface pb-5">
+      <PageHeader
+        eyebrow="Fleet"
+        title="Vehicles"
+        description="Live fleet: driver, location, trip status, route and parcels onboard. Click a vehicle for its map."
+      />
+      <div className="px-6 pt-4">
+        <p className="mb-3 text-[13px] text-slate2">
+          {loading ? 'Loading…' : `${visible.length} of ${rows.length} vehicles`}
+        </p>
+        {error && <p className="mb-3 text-[13px] font-medium text-red-600">{error}</p>}
+        <DataTable
+          keyField="id"
+          loading={loading}
+          error={error}
+          emptyText="No vehicles registered."
+          rows={visible}
+          onRowClick={(r) => setSelected(r)}
+          columns={[
+            {
+              key: 'registration',
+              label: 'Vehicle',
+              render: (r) => (
+                <div>
+                  <div className="font-semibold text-ink">{r.registration}</div>
+                  <div className="text-[11px] text-faint">{r.type} · {r.capacity_kg ?? '—'} kg</div>
+                </div>
+              ),
+            },
+            {
+              key: 'driver',
+              label: 'Driver',
+              render: (r) => (r.driver ? r.driver.name : <span className="text-faint">unassigned</span>),
+            },
+            {
+              key: 'trip_status',
+              label: 'Trip',
+              render: (r) => (
+                <Badge tone={r.trip_status === 'in_transit' ? 'positive' : 'neutral'}>
+                  {r.trip_status}
+                </Badge>
+              ),
+            },
+            {
+              key: 'route',
+              label: 'Route',
+              render: (r) =>
+                r.origin_warehouse || r.dest_warehouse ? (
+                  <span className="text-[12px]">
+                    {r.origin_warehouse?.name || '—'} → {r.dest_warehouse?.name || '—'}
+                  </span>
+                ) : (
+                  <span className="text-faint">—</span>
+                ),
+            },
+            {
+              key: 'departed_at',
+              label: 'Departed / ETA',
+              render: (r) => (
+                <div className="text-[11px] text-slate2">
+                  <div>{fmtDate(r.departed_at)}</div>
+                  <div className="text-faint">ETA {fmtDate(r.estimated_arrival)}</div>
+                </div>
+              ),
+            },
+            {
+              key: 'parcels_onboard',
+              label: 'Parcels',
+              render: (r) => <span className="tnum">{r.parcels_onboard ?? 0}</span>,
+            },
+            {
+              key: 'position',
+              label: 'Last seen',
+              render: (r) =>
+                r.position ? (
+                  <span className="text-[11px] text-slate2">{fmtDate(r.position.last_seen_at)}</span>
+                ) : (
+                  <span className="text-faint">—</span>
+                ),
+            },
+          ]}
+        />
+      </div>
+    </div>
   );
 }
 
