@@ -40,8 +40,8 @@
   };
 
   const fmtMoney = (v) =>
-    new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'NPR', maximumFractionDigits: 0 })
-      .format(Number(v || 0));
+    `Rs. ${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 })
+      .format(Number(v || 0))}`;
 
   async function api(path, options = {}) {
     const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };

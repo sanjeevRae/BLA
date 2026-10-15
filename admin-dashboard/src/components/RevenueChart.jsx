@@ -51,7 +51,7 @@ export function RevenueChart({ labels = [], revenue = [], orders = [] }) {
           <g key={t}>
             <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="#EDF1F5" strokeWidth="1" />
             <text x={padL - 6} y={y + 4} textAnchor="end" fontSize="10" fill="#94A3B8">
-              ₹{val >= 1000 ? `${Math.round(val / 1000)},000` : val}
+              Rs. {val >= 1000 ? `${Math.round(val / 1000)},000` : val}
             </text>
           </g>
         );

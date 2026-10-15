@@ -1,11 +1,10 @@
 import React from 'react';
 
 export function fmtINR(value, decimals = 0) {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
+  // Plain "Rs." prefix — Intl's ₹ symbol was replaced per product request.
+  return `Rs. ${new Intl.NumberFormat('en-IN', {
     maximumFractionDigits: decimals,
-  }).format(Number(value || 0));
+  }).format(Number(value || 0))}`;
 }
 
 export function fmtTime(iso) {
@@ -79,7 +78,7 @@ export function Sparkline({ data, color = '#2563EB', width = 120, height = 44, f
   );
 }
 
-export function Donut({ paid = 0, pending = 0, failed = 0, total = '₹0.00' }) {
+export function Donut({ paid = 0, pending = 0, failed = 0, total = 'Rs. 0.00' }) {
   const sum = paid + pending + failed;
   const R = 54;
   const C = 2 * Math.PI * R;
