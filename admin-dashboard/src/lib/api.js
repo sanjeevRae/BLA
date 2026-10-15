@@ -102,10 +102,38 @@ export const api = {
       body: JSON.stringify({ status, note }),
     }),
   getShipmentEvents: (id) => request(`/shipments/${id}/events`),
-  scanShipment: (id, scan_type, location) =>
-    request(`/warehouse/scan/${id}`, {
+  scanShipment: (shipmentId, event, warehouseId = null) =>
+    request('/warehouse/scans', {
       method: 'POST',
-      body: JSON.stringify({ scan_type, location }),
+      body: JSON.stringify({ shipment_id: shipmentId, event, warehouse_id: warehouseId }),
+    }),
+  createTrip: (payload) =>
+    request('/trips', { method: 'POST', body: JSON.stringify(payload) }),
+  advanceTrip: (tripId, status) =>
+    request(`/trips/${tripId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  createTask: (shipmentId, driverId, taskType, codRequired = false, codAmount = 0) =>
+    request(
+      `/driver-tasks?shipment_id=${encodeURIComponent(shipmentId)}` +
+        `&driver_id=${encodeURIComponent(driverId)}&task_type=${encodeURIComponent(taskType)}` +
+        `&cod_required=${codRequired}&cod_amount=${codAmount}`,
+      { method: 'POST' },
+    ),
+  updateTaskStatus: (taskId, status, codCollected = 0) =>
+    request(
+      `/driver-tasks/${taskId}/status?status=${encodeURIComponent(status)}` +
+        `&cod_collected=${codCollected}`,
+      { method: 'PATCH' },
+    ),
+  // ---- 4th track: COD settlements (super-admin tier) ----
+  listSettlements: (vendorId) =>
+    request(`/settlements${vendorId ? `?vendor_id=${encodeURIComponent(vendorId)}` : ''}`),
+  listCodCollections: () => request('/settlements/cod'),
+  createSettlement: (payload) =>
+    request('/settlements', { method: 'POST', body: JSON.stringify(payload) }),
+  updateSettlementStatus: (id, status) =>
+    request(`/settlements/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
     }),
   listScans: () => request('/warehouse/scans'),
   listTransfers: () => request('/warehouse/transfers'),

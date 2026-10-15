@@ -38,3 +38,15 @@ def test_trip_transitions():
 
 def test_parcel_terminal_set():
     assert svc.PARCEL_TERMINAL == frozenset({"delivered", "returned", "cancelled"})
+
+
+def test_settlement_transitions():
+    assert svc.validate_settlement_transition("pending", "collected")
+    assert svc.validate_settlement_transition("collected", "reconciled")
+    assert svc.validate_settlement_transition("reconciled", "deducted")
+    assert svc.validate_settlement_transition("deducted", "settled")
+    assert svc.validate_settlement_transition("pending", "disputed")
+    assert svc.validate_settlement_transition("disputed", "reconciled")
+    assert not svc.validate_settlement_transition("pending", "settled")
+    assert not svc.validate_settlement_transition("settled", "disputed")
+    assert not svc.validate_settlement_transition("", "collected")

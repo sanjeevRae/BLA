@@ -167,7 +167,7 @@ def list_drivers(available_only: bool = False) -> list[dict[str, Any]]:
         sb.table("drivers")
         .select(
             "id, name, is_available, vehicle_id, current_latitude, current_longitude, "
-            "driver_type, phone, license_number, last_seen_at"
+            "driver_type, phone, license_number, last_seen_at, user_id"
         )
         .order("name")
     )

@@ -80,6 +80,10 @@ Interactive docs at <http://localhost:8000/docs>.
 | GET    | `/trips`                                 | Big-driver trips                |
 | GET    | `/trips/{id}/manifest`                   | Trip manifest + checkpoints     |
 | GET/POST/PUT | `/vendors`                          | Business vendors (write: SA)    |
+| GET    | `/settlements`                           | Vendor settlements list (staff)  |
+| POST   | `/settlements`                           | Create settlement (super-admin)  |
+| PATCH  | `/settlements/{id}/status`               | Advance settlement status (SA)   |
+| GET    | `/settlements/cod`                       | COD collected at the door        |
 
 Run tests: `pytest -q` (no Supabase needed for the suite).
 Auth: `REQUIRE_AUTH=false` locally; set `true` + `SUPABASE_JWT_SECRET` in prod.

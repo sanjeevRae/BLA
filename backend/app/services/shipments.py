@@ -61,6 +61,22 @@ def validate_trip_transition(current: str, nxt: str) -> bool:
     return nxt in TRIP_TRANSITIONS.get(current or "", frozenset())
 
 
+# Settlement track: pending -> collected -> reconciled -> deducted -> settled.
+# "disputed" is reachable from any active state; from disputed back to work.
+SETTLEMENT_TRANSITIONS: dict[str, frozenset[str]] = {
+    "pending": frozenset({"collected", "disputed"}),
+    "collected": frozenset({"reconciled", "disputed"}),
+    "reconciled": frozenset({"deducted", "disputed"}),
+    "deducted": frozenset({"settled", "disputed"}),
+    "settled": frozenset(),
+    "disputed": frozenset({"pending", "reconciled"}),
+}
+
+
+def validate_settlement_transition(current: str, nxt: str) -> bool:
+    return nxt in SETTLEMENT_TRANSITIONS.get(current or "", frozenset())
+
+
 # --- Audit trail ---------------------------------------------------------------
 def log_event(
     sb,

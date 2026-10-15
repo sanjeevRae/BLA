@@ -109,12 +109,14 @@ backend does not sit in this hot path.
 .
 ├── db/
 │   ├── schema.sql            # PostgreSQL schema (SOURCE OF TRUTH) + RLS + realtime
+│   ├── phase1*.sql           # incremental migrations (run in README order)
+│   ├── phase2*.sql           # parcel lifecycle tables + demo seed
 │   └── seed.sql              # minimal example data
 ├── backend/                  # FastAPI monolith
 │   ├── app/
 │   │   ├── main.py
 │   │   ├── core/             # config (pydantic settings) + supabase client
-│   │   ├── routers/          # orders, drivers, analytics, tasks
+│   │   ├── routers/          # orders, drivers, shipments, trips, settlements, ...
 │   │   ├── schemas/          # pydantic request/response models
 │   │   ├── services/         # orders, routing, notifications, storage, realtime, analytics
 │   │   └── models/           # placeholder (schema lives in db/)
@@ -124,6 +126,8 @@ backend does not sit in this hot path.
 │   ├── src/
 │   ├── vercel.json / netlify.toml
 │   └── package.json
+├── driver-app/               # static PWA for micro/big drivers (tasks, trips, GPS)
+├── vendor-portal/            # static portal for business vendors (parcels, settlements)
 ├── customer-tracking/        # plain HTML/JS tracking page
 │   ├── index.html / app.js / styles.css
 │   └── config.example.js

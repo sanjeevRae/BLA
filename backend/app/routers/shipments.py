@@ -5,13 +5,20 @@ Phase 2: parcels track a status independent of the classic order flow.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.core.auth import require_staff, require_user, role_of
+from app.core.auth import (
+    STAFF_OR_VENDOR_ROLES,
+    require_role,
+    require_staff,
+    require_user,
+    role_of,
+)
 from app.core.supabase_client import get_supabase
 from app.services import shipments as shipment_service
 
 router = APIRouter(prefix="/shipments", tags=["shipments"])
 
 _staff = Depends(require_staff)
+_staff_or_vendor = Depends(require_role(*STAFF_OR_VENDOR_ROLES))
 _user = Depends(require_user)
 
 
@@ -106,13 +113,20 @@ def create_shipment(payload: ShipmentCreate, user: dict = _user):
     return shipment
 
 
-@router.get("", dependencies=[_staff])
+@router.get("", dependencies=[_staff_or_vendor])
 def list_shipments(
     status: str | None = Query(default=None),
     vendor_id: str | None = Query(default=None),
     limit: int = Query(default=100, le=500),
+    user: dict = _user,
 ):
     sb = get_supabase()
+    # Vendors see ONLY their own parcels — ignore any vendor_id query param.
+    if role_of(user) == "vendor":
+        own = _vendor_id_of(user)
+        if not own:
+            return []
+        vendor_id = own
     query = sb.table("shipments").select("*").order("created_at", desc=True).limit(limit)
     if status:
         query = query.eq("parcel_status", status)

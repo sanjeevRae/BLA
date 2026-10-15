@@ -36,6 +36,10 @@ STAFF_ROLES = frozenset(
     }
 )
 
+# Staff + vendors: read routes a Business Vendor may reach for its OWN data
+# (parcels, settlements) — handlers must scope rows to current_vendor_id().
+STAFF_OR_VENDOR_ROLES = STAFF_ROLES | frozenset({"vendor"})
+
 # Roles allowed to manage vendors / system settings (super-admin tier).
 SUPER_ROLES = frozenset({"super_admin", "admin", "service_role"})
 
