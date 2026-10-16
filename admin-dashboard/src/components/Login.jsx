@@ -4,26 +4,64 @@ import { supabase } from '../lib/supabase';
 const FIELD =
   'h-11 w-full border border-line bg-surface px-3 text-sm text-ink placeholder:text-slate2/60 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20';
 
+const BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
+
+const PORTAL_LABELS = {
+  '/vendor-portal': 'Vendor Portal',
+  '/driver-app': 'Driver App',
+  '/customer-tracking': 'Customer Tracking',
+};
+
 // Sign-in screen shown when the backend requires auth (REQUIRE_AUTH=true)
 // and no Supabase session exists. Dev mode (REQUIRE_AUTH=false) never sees it.
+// After a successful Supabase sign-in we call GET /auth/me: only identities
+// whose DB role is in ADMIN_CONSOLE_ROLES may enter the admin console.
+// Vendors / drivers / customers are signed back out and shown a denial with
+// a redirect hint to their own portal.
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [denied, setDenied] = useState(null);
 
   async function signIn(e) {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
     setError('');
+    setDenied(null);
     try {
-      const { error: signInError } = await supabase.auth.signInWithPassword({
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
       if (signInError) throw signInError;
-      // Auth state change flips App out of this screen automatically.
+      const session = data.session;
+      if (!session?.access_token) throw new Error('No session returned.');
+
+      // Gate console entry: the DB role (public.users.role) decides, not the
+      // client-editable JWT hint. Only access: granted may proceed.
+      const meRes = await fetch(`${BASE}/auth/me`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      let me;
+      try {
+        me = await meRes.json();
+      } catch {
+        me = {};
+      }
+      if (!meRes.ok || me.access !== 'granted') {
+        await supabase.auth.signOut();
+        setDenied({
+          reason: me.reason || (meRes.status === 401 ? 'invalid_token' : 'denied'),
+          detail: me.detail || 'Access denied. Contact an administrator.',
+          portal_hint: me.portal_hint,
+          role: me.role,
+        });
+        return;
+      }
+      // access: granted — the Supabase auth state change flips App out of Login.
     } catch (err) {
       setError(err.message || 'Sign in failed.');
     } finally {
@@ -39,56 +77,78 @@ export default function Login() {
             B
           </span>
           <div>
-            <div className="text-[15px] font-bold leading-none text-ink">BLA Logistics</div>
+            <div className="text-[15px] font-bold leading-none text-ink">
+              BLA Logistics
+            </div>
             <div className="mt-1 text-xs text-slate2">Operations platform</div>
           </div>
         </div>
 
-        <h1 className="mt-6 text-xl font-bold text-ink">Sign in</h1>
-        <p className="mt-1 text-[13px] text-slate2">
-          Use your BLA account. Your role decides what you can see.
-        </p>
+        {denied ? (
+          <div className="mt-6 p-4 bg-red/10 border border-red rounded-lg">
+            <h2 className="text-sm font-bold text-red">Access denied</h2>
+            <p className="mt-1 text-[13px] text-slate2">{denied.detail}</p>
+            {denied.portal_hint && (
+              <p className="mt-2 text-[13px] text-slate2">
+                You belong in the {PORTAL_LABELS[denied.portal_hint] ?? 'portal'}.
+              </p>
+            )}
+            <button
+              onClick={() => setDenied(null)}
+              className="mt-3 text-[12px] underline underline-offset-4 hover:text-ink"
+            >
+              Try another account
+            </button>
+          </div>
+        ) : (
+          <>
+            <h1 className="mt-6 text-xl font-bold text-ink">Sign in</h1>
+            <p className="mt-1 text-[13px] text-slate2">
+              Use your BLA account. Your role decides what you can see.
+            </p>
 
-        <form onSubmit={signIn} className="mt-6 space-y-4">
-          <div>
-            <label htmlFor="login-email" className="mb-1 block text-sm font-semibold text-ink">
-              Email
-            </label>
-            <input
-              id="login-email"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@bla.test"
-              required
-              className={FIELD}
-            />
-          </div>
-          <div>
-            <label htmlFor="login-password" className="mb-1 block text-sm font-semibold text-ink">
-              Password
-            </label>
-            <input
-              id="login-password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              required
-              className={FIELD}
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={busy}
-            className="h-11 w-full bg-brand text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
-          >
-            {busy ? 'Signing in…' : 'Sign in'}
-          </button>
-          {error ? <p className="text-[13px] text-red">{error}</p> : null}
-        </form>
+            <form onSubmit={signIn} className="mt-6 space-y-4">
+              <div>
+                <label htmlFor="login-email" className="mb-1 block text-sm font-semibold text-ink">
+                  Email
+                </label>
+                <input
+                  id="login-email"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@bla.test"
+                  required
+                  className={FIELD}
+                />
+              </div>
+              <div>
+                <label htmlFor="login-password" className="mb-1 block text-sm font-semibold text-ink">
+                  Password
+                </label>
+                <input
+                  id="login-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  className={FIELD}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={busy}
+                className="h-11 w-full bg-brand text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
+              >
+                {busy ? 'Signing in…' : 'Sign in'}
+              </button>
+              {error ? <p className="text-[13px] text-red">{error}</p> : null}
+            </form>
+          </>
+        )}
       </div>
     </div>
   );

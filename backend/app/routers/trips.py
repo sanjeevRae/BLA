@@ -7,7 +7,7 @@ the admin live map for big drivers only; micro drivers are task-based.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.core.auth import require_staff, require_user, role_of
+from app.core.auth import STAFF_ROLES, _effective_role, require_staff, require_user, role_of
 from app.core.supabase_client import get_supabase
 from app.services import shipments as shipment_service
 
@@ -141,8 +141,8 @@ def update_trip_status(trip_id: str, payload: TripStatusUpdate, user: dict = _us
     trip = res.data[0]
 
     own = _caller_driver_id(user)
-    role = role_of(user)
-    if own and str(trip.get("big_driver_id")) != str(own) and role != "dev-bypass":
+    role, _row = _effective_role(user)
+    if own and str(trip.get("big_driver_id")) != str(own) and role not in STAFF_ROLES:
         raise HTTPException(status_code=403, detail="not your trip")
 
     if not shipment_service.validate_trip_transition(trip.get("status"), payload.status):

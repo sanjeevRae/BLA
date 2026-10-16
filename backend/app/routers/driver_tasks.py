@@ -5,7 +5,7 @@ out_for_delivery -> delivered / delivery_failed / returned).
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.auth import require_staff, require_user, role_of
+from app.core.auth import STAFF_ROLES, _effective_role, require_staff, require_user, role_of
 from app.core.supabase_client import get_supabase
 from app.services import shipments as shipment_service
 
@@ -16,7 +16,7 @@ _user = Depends(require_user)
 
 
 def _caller_driver_id(user: dict | None) -> str | None:
-    """Map the JWT caller to their driver row (None for staff/dev-bypass)."""
+    """Map the JWT caller to their driver row (None for staff)."""
     sub = (user or {}).get("sub")
     if not sub:
         return None
@@ -129,8 +129,8 @@ def update_task_status(
     task = res.data[0]
 
     own = _caller_driver_id(user)
-    role = role_of(user)
-    if own and str(task.get("driver_id")) != str(own) and role != "dev-bypass":
+    role, _row = _effective_role(user)
+    if own and str(task.get("driver_id")) != str(own) and role not in STAFF_ROLES:
         raise HTTPException(status_code=403, detail="not your task")
 
     if not shipment_service.validate_task_transition(task.get("status"), status):

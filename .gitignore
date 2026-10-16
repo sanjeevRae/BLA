@@ -7,6 +7,7 @@ backend/.env
 
 # Editor history / backups (never commit)
 .history/
+*.bak
 
 # Python
 __pycache__/

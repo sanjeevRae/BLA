@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.auth import (
+    _effective_role,
     require_role,
     require_staff,
     require_user,
@@ -127,7 +128,7 @@ def create_order(payload: OrderCreate, user: dict = _user):
     """Admin creates an approved order; a vendor creates a PENDING order that
     an admin must review before any warehouse work begins."""
     sb = get_supabase()
-    role = role_of(user)
+    role, _row = _effective_role(user)
     is_vendor = role == "vendor"
 
     vendor_id = None
@@ -142,7 +143,7 @@ def create_order(payload: OrderCreate, user: dict = _user):
             raise HTTPException(status_code=403, detail="vendor account not linked")
     elif role not in (
         "super_admin", "warehouse_admin", "admin", "dispatcher",
-        "warehouse", "service_role", "dev-bypass",
+        "warehouse", "service_role",
     ):
         raise HTTPException(status_code=403, detail="staff or vendor only")
 
@@ -205,8 +206,8 @@ def _next_order_number(sb) -> str:
 @router.patch("/orders/{order_id}/approval", dependencies=[_user])
 def set_approval(order_id: str, payload: ApprovalUpdate, user: dict = _user):
     sb = get_supabase()
-    role = role_of(user)
-    if role not in ("super_admin", "admin", "service_role", "dev-bypass"):
+    role, _row = _effective_role(user)
+    if role not in ("super_admin", "admin", "service_role"):
         raise HTTPException(status_code=403, detail="admin approval required")
     if payload.approval_status not in ("approved", "rejected"):
         raise HTTPException(status_code=400, detail="approval_status must be approved or rejected")
@@ -235,8 +236,8 @@ def intake_order(order_id: str, payload: IntakePayload, user: dict = _user):
     and computes the last-mile vs inter-warehouse route. Creates/updates the
     shipment and links it back to the order."""
     sb = get_supabase()
-    role = role_of(user)
-    if role not in ("super_admin", "admin", "warehouse_admin", "dispatcher", "service_role", "dev-bypass"):
+    role, _row = _effective_role(user)
+    if role not in ("super_admin", "admin", "warehouse_admin", "dispatcher", "service_role"):
         raise HTTPException(status_code=403, detail="warehouse admin required")
 
     res = sb.table("orders").select("*").eq("id", order_id).limit(1).execute()
@@ -350,8 +351,8 @@ def _match_destination_warehouse(sb, dest_district: Optional[str]) -> Optional[s
 @router.post("/dispatch", status_code=201, dependencies=[_user])
 def dispatch(payload: DispatchPayload, user: dict = _user):
     sb = get_supabase()
-    role = role_of(user)
-    if role not in ("super_admin", "admin", "warehouse_admin", "dispatcher", "service_role", "dev-bypass"):
+    role, _row = _effective_role(user)
+    if role not in ("super_admin", "admin", "warehouse_admin", "dispatcher", "service_role"):
         raise HTTPException(status_code=403, detail="dispatch role required")
 
     ships = sb.table("shipments").select("*").eq("id", payload.shipment_id).limit(1).execute()
@@ -451,8 +452,8 @@ def update_payment(order_id: str, payload: PaymentUpdate, user: dict = _user):
     """Record payment status/method without touching delivery status, so a
     parcel can be Delivered while COD collection/settlement is still Pending."""
     sb = get_supabase()
-    role = role_of(user)
-    if role not in ("super_admin", "admin", "warehouse_admin", "dispatcher", "service_role", "dev-bypass"):
+    role, _row = _effective_role(user)
+    if role not in ("super_admin", "admin", "warehouse_admin", "dispatcher", "service_role"):
         raise HTTPException(status_code=403, detail="dispatch/warehouse role required")
     res = sb.table("orders").select("*").eq("id", order_id).limit(1).execute()
     if not res.data:

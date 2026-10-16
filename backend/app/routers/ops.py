@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, Query
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.auth import ROLE_CATALOG, decode_optional
+from app.core.auth import ROLE_CATALOG, decode_optional, require_admin_console
 from app.core.config import settings
 from app.core.supabase_client import get_supabase
 
@@ -103,7 +103,7 @@ def _resolve_operator(sb, sub: str | None) -> dict:
     return fallback
 
 
-@router.get("/profile")
+@router.get("/profile", dependencies=[Depends(require_admin_console)])
 def profile(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)):
     """Signed-in operator profile + sidebar badges + system status.
 

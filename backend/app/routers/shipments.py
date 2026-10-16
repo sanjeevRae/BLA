@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.core.auth import (
     STAFF_OR_VENDOR_ROLES,
+    _effective_role,
     require_role,
     require_staff,
     require_user,
@@ -62,9 +63,10 @@ _ALLOWED_FIELDS = {
 }
 
 
-def _vendor_id_of(user: dict | None) -> str | None:
+def _vendor_id_of(user: dict | None, enforced_role=None) -> str | None:
     """Resolve the vendor a vendor JWT belongs to (needs the users row)."""
-    if role_of(user) != "vendor":
+    role = enforced_role if enforced_role is not None else role_of(user)
+    if role != "vendor":
         return None
     sub = (user or {}).get("sub")
     if not sub:
@@ -87,14 +89,14 @@ def _vendor_id_of(user: dict | None) -> str | None:
 def create_shipment(payload: ShipmentCreate, user: dict = _user):
     """Register a parcel (warehouse/v super-admin, or a vendor for itself)."""
     sb = get_supabase()
-    role = role_of(user)
-    vid = _vendor_id_of(user)
+    role, _row = _effective_role(user)
+    vid = _vendor_id_of(user, role)
     if role == "vendor":
         if not vid:
             raise HTTPException(status_code=403, detail="vendor account not linked")
         data = payload.model_dump(exclude_none=True)
         data["vendor_id"] = vid
-    elif role not in ("super_admin", "warehouse_admin", "admin", "dispatcher", "warehouse", "service_role", "dev-bypass"):
+    elif role not in ("super_admin", "warehouse_admin", "admin", "dispatcher", "warehouse", "service_role"):
         raise HTTPException(status_code=403, detail="staff or vendor only")
     else:
         data = payload.model_dump(exclude_none=True)
@@ -122,7 +124,8 @@ def list_shipments(
 ):
     sb = get_supabase()
     # Vendors see ONLY their own parcels — ignore any vendor_id query param.
-    if role_of(user) == "vendor":
+    enforced, _r = _effective_role(user)
+    if enforced == "vendor":
         own = _vendor_id_of(user)
         if not own:
             return []
