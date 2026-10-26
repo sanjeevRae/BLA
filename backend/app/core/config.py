@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     # as a single instance with in-process state only.
     redis_url: Optional[str] = Field(default=None, validation_alias="REDIS_URL")
 
+    # --- Stripe (online payments) -------------------------------------------
+    # Test keys for development; live keys in production Render dashboard.
+    # NEVER commit real keys. STRIPE_PUBLISHABLE_KEY is safe to expose to the
+    # frontend; STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must stay server-side.
+    stripe_secret_key: Optional[str] = Field(default=None, validation_alias="STRIPE_SECRET_KEY")
+    stripe_publishable_key: Optional[str] = Field(default=None, validation_alias="STRIPE_PUBLISHABLE_KEY")
+    stripe_webhook_secret: Optional[str] = Field(default=None, validation_alias="STRIPE_WEBHOOK_SECRET")
+
     @property
     def cors_origin_list(self) -> list[str]:
         if self.cors_origins.strip() == "*":

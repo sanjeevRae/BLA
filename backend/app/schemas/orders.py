@@ -30,6 +30,8 @@ class OrderCreate(BaseModel):
     notes: Optional[str] = None
     scheduled_at: Optional[datetime] = None
     items: list[OrderItemCreate] = Field(default_factory=list)
+    # payment_method: "cod" (cash on delivery) or "online" (Stripe card/wallet)
+    payment_method: str = Field(default="cod", pattern="^(cod|online)$")
 
 
 class OrderUpdate(BaseModel):
@@ -69,6 +71,9 @@ class OrderOut(BaseModel):
     recipient_phone: Optional[str] = None
     total_weight_kg: float = 0
     total_amount: float = 0
+    payment_method: str = "cod"
+    payment_intent_id: Optional[str] = None
+    payment_status: Optional[str] = None  # pending, paid, failed, refunded
     notes: Optional[str] = None
     created_at: Optional[datetime] = None
 

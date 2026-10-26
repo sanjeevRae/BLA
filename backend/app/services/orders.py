@@ -57,6 +57,8 @@ async def create_order(payload: OrderCreate) -> dict[str, Any]:
         "total_amount": total_amount,
         "notes": payload.notes,
         "scheduled_at": payload.scheduled_at.isoformat() if payload.scheduled_at else None,
+        "payment_method": payload.payment_method,
+        "payment_status": "paid" if payload.payment_method == "cod" else "pending",
     }
     res = sb.table("orders").insert(order_row).execute()
     order = res.data[0]

@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routers import analytics, auth, customers, driver_tasks, drivers, ops, orders, settlements, tasks, trips, vendors, vehicles, warehouse_ops, workflow
+from app.routers import analytics, auth, customers, driver_tasks, drivers, ops, orders, payments, settlements, tasks, trips, vendors, vehicles, warehouse_ops, workflow
 from app.routers import shipments as shipments_router
 
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +40,7 @@ app.add_middleware(
 # Routers
 # ---------------------------------------------------------------------------
 app.include_router(orders.router)
+app.include_router(payments.router)
 app.include_router(drivers.router)
 app.include_router(customers.router)
 app.include_router(ops.router)
