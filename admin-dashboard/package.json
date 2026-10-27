@@ -12,7 +12,9 @@
     "@maptiler/sdk": "^2.4.0",
     "@supabase/supabase-js": "^2.43.4",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.18.4",
+    "rsuite": "^6.2.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",

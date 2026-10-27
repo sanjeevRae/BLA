@@ -1,15 +1,17 @@
 import React from 'react';
+import { fmtCompactINR } from './widgets';
 
 function niceMax(v) {
-  if (v <= 0) return 10;
+  if (v <= 0) return 100000;
   const exp = Math.floor(Math.log10(v));
   const base = v / 10 ** exp;
   const nice = base <= 1 ? 1 : base <= 2 ? 2 : base <= 5 ? 5 : 10;
-  return nice * 10 ** exp;
+  return Math.max(nice * 10 ** exp, 100000);
 }
 
 function smoothPath(xs, ys) {
-  if (xs.length < 2) return xs.length ? `M ${xs[0]},${ys[0]}` : '';
+  if (!xs.length || !ys.length) return '';
+  if (xs.length < 2) return `M ${xs[0]},${ys[0]}`;
   let d = `M ${xs[0]},${ys[0]}`;
   for (let i = 0; i < xs.length - 1; i++) {
     const mx = (xs[i] + xs[i + 1]) / 2;
@@ -51,7 +53,7 @@ export function RevenueChart({ labels = [], revenue = [], orders = [] }) {
           <g key={t}>
             <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="#EDF1F5" strokeWidth="1" />
             <text x={padL - 6} y={y + 4} textAnchor="end" fontSize="10" fill="#94A3B8">
-              Rs. {val >= 1000 ? `${Math.round(val / 1000)},000` : val}
+              Rs. {fmtCompactINR(val)}
             </text>
           </g>
         );
@@ -63,9 +65,11 @@ export function RevenueChart({ labels = [], revenue = [], orders = [] }) {
             {labels[i] ?? ''}
           </text>
         ))}
-      <path d={`${revPath} L ${xs(n - 1)},${base} L ${xs(0)},${base} Z`} fill="url(#revfill)" />
-      <path d={ordPath} fill="none" stroke="#A78BFA" strokeWidth="1.8" strokeLinecap="round" />
-      <path d={revPath} fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" />
+      {revPath && (
+        <path d={`${revPath} L ${xs(n - 1)},${base} L ${xs(0)},${base} Z`} fill="url(#revfill)" />
+      )}
+      {ordPath && <path d={ordPath} fill="none" stroke="#A78BFA" strokeWidth="1.8" strokeLinecap="round" />}
+      {revPath && <path d={revPath} fill="none" stroke="#2563EB" strokeWidth="2.2" strokeLinecap="round" />}
       <circle cx={xs(n - 1)} cy={yR(revenue[n - 1] ?? 0)} r="3.4" fill="#2563EB" />
     </svg>
   );

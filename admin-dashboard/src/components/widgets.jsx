@@ -7,6 +7,16 @@ export function fmtINR(value, decimals = 0) {
   }).format(Number(value || 0))}`;
 }
 
+// Compact Indian numbering: 100 -> "100", 1000 -> "1k", 10000 -> "10k",
+// 100000 -> "1L", 1000000 -> "10L", 10000000 -> "1Cr".
+export function fmtCompactINR(value) {
+  const v = Number(value || 0);
+  if (v < 1000) return String(Math.round(v));
+  if (v < 100000) return `${Math.round(v / 1000)}k`;
+  if (v < 10000000) return `${Math.round(v / 100000)}L`;
+  return `${Math.round(v / 10000000)}Cr`;
+}
+
 export function fmtTime(iso) {
   if (!iso) return '—';
   try {

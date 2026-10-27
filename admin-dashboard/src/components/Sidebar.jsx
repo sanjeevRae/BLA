@@ -27,17 +27,40 @@ export const NAV_ITEMS = [
   { id: 'tasks', label: 'Tasks', icon: 'M4 5h12v14H4z M7 9h6 M7 13h6 M16 5l4 4 M19 4l2 2-6 6' },
 ];
 
-export default function Sidebar({ page, onPageChange, profile }) {
+export default function Sidebar({ page, onPageChange, profile, onSignOut }) {
   const counts = profile?.badges ?? {};
+
+  // Fallback: read user info from localStorage when backend profile is unavailable
+  let initials = "AU";
+  let brandName = "BLA";
+  let roleLabel = "Admin";
+  try {
+    if (typeof window !== "undefined") {
+      const authenticated = localStorage.getItem("bla_is_authenticated");
+      if (authenticated === "true") {
+        const fullName = localStorage.getItem("bla_user_full_name") || "Admin User";
+        const role = localStorage.getItem("bla_user_role") || "admin";
+        initials = fullName
+          .split(" ")
+          .filter(Boolean)
+          .map((w) => w[0])
+          .join("")
+          .toUpperCase()
+          .slice(0, 2) || "AU";
+        brandName = fullName.split(" ")[0] || "BLA";
+        roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
+      }
+    }
+  } catch {}
   return (
     <aside className="sticky top-0 hidden h-screen w-[228px] shrink-0 flex-col border-r border-line bg-surface px-3 py-5 lg:flex">
       <div className="flex items-center gap-2.5 px-2">
           <span className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-ink text-sm font-bold text-white">
-            B
+            {initials}
           </span>
           <div>
-            <div className="text-[15px] font-bold leading-none text-ink">BLA</div>
-            <div className="mt-1 text-xs text-slate2">Delivery Ops</div>
+            <div className="text-[15px] font-bold leading-none text-ink">{brandName}</div>
+            <div className="mt-1 text-xs text-slate2">{roleLabel}</div>
           </div>
         </div>
 
@@ -88,6 +111,12 @@ export default function Sidebar({ page, onPageChange, profile }) {
             <button type="button" className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-slate2 transition hover:bg-cream">
               <Icon d="M10 16.5h.01 M7 8.5a3 3 0 1 1 4.6 2.5c-.9.6-1.6 1.2-1.6 2.3 M10 17.5h.01" />
               <span className="flex-1 text-left">Help Center</span>
+            </button>
+          </li>
+          <li key="logout">
+            <button type="button" onClick={onSignOut} className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-red-600 transition hover:bg-red-50 hover:text-red-700">
+              <Icon d="M18 6H6l2 5 2-5h6z" />
+              <span className="flex-1 text-left">Sign Out</span>
             </button>
           </li>
         </ul>

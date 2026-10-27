@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.routers import analytics, auth, customers, driver_tasks, drivers, ops, orders, payments, settlements, tasks, trips, vendors, vehicles, warehouse_ops, workflow
+from app.routers import analytics, auth, customers, driver_tasks, drivers, ops, orders, payments, settlements, tasks, trips, vendors, vehicles, warehouse_ops, workflow, warehouse_intake
 from app.routers import shipments as shipments_router
 
 logging.basicConfig(level=logging.INFO)
@@ -28,9 +28,18 @@ app = FastAPI(
 # CORS — allow the static frontends (admin dashboard, customer tracking) to call
 # the API directly from the browser.
 # ---------------------------------------------------------------------------
+_cors_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+# Add explicit origins from settings, but never use "*" when credentials are enabled.
+for _o in settings.cors_origin_list:
+    if _o != "*" and _o not in _cors_origins:
+        _cors_origins.append(_o)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -50,6 +59,7 @@ app.include_router(tasks.router)
 app.include_router(vendors.router)
 app.include_router(shipments_router.router)
 app.include_router(warehouse_ops.router)
+app.include_router(warehouse_intake.router)
 app.include_router(driver_tasks.router)
 app.include_router(trips.router)
 app.include_router(settlements.router)

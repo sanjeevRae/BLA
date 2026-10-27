@@ -1,9 +1,31 @@
 import React from 'react';
 
 export default function TopBar({ search, onSearchChange, dateLabel, operator, notifCount = 0, onSignOut }) {
-  const displayName = operator?.name ?? 'Loading…';
-  const displayRole = operator?.role ?? '';
-  const initials = operator?.initials ?? '—';
+  // Fallback: read user info from localStorage (set by our login flow) when backend profile is unavailable
+  const storedUser = (() => {
+    try {
+      if (typeof window === "undefined") return null;
+      const authenticated = localStorage.getItem("bla_is_authenticated");
+      if (authenticated !== "true") return null;
+      const fullName = localStorage.getItem("bla_user_full_name") || "Admin User";
+      const role = localStorage.getItem("bla_user_role") || "admin";
+      const initials = fullName
+        .split(" ")
+        .filter(Boolean)
+        .map((w) => w[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2) || "AU";
+      return { name: fullName, role, initials, email: localStorage.getItem("bla_user_email") || "" };
+    } catch {
+      return null;
+    }
+  })();
+
+  const op = operator ?? storedUser;
+  const displayName = op?.name ?? "Loading…";
+  const displayRole = op?.role ?? "";
+  const initials = op?.initials ?? "—";
   return (
     <header className="flex items-center gap-3 border-b border-line bg-surface px-4 py-3 lg:px-6">
       <div className="relative w-full max-w-[320px]">

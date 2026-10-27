@@ -124,7 +124,7 @@ export default function Dashboard({ days, onOpenPage, onCreateOrder, onAssignDri
             <RevenueChart labels={revenue?.labels} revenue={revenue?.revenue} orders={revenue?.orders} />
           </Panel>
 
-          <Panel title="Live Deliveries" action={<span className="text-brand">📍</span>}>
+          <Panel title="Live Deliveries" action={<span className="text-brand">View all</span>}>
             <button
               type="button"
               onClick={() => onOpenPage('orders')}

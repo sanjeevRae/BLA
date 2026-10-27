@@ -74,7 +74,7 @@ const ORDER_STATUSES = [
 const FIELD_CLASS =
   'h-11 w-full border border-line bg-surface px-3 text-sm text-ink focus:border-ink';
 
-export default function App() {
+export default function App({ onLogout }) {
   const [stats, setStats] = useState(null);
   const [cashflow, setCashflow] = useState(null);
   const [adminFeed, setAdminFeed] = useState(null);
@@ -107,6 +107,24 @@ export default function App() {
       .catch(() => {
         if (mounted) setSession(null);
       });
+
+    // Fallback: read from localStorage when no Supabase session
+    const stored = localStorage.getItem("bla_is_authenticated");
+    if (stored === "true" && mounted && session == null) {
+      setSession({
+        access_token: "local",
+        user: {
+          id: localStorage.getItem("bla_user_email") || "local-user",
+          email: localStorage.getItem("bla_user_email") || "",
+          user_metadata: {
+            role: localStorage.getItem("bla_user_role") || "admin",
+            full_name: localStorage.getItem("bla_user_full_name") || "Admin User",
+            email: localStorage.getItem("bla_user_email") || "",
+          },
+        },
+      });
+    }
+
     const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => {
       setSession(next ?? null);
     });
@@ -343,7 +361,7 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-page text-ink">
-      <Sidebar page={page} onPageChange={setPage} profile={profile} />
+      <Sidebar page={page} onPageChange={setPage} profile={profile} onSignOut={onLogout} />
 
       <div className="min-w-0 flex-1">
         {/* Mobile section nav */}
@@ -371,7 +389,7 @@ export default function App() {
             dateLabel={dateLabel}
             operator={profile?.operator}
             notifCount={profile?.badges?.notifications ?? 0}
-            onSignOut={session ? () => supabase.auth.signOut() : undefined}
+            onSignOut={onLogout}
           />
 
           {page === 'dashboard' && (
