@@ -46,6 +46,7 @@ import {
   isUnscoped,
   loadWarehouseOr404,
 } from "@/server/services/warehouse-ops-shared";
+import { raiseIncidentInTx } from "@/server/services/incidents";
 
 /**
  * Inter-warehouse transfers (docs/transfer-workflow.md,
@@ -1780,6 +1781,22 @@ export async function scanDestinationPackage(
             notes: `Wrong-warehouse arrival observed during receiving of ${transfer.transferNumber}: this parcel is destined for another warehouse. It has NOT been stocked here.`,
           },
         });
+        // Phase 8 link point: the misroute raises a WRONG_WAREHOUSE
+        // incident (idempotent per package + warehouse via
+        // sourceKey — repeat scans here already returned early
+        // above). Resolving the incident can clear the MISROUTED
+        // flag through the package lifecycle service.
+        await raiseIncidentInTx(tx, {
+          sourceKey: `misrouted:${pkg.id}:${transfer.destinationWarehouseId}`,
+          category: "WRONG_WAREHOUSE",
+          description:
+            `Package ${pkg.trackingId} arrived at the wrong warehouse during receiving of ` +
+            `${transfer.transferNumber}; it is destined for another warehouse and was not stocked here.`,
+          reporterId: actor.userId,
+          warehouseId: transfer.destinationWarehouseId,
+          packageId: pkg.id,
+          transferId,
+        });
       });
       await auditOps(actor, "transfer.wrong_package_scan", "Transfer", transferId, {
         warehouseId: transfer.destinationWarehouseId,
@@ -1807,6 +1824,20 @@ export async function scanDestinationPackage(
           transferId,
           notes: `Excess arrival during receiving of ${transfer.transferNumber}: parcel is destined for this warehouse but is not on the transfer manifest. It was NOT stocked by this scan.`,
         },
+      });
+      // Phase 8 link point: an excess arrival raises one
+      // TRANSFER_EXCESS incident per (transfer, package) — the
+      // sourceKey keeps repeat scans from stacking duplicates.
+      await raiseIncidentInTx(tx, {
+        sourceKey: `transfer-excess:${transferId}:${pkg.id}`,
+        category: "TRANSFER_EXCESS",
+        description:
+          `Package ${pkg.trackingId} arrived with transfer ${transfer.transferNumber} but is not on its manifest. ` +
+          "It was not stocked by this scan.",
+        reporterId: actor.userId,
+        warehouseId: transfer.destinationWarehouseId,
+        packageId: pkg.id,
+        transferId,
       });
     });
     await auditOps(actor, "transfer.excess_scan", "Transfer", transferId, {
@@ -2148,6 +2179,28 @@ export async function finishReceiving(
             tripId: transfer.tripId,
             notes: `Package was manifested on ${transfer.transferNumber} but not received at the destination when unloading finished. It remains in the line-haul driver's custody pending investigation (transfer_shortage).`,
           },
+        });
+        // Phase 8 link point: the shortage raises a
+        // TRANSFER_SHORTAGE incident and the item links to it
+        // (TransferItem.incidentId). Idempotent per item via
+        // sourceKey — this block only runs on the transition into
+        // MISSING, and a retry collides on the key instead of
+        // duplicating.
+        const raised = await raiseIncidentInTx(tx, {
+          sourceKey: `transfer-item-missing:${item.id}`,
+          category: "TRANSFER_SHORTAGE",
+          description:
+            `Package ${item.package.trackingId} was manifested on ${transfer.transferNumber} but not received ` +
+            "at the destination when unloading finished. It remains in the line-haul driver's custody pending investigation.",
+          reporterId: actor.userId,
+          warehouseId: transfer.destinationWarehouseId,
+          packageId: item.packageId,
+          transferId,
+          tripId: transfer.tripId,
+        });
+        await tx.transferItem.update({
+          where: { id: item.id },
+          data: { incidentId: raised.incidentId },
         });
       }
     }

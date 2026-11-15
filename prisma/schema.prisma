@@ -109,6 +109,22 @@ model User {
   adjustmentsCreated       FinancialAdjustment[]   @relation("AdjustmentCreatedBy")
   adjustmentsApproved      FinancialAdjustment[]   @relation("AdjustmentApprovedBy")
 
+  tasksCreated            Task[]                @relation("TaskCreatedBy")
+  tasksAssigned           Task[]                @relation("TaskAssignee")
+  taskComments            TaskComment[]         @relation("TaskCommentAuthor")
+  incidentsReported       Incident[]            @relation("IncidentReporter")
+  incidentsAssigned       Incident[]            @relation("IncidentAssignee")
+  incidentsProposed       Incident[]            @relation("IncidentResolutionProposedBy")
+  incidentsApproved       Incident[]            @relation("IncidentResolutionApprovedBy")
+  incidentNotes           IncidentNote[]        @relation("IncidentNoteAuthor")
+  incidentEvidence        IncidentEvidence[]    @relation("IncidentEvidenceUploadedBy")
+  ticketsRaised           SupportTicket[]       @relation("TicketRaisedBy")
+  ticketsAssigned         SupportTicket[]       @relation("TicketAssignedTo")
+  ticketsResolved         SupportTicket[]       @relation("TicketResolvedBy")
+  ticketMessages          SupportTicketMessage[] @relation("TicketMessageAuthor")
+  notifications           Notification[]        @relation("NotificationUser")
+  notificationPreferences NotificationPreference[] @relation("NotificationPreferenceUser")
+
   @@index([phone])
   @@schema("app")
 }
@@ -366,6 +382,8 @@ model Warehouse {
 
   deliveryBatches DeliveryBatch[] @relation("DeliveryBatchWarehouse")
   returnRequests  ReturnRequest[] @relation("ReturnWarehouse")
+  tasks           Task[]          @relation("TaskWarehouse")
+  incidents       Incident[]      @relation("IncidentWarehouse")
 
   @@index([district])
   @@index([status])
@@ -577,6 +595,7 @@ model Vendor {
   invoices       Invoice[]
   settlements    VendorSettlement[]
   paymentsMade   Payment[]                   @relation("PaymentPayerVendor")
+  tickets        SupportTicket[]             @relation("TicketVendor")
 
   @@index([verificationStatus])
   @@index([businessName])
@@ -711,6 +730,8 @@ model Customer {
   packages     Package[]         @relation("PackageRecipientCustomer")
   invoices     Invoice[]
   paymentsMade Payment[]         @relation("PaymentPayerCustomer")
+  tickets      SupportTicket[] @relation("TicketCustomer")
+  notifications Notification[] @relation("NotificationRecipientCustomer")
 
   @@index([fullName])
   @@schema("app")
@@ -807,6 +828,8 @@ model Order {
   payments               Payment[]
   ledgerTransactions     LedgerTransaction[]
   invoiceLines           InvoiceLine[]
+  incidents              Incident[]      @relation("IncidentOrder")
+  tickets                SupportTicket[] @relation("TicketOrder")
 
   @@index([vendorId, createdAt])
   @@index([customerId])
@@ -875,6 +898,8 @@ model Shipment {
   codCollections         DeliveryCodCollection[]
   returnRequests         ReturnRequest[]
   invoiceLines           InvoiceLine[]
+  tasks                  Task[]                  @relation("TaskRelatedShipment")
+  incidents              Incident[]              @relation("IncidentShipment")
 
   @@index([orderId])
   @@index([originWarehouseId, status])
@@ -950,6 +975,9 @@ model Package {
   codCollection       DeliveryCodCollection?
   returnRequests      ReturnRequest[]
   invoiceLines        InvoiceLine[]
+  tasks               Task[]                @relation("TaskRelatedPackage")
+  incidents           Incident[]            @relation("IncidentPackage")
+  tickets             SupportTicket[]       @relation("TicketPackage")
 
   @@index([shipmentId])
   @@index([currentWarehouseId, operationalStatus])
@@ -1187,6 +1215,7 @@ model HandoverBatch {
   initiatedBy   User              @relation("HandoverInitiatedBy", fields: [initiatedById], references: [id], onDelete: Restrict)
   confirmedBy   User?             @relation("HandoverConfirmedBy", fields: [confirmedById], references: [id], onDelete: Restrict)
   lines         CustodyHandover[]
+  incidents     Incident[]        @relation("IncidentHandoverBatch")
 
   @@index([warehouseId, status])
   @@index([status, createdAt])
@@ -1422,6 +1451,8 @@ model Transfer {
   manifest             TransferManifest?
   executedTrip         Trip?             @relation("TripTransfer")
   trackingEvents       TrackingEvent[]
+  tasks                Task[]          @relation("TaskRelatedTransfer")
+  incidents            Incident[]      @relation("IncidentTransfer")
 
   @@index([originWarehouseId, status])
   @@index([destinationWarehouseId, status])
@@ -1451,6 +1482,7 @@ model TransferItem {
   transfer   Transfer       @relation(fields: [transferId], references: [id], onDelete: Restrict)
   package    Package        @relation(fields: [packageId], references: [id], onDelete: Restrict)
   receivedBy User?          @relation("TransferItemReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  incident   Incident?      @relation("TransferItemIncident", fields: [incidentId], references: [id], onDelete: Restrict)
   scans      TransferScan[]
 
   @@unique([transferId, packageId])
@@ -1531,6 +1563,7 @@ model Trip {
   stops            TripStop[]
   currentForDriver Driver[]        @relation("DriverCurrentTrip")
   trackingEvents   TrackingEvent[]
+  incidents        Incident[]      @relation("IncidentTrip")
 
   @@index([driverId, status])
   @@index([vehicleId, status])
@@ -1642,6 +1675,7 @@ model DeliveryAssignment {
   proofs         ProofOfDelivery[]
   codCollection  DeliveryCodCollection?
   trackingEvents TrackingEvent[]
+  incidents      Incident[]              @relation("IncidentDeliveryAssignment")
 
   @@index([driverId, status])
   @@index([packageId, status])
@@ -1752,6 +1786,7 @@ model DeliveryCodCollection {
   ledgerTransactions LedgerTransaction[]
   remittanceLines    CodRemittanceLine[]
   settlementLines    VendorSettlementLine[]
+  incidents          Incident[]            @relation("IncidentCodCollection")
 
   @@index([collectedById, collectedAt])
   @@index([batchId])
@@ -2099,6 +2134,7 @@ model CodRemittance {
 
   lines              CodRemittanceLine[]
   ledgerTransactions LedgerTransaction[]
+  incidents          Incident[]            @relation("IncidentRemittance")
 
   @@index([driverId, status])
   @@index([status, submittedAt])
@@ -2249,5 +2285,287 @@ model FinancialAdjustment {
 
   @@index([targetType, targetId])
   @@index([status, createdAt])
+  @@schema("app")
+}
+
+// ============================================================================
+// Phase 8 — Operations: tasks, incidents, support tickets, notifications
+// (docs/database-schema.md §10; docs/exception-management.md; spec
+// Parts 15–17). Vocabulary CHECKs, the number sequences and the
+// append-only triggers live in the Phase 8 hardening migration.
+// ============================================================================
+
+/// Work management (spec Part 15) — distinct from DeliveryAssignment,
+/// which is operational package work. A task never substitutes for a
+/// package status update. Accountability timestamps are set by the
+/// workflow transitions, never by hand.
+model Task {
+  id                  String    @id @default(uuid())
+  title               String
+  description         String?
+  createdById         String
+  assigneeId          String
+  warehouseId         String?
+  priority            String    @default("NORMAL")
+  status              String    @default("DRAFT")
+  dueAt               DateTime?
+  relatedPackageId    String?
+  relatedShipmentId   String?
+  relatedTransferId   String?
+  relatedIncidentId   String?
+  relatedTicketId     String?
+  acceptedAt          DateTime?
+  submittedAt         DateTime?
+  verifiedAt          DateTime?
+  closedAt            DateTime?
+  reassignmentReason  String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  createdBy       User           @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  assignee        User           @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  warehouse       Warehouse?     @relation("TaskWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  relatedPackage  Package?       @relation("TaskRelatedPackage", fields: [relatedPackageId], references: [id], onDelete: Restrict)
+  relatedShipment Shipment?      @relation("TaskRelatedShipment", fields: [relatedShipmentId], references: [id], onDelete: Restrict)
+  relatedTransfer Transfer?      @relation("TaskRelatedTransfer", fields: [relatedTransferId], references: [id], onDelete: Restrict)
+  relatedIncident Incident?      @relation("TaskRelatedIncident", fields: [relatedIncidentId], references: [id], onDelete: Restrict)
+  relatedTicket   SupportTicket? @relation("TaskRelatedTicket", fields: [relatedTicketId], references: [id], onDelete: Restrict)
+  comments        TaskComment[]
+
+  @@index([assigneeId, status, dueAt])
+  @@index([warehouseId, status])
+  @@index([status, dueAt])
+  @@schema("app")
+}
+
+/// Append-only in practice: comments are never edited; corrections
+/// are new comments (schema doc §10). Protected by trigger.
+model TaskComment {
+  id        String   @id @default(uuid())
+  taskId    String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now())
+
+  task   Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  author User @relation("TaskCommentAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([taskId, createdAt])
+  @@schema("app")
+}
+
+/// The exceptions/incidents register (spec Part 16).
+/// `sourceKey` is the idempotency key for AUTO-CREATED incidents:
+/// each source event (a disputed handover batch, a COD discrepancy
+/// on a remittance, a transfer item marked missing, a misroute flag
+/// at a warehouse, a rider-displacing scan-back) owns exactly one
+/// key, so a retry of the source operation can never raise a second
+/// incident for the same event. Manual reports carry no sourceKey.
+/// `investigationNotes` on the schema doc is realised as the
+/// append-only IncidentNote thread — a single mutable String cannot
+/// be an append-only record.
+model Incident {
+  id                     String    @id @default(uuid())
+  incidentNumber         String    @unique
+  category               String
+  severity               String
+  status                 String    @default("REPORTED")
+  sourceKey              String?   @unique
+  packageId              String?
+  orderId                String?
+  shipmentId             String?
+  transferId             String?
+  tripId                 String?
+  warehouseId            String?
+  codCollectionId        String?
+  remittanceId           String?
+  handoverBatchId        String?
+  deliveryAssignmentId   String?
+  reporterId             String
+  assigneeId             String?
+  responsibleTeam        String?
+  description            String
+  resolution             String?
+  resolutionProposedById String?
+  resolutionApprovedById String?
+  acknowledgedAt         DateTime?
+  resolvedAt             DateTime?
+  closedAt               DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  package            Package?             @relation("IncidentPackage", fields: [packageId], references: [id], onDelete: Restrict)
+  order              Order?               @relation("IncidentOrder", fields: [orderId], references: [id], onDelete: Restrict)
+  shipment           Shipment?            @relation("IncidentShipment", fields: [shipmentId], references: [id], onDelete: Restrict)
+  transfer           Transfer?            @relation("IncidentTransfer", fields: [transferId], references: [id], onDelete: Restrict)
+  trip               Trip?                @relation("IncidentTrip", fields: [tripId], references: [id], onDelete: Restrict)
+  warehouse          Warehouse?           @relation("IncidentWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  codCollection      DeliveryCodCollection? @relation("IncidentCodCollection", fields: [codCollectionId], references: [id], onDelete: Restrict)
+  remittance         CodRemittance?       @relation("IncidentRemittance", fields: [remittanceId], references: [id], onDelete: Restrict)
+  handoverBatch      HandoverBatch?       @relation("IncidentHandoverBatch", fields: [handoverBatchId], references: [id], onDelete: Restrict)
+  deliveryAssignment DeliveryAssignment?  @relation("IncidentDeliveryAssignment", fields: [deliveryAssignmentId], references: [id], onDelete: Restrict)
+  reporter           User                 @relation("IncidentReporter", fields: [reporterId], references: [id], onDelete: Restrict)
+  assignee           User?                @relation("IncidentAssignee", fields: [assigneeId], references: [id], onDelete: Restrict)
+  resolutionProposedBy User?              @relation("IncidentResolutionProposedBy", fields: [resolutionProposedById], references: [id], onDelete: Restrict)
+  resolutionApprovedBy User?              @relation("IncidentResolutionApprovedBy", fields: [resolutionApprovedById], references: [id], onDelete: Restrict)
+  notes              IncidentNote[]
+  evidence           IncidentEvidence[]
+  tasks              Task[]               @relation("TaskRelatedIncident")
+  transferItems      TransferItem[]       @relation("TransferItemIncident")
+
+  @@index([status, severity])
+  @@index([packageId])
+  @@index([warehouseId, status])
+  @@index([assigneeId, status])
+  @@schema("app")
+}
+
+/// Append-only investigation thread (exception-management.md §2).
+/// Protected by trigger; corrections are new notes.
+model IncidentNote {
+  id         String   @id @default(uuid())
+  incidentId String
+  authorId   String
+  body       String
+  createdAt  DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Restrict)
+  author   User     @relation("IncidentNoteAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([incidentId, createdAt])
+  @@schema("app")
+}
+
+/// Join between Incident and a stored file. `fileId` stays a plain
+/// column until the FileAsset platform model lands (the same
+/// deferral pattern TransferItem.incidentId used until this phase).
+model IncidentEvidence {
+  id           String   @id @default(uuid())
+  incidentId   String
+  fileId       String
+  uploadedById String
+  caption      String?
+  createdAt    DateTime @default(now())
+
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Restrict)
+  uploadedBy User     @relation("IncidentEvidenceUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@unique([incidentId, fileId])
+  @@schema("app")
+}
+
+/// Customer/vendor support cases (spec Part 4.10). Support can
+/// request operational follow-ups (redelivery, address correction)
+/// and escalate to investigation tasks, but never touches custody
+/// or money from inside a ticket.
+model SupportTicket {
+  id             String    @id @default(uuid())
+  ticketNumber   String    @unique
+  category       String
+  status         String    @default("OPEN")
+  priority       String    @default("NORMAL")
+  subject        String
+  description    String
+  /// Nullable: a phone-verified member of the public can raise a
+  /// complaint from the tracking page without an account (the
+  /// ticket then carries customerId + contactPhone instead).
+  raisedById     String?
+  vendorId       String?
+  customerId     String?
+  packageId      String?
+  orderId        String?
+  contactPhone   String?
+  assignedToId   String?
+  resolutionNote String?
+  resolvedById   String?
+  resolvedAt     DateTime?
+  closedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  raisedBy   User?                 @relation("TicketRaisedBy", fields: [raisedById], references: [id], onDelete: Restrict)
+  assignedTo User?                 @relation("TicketAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
+  resolvedBy User?                 @relation("TicketResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+  vendor     Vendor?               @relation("TicketVendor", fields: [vendorId], references: [id], onDelete: Restrict)
+  customer   Customer?             @relation("TicketCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  package    Package?              @relation("TicketPackage", fields: [packageId], references: [id], onDelete: Restrict)
+  order      Order?                @relation("TicketOrder", fields: [orderId], references: [id], onDelete: Restrict)
+  messages   SupportTicketMessage[]
+  tasks      Task[]                @relation("TaskRelatedTicket")
+
+  @@index([status, priority])
+  @@index([vendorId, status])
+  @@index([customerId, status])
+  @@index([assignedToId, status])
+  @@schema("app")
+}
+
+/// Ticket communication history — append-only (trigger-protected).
+/// INTERNAL messages are staff case notes: they are NEVER returned
+/// to the ticket raiser's view.
+model SupportTicketMessage {
+  id         String   @id @default(uuid())
+  ticketId   String
+  authorId   String
+  body       String
+  visibility String   @default("PUBLIC")
+  createdAt  DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+  author User          @relation("TicketMessageAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([ticketId, createdAt])
+  @@schema("app")
+}
+
+/// Per-user / per-recipient notification (spec Part 17) — replaces
+/// the legacy global admin feed. Addressed either to an app user
+/// (`userId`) or to a package recipient who has no account
+/// (`recipientPhone`, normalised; retrieved through the
+/// phone-verified tracking channel). One row per (event, channel):
+/// `dedupeKey` is unique per channel row, so a retry of the
+/// originating event regenerates the same keys and collides instead
+/// of double-notifying. `payload` carries structured event data —
+/// for DELIVERY_OTP it carries the delivery code itself: the
+/// notification IS the delivery mechanism for the code, readable
+/// only by its addressee.
+model Notification {
+  id                  String    @id @default(uuid())
+  userId              String?
+  recipientPhone      String?
+  recipientCustomerId String?
+  category            String
+  channel             String    @default("IN_APP")
+  deliveryStatus      String    @default("SENT")
+  title               String
+  body                String
+  entityType          String?
+  entityId            String?
+  payload             Json?
+  dedupeKey           String?   @unique
+  readAt              DateTime?
+  createdAt           DateTime  @default(now())
+
+  user              User?     @relation("NotificationUser", fields: [userId], references: [id], onDelete: Restrict)
+  recipientCustomer Customer? @relation("NotificationRecipientCustomer", fields: [recipientCustomerId], references: [id], onDelete: Restrict)
+
+  @@index([userId, readAt, createdAt])
+  @@index([recipientPhone, category, createdAt])
+  @@schema("app")
+}
+
+/// Per-user channel preferences (spec Part 17). In-app is always
+/// available; EMAIL/SMS rows only take effect when the respective
+/// provider keys exist.
+model NotificationPreference {
+  id       String  @id @default(uuid())
+  userId   String
+  category String
+  channel  String
+  enabled  Boolean @default(true)
+
+  user User @relation("NotificationPreferenceUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, category, channel])
   @@schema("app")
 }

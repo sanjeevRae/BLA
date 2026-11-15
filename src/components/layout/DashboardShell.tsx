@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { ActorContext } from "@/lib/auth/actor";
 import { SignOutButton } from "@/components/layout/SignOutButton";
+import { NotificationsBell } from "@/components/operations/bell";
 
 /**
  * Minimal dashboard frame for Phase 1 — header with the signed-in user's
@@ -28,6 +29,7 @@ export function DashboardShell({
             </span>
           </div>
           <div className="flex items-center gap-3">
+            <NotificationsBell />
             <div className="text-right leading-tight">
               <div className="text-[13px] font-semibold text-ink">{actor.fullName}</div>
               <div className="text-[12px] text-faint">{actor.email}</div>

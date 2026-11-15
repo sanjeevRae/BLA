@@ -33,6 +33,10 @@ import {
   auditOps,
   isUnscoped,
 } from "@/server/services/warehouse-ops-shared";
+import {
+  notifyUsersInTx,
+  vendorUserIds,
+} from "@/server/services/notifications";
 
 /**
  * Returns and reverse logistics (docs/return-workflow.md). A return
@@ -466,6 +470,26 @@ export async function approveReturn(
         warehouseId: row.warehouseId,
         notes: `Return ${row.returnNumber} approved; charges borne by ${data.chargeBearer}`,
       },
+    });
+    // Phase 8 trigger: return authorised — the requester and the
+    // vendor's users are notified inside the approval transaction.
+    const order = await tx.order.findUnique({
+      where: { id: row.orderId },
+      select: { vendorId: true },
+    });
+    const recipients = new Set<string>();
+    if (row.requestedById !== actor.userId) recipients.add(row.requestedById);
+    if (order?.vendorId) {
+      for (const id of await vendorUserIds(tx, order.vendorId)) recipients.add(id);
+    }
+    recipients.delete(actor.userId);
+    await notifyUsersInTx(tx, recipients, {
+      category: "RETURN_AUTHORISED",
+      title: `Return ${row.returnNumber} authorised`,
+      body: `Return ${row.returnNumber} has been authorised; charges borne by ${data.chargeBearer}.`,
+      entityType: "ReturnRequest",
+      entityId: row.id,
+      dedupeKey: `return-authorised:${row.id}`,
     });
   });
   await auditOps(actor, "return.approved", "ReturnRequest", row.id, {

@@ -335,11 +335,31 @@ async function outForDelivery(codAmountPaisa = "0") {
     ...parcel,
     batch,
     assignment: added.added[0],
-    otp: pickup.taken[0].otp,
+    otp: await recipientOtp(pickup.taken[0].assignmentId),
   };
 }
 
 const wrongOtpFor = (real: string) => (real === "000000" ? "111111" : "000000");
+
+/**
+ * Phase 8 (P6-R1 closure): pickup/regenerate responses no longer
+ * carry the delivery code — tests obtain it the way a recipient
+ * would, from the recipient-addressed DELIVERY_OTP notification.
+ */
+async function recipientOtp(assignmentId: string): Promise<string> {
+  const note = await prisma.notification.findFirst({
+    where: {
+      category: "DELIVERY_OTP",
+      channel: "TRACKING",
+      entityType: "DeliveryAssignment",
+      entityId: assignmentId,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  const payload = note?.payload as { otpCode?: string } | null;
+  if (!payload?.otpCode) throw new Error(`No recipient OTP notification for ${assignmentId}`);
+  return payload.otpCode;
+}
 
 beforeAll(async () => {
   const root = process.cwd();
@@ -617,7 +637,7 @@ describe("OTP gate", () => {
     expect(otpFailureAudits).toBe(3);
 
     // Regeneration clears the lock and issues a working code.
-    const regen = await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
+    await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
     const rowAfter = await prisma.deliveryAssignment.findUniqueOrThrow({
       where: { id: assignment.id },
     });
@@ -625,7 +645,7 @@ describe("OTP gate", () => {
     expect(rowAfter.otpFailedAttempts).toBe(0);
     const delivered = await deliveriesSvc.confirmDelivery(riderAActor, assignment.id, {
       receivedByName: "P6 Recipient",
-      otpCode: regen.otp,
+      otpCode: await recipientOtp(assignment.id),
     });
     expect(delivered.assignment.status).toBe("COMPLETED");
   });
@@ -643,10 +663,10 @@ describe("OTP gate", () => {
       }),
     ).rejects.toThrow(/expired/);
     // Recovery: regenerate, deliver, close.
-    const regen = await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
+    await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
     await deliveriesSvc.confirmDelivery(riderAActor, assignment.id, {
       receivedByName: "P6 Recipient",
-      otpCode: regen.otp,
+      otpCode: await recipientOtp(assignment.id),
     });
     await deliveriesSvc.closeBatch(riderAActor, batch.id);
   });
@@ -820,10 +840,10 @@ describe("rider isolation", () => {
       where: { id: assignment.id },
     });
     expect(fresh.status).toBe("IN_PROGRESS");
-    const pickupOtp = await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
+    await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
     await deliveriesSvc.confirmDelivery(riderAActor, assignment.id, {
       receivedByName: "P6 Recipient",
-      otpCode: pickupOtp.otp,
+      otpCode: await recipientOtp(assignment.id),
     });
     await deliveriesSvc.closeBatch(riderAActor, batch.id);
   });
@@ -858,7 +878,7 @@ describe("pickup shortage + batch closure rules", () => {
     // shortage is accounted (stock never left the warehouse).
     await deliveriesSvc.confirmDelivery(riderAActor, pickup.taken[0].assignmentId, {
       receivedByName: "P6 Recipient",
-      otpCode: pickup.taken[0].otp,
+      otpCode: await recipientOtp(pickup.taken[0].assignmentId),
     });
     const closed = await deliveriesSvc.closeBatch(riderAActor, batch.id);
     expect(closed.batch.status).toBe("COMPLETED");
@@ -878,7 +898,7 @@ describe("pickup shortage + batch closure rules", () => {
     });
     await deliveriesSvc.confirmDelivery(riderBActor, readded.added[0].id, {
       receivedByName: "P6 Recipient",
-      otpCode: pickup2.taken[0].otp,
+      otpCode: await recipientOtp(pickup2.taken[0].assignmentId),
     });
     await deliveriesSvc.closeBatch(riderBActor, batch2.id);
   });
@@ -896,7 +916,7 @@ describe("pickup shortage + batch closure rules", () => {
     expect(pickup.taken).toHaveLength(2);
     await deliveriesSvc.confirmDelivery(riderAActor, pickup.taken[0].assignmentId, {
       receivedByName: "P6 Recipient",
-      otpCode: pickup.taken[0].otp,
+      otpCode: await recipientOtp(pickup.taken[0].assignmentId),
     });
     await expect(deliveriesSvc.closeBatch(riderAActor, batch.id)).rejects.toThrow(
       new RegExp(`unaccounted.*${p2.trackingId}`),

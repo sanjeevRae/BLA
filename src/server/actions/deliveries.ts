@@ -180,7 +180,7 @@ export async function confirmDeliveryAction(
 
 export async function regenerateOtpAction(
   assignmentId: string,
-): Promise<ActionResult<{ assignmentId: string; otp: string; expiresAt: string }>> {
+): Promise<ActionResult<{ assignmentId: string; expiresAt: string; locked: boolean }>> {
   const result = await withActor((actor) => regenerateOtp(actor, assignmentId));
   if (result.success) revalidateDeliverySurfaces();
   return result;

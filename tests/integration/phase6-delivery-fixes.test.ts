@@ -341,11 +341,31 @@ async function outForDelivery(codAmountPaisa = "0") {
     ...parcel,
     batch,
     assignment: added.added[0],
-    otp: pickup.taken[0].otp,
+    otp: await recipientOtp(pickup.taken[0].assignmentId),
   };
 }
 
 const wrongOtpFor = (real: string) => (real === "000000" ? "111111" : "000000");
+
+/**
+ * Phase 8 (P6-R1 closure): pickup/regenerate responses no longer
+ * carry the delivery code — tests obtain it the way a recipient
+ * would, from the recipient-addressed DELIVERY_OTP notification.
+ */
+async function recipientOtp(assignmentId: string): Promise<string> {
+  const note = await prisma.notification.findFirst({
+    where: {
+      category: "DELIVERY_OTP",
+      channel: "TRACKING",
+      entityType: "DeliveryAssignment",
+      entityId: assignmentId,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  const payload = note?.payload as { otpCode?: string } | null;
+  if (!payload?.otpCode) throw new Error(`No recipient OTP notification for ${assignmentId}`);
+  return payload.otpCode;
+}
 
 /**
  * Hold the Package row lock from a separate transaction so service
@@ -599,10 +619,10 @@ describe("P6-R2: OTP failure counting is atomic under concurrency", () => {
     ).rejects.toThrow(/locked/);
 
     // Recovery still works: regenerate, deliver, close.
-    const regen = await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
+    await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
     await deliveriesSvc.confirmDelivery(riderAActor, assignment.id, {
       receivedByName: "P6F Recipient",
-      otpCode: regen.otp,
+      otpCode: await recipientOtp(assignment.id),
     });
     await deliveriesSvc.closeBatch(riderAActor, batch.id);
   }, 120_000);
@@ -699,7 +719,7 @@ describe("P6-R3: cancel paths re-validate inside the transaction", () => {
     if (pickupRes.status === "fulfilled") {
       await deliveriesSvc.confirmDelivery(riderAActor, assignmentId, {
         receivedByName: "P6F Recipient",
-        otpCode: pickupRes.value.taken[0].otp,
+        otpCode: await recipientOtp(assignmentId),
       });
     }
     const closed = await deliveriesSvc.closeBatch(waBActor, batch.id);
@@ -1025,10 +1045,10 @@ describe("P6-R7 + P6-R1: scan-back authority and OTP regeneration restriction", 
     const byWa = await deliveriesSvc.regenerateOtp(waBActor, assignment.id);
     expect(byWa.assignmentId).toBe(assignment.id);
     // And the assigned rider can; the rider's code is the live one.
-    const byRider = await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
+    await deliveriesSvc.regenerateOtp(riderAActor, assignment.id);
     const delivered = await deliveriesSvc.confirmDelivery(riderAActor, assignment.id, {
       receivedByName: "P6F Recipient",
-      otpCode: byRider.otp,
+      otpCode: await recipientOtp(assignment.id),
     });
     expect(delivered.assignment.status).toBe("COMPLETED");
     await deliveriesSvc.closeBatch(riderAActor, batch.id);

@@ -16,6 +16,7 @@ import {
   requirePermAudited,
 } from "@/server/services/scoping";
 import { auditOps } from "@/server/services/warehouse-ops-shared";
+import { raiseIncidentInTx } from "@/server/services/incidents";
 import {
   accountNetPositionPaisa,
   companyAccount,
@@ -540,9 +541,23 @@ export async function verifyRemittance(actor: ActorContext, remittanceId: string
       },
       include: { driver: { include: { user: { select: { fullName: true } } } }, lines: true },
     });
-    // The discrepancy is on record from this moment; the Phase 8
-    // incident workflow consumes this audit row (cod-reconciliation
-    // §3.5 — an incident is opened automatically there).
+    // The discrepancy is on record from this moment.
+    // cod-reconciliation §3.5: an incident is opened automatically.
+    // Phase 8 wires it here, in the verification transaction —
+    // idempotent per remittance (sourceKey), so a retried verify
+    // can never open a second incident for the same discrepancy.
+    // Finance is notified by the incident fan-out (finance
+    // category routing).
+    await raiseIncidentInTx(tx, {
+      sourceKey: `cod-discrepancy:${remittanceId}`,
+      category: "COD_DISCREPANCY",
+      description:
+        `COD remittance ${remittance.remittanceNumber} counted ${counted.toString()} paisa against ` +
+        `${remittance.declaredAmountPaisa.toString()} declared — discrepancy of ${discrepancy.toString()} paisa.`,
+      reporterId: actor.userId,
+      warehouseId: remittance.warehouseId,
+      remittanceId,
+    });
     await auditOps(actor, "cod.discrepancy_opened", "CodRemittance", remittanceId, {
       after: {
         declaredAmountPaisa: remittance.declaredAmountPaisa.toString(),

@@ -234,6 +234,26 @@ async function ensureWarehouse(
   return { id: warehouse.id, locations };
 }
 
+/**
+ * Phase 8 (P6-R1 closure): pickup/regenerate responses no longer
+ * carry the delivery code — tests obtain it the way a recipient
+ * would, from the recipient-addressed DELIVERY_OTP notification.
+ */
+async function recipientOtp(assignmentId: string): Promise<string> {
+  const note = await prisma.notification.findFirst({
+    where: {
+      category: "DELIVERY_OTP",
+      channel: "TRACKING",
+      entityType: "DeliveryAssignment",
+      entityId: assignmentId,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  const payload = note?.payload as { otpCode?: string } | null;
+  if (!payload?.otpCode) throw new Error(`No recipient OTP notification for ${assignmentId}`);
+  return payload.otpCode;
+}
+
 async function makeVendor(label: string): Promise<{ vendorId: string; ownerUserId: string }> {
   const vendor = await vendorsSvc.createVendor(adminActor, {
     businessName: `P7F Vendor ${label} ${RUN}`,
@@ -371,7 +391,7 @@ async function deliverCod(
   const delivered = await deliveriesSvc.confirmDelivery(riderActor, added.added[0].id, {
     receivedByName: "P7F Recipient",
     relationshipToRecipient: "Self",
-    otpCode: pickup.taken[0].otp,
+    otpCode: await recipientOtp(added.added[0].id),
     codCollectedPaisa: codAmountPaisa,
   });
   const shipment = await prisma.shipment.findUniqueOrThrow({ where: { id: parcel.shipmentId } });

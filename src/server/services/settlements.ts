@@ -17,6 +17,10 @@ import {
 } from "@/server/services/scoping";
 import { auditOps } from "@/server/services/warehouse-ops-shared";
 import {
+  notifyUsersInTx,
+  vendorUserIds,
+} from "@/server/services/notifications";
+import {
   accountBalancePaisa,
   companyAccount,
   nextFinanceSequence,
@@ -441,6 +445,16 @@ export async function paySettlement(actor: ActorContext, settlementId: string, i
           method: data.method,
           paymentId: payment?.id ?? null,
         },
+      });
+      // Phase 8 trigger: the vendor's users are notified that the
+      // settlement was paid, inside the payment transaction.
+      await notifyUsersInTx(tx, await vendorUserIds(tx, settlement.vendorId), {
+        category: "SETTLEMENT_PAID",
+        title: `Settlement ${settlement.settlementNumber} paid`,
+        body: `Your settlement ${settlement.settlementNumber} has been paid (net ${settlement.netPayablePaisa.toString()} paisa).`,
+        entityType: "VendorSettlement",
+        entityId: settlementId,
+        dedupeKey: `settlement-paid:${settlementId}`,
       });
       return settled;
     });

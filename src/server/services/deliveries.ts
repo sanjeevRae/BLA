@@ -14,6 +14,7 @@ import {
   NotFoundError,
 } from "@/lib/errors";
 import { PACKAGE_CONDITIONS } from "@/lib/bookings/domain";
+import { normalizePhone } from "@/lib/bookings/phone";
 import type { OperationalStatus } from "@/lib/bookings/lifecycle";
 import {
   ACTIVE_ASSIGNMENT_STATUSES,
@@ -37,6 +38,11 @@ import {
   createReturnRequestInTx,
   lockPackageRow,
 } from "@/server/services/returns";
+import {
+  createNotificationInTx,
+  notifyUsersInTx,
+} from "@/server/services/notifications";
+import { raiseIncidentInTx } from "@/server/services/incidents";
 import {
   auditAccessDenied,
   pageArgs,
@@ -68,12 +74,17 @@ import {
  * transaction under the DeliveryBatch row lock.
  *
  * OTP: a 6-digit code is generated per assignment at pickup, stored
- * ONLY as a bcrypt hash on the assignment, expires after
- * OTP_TTL_MS, and locks after OTP_MAX_FAILURES wrong entries
- * (delivery-workflow §10). The plaintext is returned exactly once,
- * in the pickup result — the transitional hand-off until Phase 8
- * notifications deliver it to the recipient. It is never persisted,
- * logged, audited, or shown in any rider view.
+ * as a bcrypt hash on the assignment, expires after OTP_TTL_MS, and
+ * locks after OTP_MAX_FAILURES wrong entries (delivery-workflow
+ * §10). Phase 8 closed the Phase 6 review's P6-R1 finding: the
+ * plaintext code is NEVER returned to the rider or any staff API.
+ * At generation it is delivered to the RECIPIENT through the
+ * notification system (a Notification addressed to the recipient's
+ * phone, retrievable only through the phone-verified detailed
+ * tracking view) — the rider asks the recipient for the code at the
+ * door (delivery-workflow.md line 112). The only plaintext copy is
+ * the recipient's own notification payload; staff notification
+ * lists never surface recipient rows.
  *
  * COD: the rider records expected vs collected in exact paisa at
  * delivery. A mismatch is stored as a MISMATCH collection record
@@ -651,6 +662,22 @@ export async function addBatchPackages(
           deliveryAssignmentId: assignment.id,
           warehouseId: batch.warehouseId,
         });
+        // Phase 8 trigger: delivery assignment notifies the rider,
+        // in the assignment transaction.
+        const rider = await tx.driver.findUnique({
+          where: { id: batch.riderId },
+          select: { userId: true },
+        });
+        if (rider?.userId && rider.userId !== actor.userId) {
+          await notifyUsersInTx(tx, [rider.userId], {
+            category: "DELIVERY_ASSIGNED",
+            title: `Delivery assigned: ${pkg.trackingId}`,
+            body: `Package ${pkg.trackingId} was added to your delivery batch.`,
+            entityType: "DeliveryAssignment",
+            entityId: assignment.id,
+            dedupeKey: `delivery-assigned:${assignment.id}`,
+          });
+        }
         return assignment.id;
       });
       added.push(toAssignmentView(await loadAssignmentOr404(assignmentId)));
@@ -824,6 +851,17 @@ export async function reassignAssignment(
         reassignedFromId: assignment.id,
       },
     });
+    // Phase 8 trigger: the new rider is notified in-transaction.
+    if (rider.userId !== actor.userId) {
+      await notifyUsersInTx(tx, [rider.userId], {
+        category: "DELIVERY_ASSIGNED",
+        title: `Delivery assigned: ${assignment.package.trackingId}`,
+        body: `Package ${assignment.package.trackingId} was reassigned to you.`,
+        entityType: "DeliveryAssignment",
+        entityId: created.id,
+        dedupeKey: `delivery-assigned:${created.id}`,
+      });
+    }
     return created.id;
   });
   await auditOps(actor, "delivery.assignment_reassigned", "DeliveryAssignment", assignment.id, {
@@ -931,9 +969,48 @@ export type ConfirmPickupInput = z.input<typeof confirmPickupSchema>;
 export interface PickupPackageResult {
   assignmentId: string;
   trackingId: string;
-  /** The recipient delivery code, returned ONCE here (see the OTP
-   *  note in the file header). Never stored, logged, or re-shown. */
-  otp: string;
+  /** OTP state only — the code itself goes to the RECIPIENT via
+   *  the notification system (P6-R1 closure); it is never part of
+   *  any rider/staff response. */
+  otpGenerated: boolean;
+  otpExpiresAt: string;
+}
+
+/**
+ * Deliver a freshly generated delivery code to the package's
+ * RECIPIENT, inside the generation transaction (P6-R1 closure).
+ * The TRACKING-channel notification is the retrievable copy (the
+ * recipient reads it back through the phone-verified detailed
+ * tracking view); the SMS row records intent only — no SMS provider
+ * is connected, so it honestly reads NOT_SENT_NO_PROVIDER. The
+ * dedupe key binds the code to this exact generation event, so a
+ * retry can never deliver two different codes for one generation.
+ */
+async function deliverOtpToRecipientInTx(
+  tx: Prisma.TransactionClient,
+  args: {
+    assignmentId: string;
+    trackingId: string;
+    recipientPhone: string;
+    recipientCustomerId: string | null;
+    otp: string;
+    generatedAt: Date;
+  },
+): Promise<void> {
+  await createNotificationInTx(tx, {
+    recipientPhone: normalizePhone(args.recipientPhone),
+    recipientCustomerId: args.recipientCustomerId,
+    category: "DELIVERY_OTP",
+    title: `Delivery code for ${args.trackingId}`,
+    body:
+      `Your BLA delivery code for package ${args.trackingId} is ${args.otp}. ` +
+      "Share it with the rider only when your package is at your door.",
+    entityType: "DeliveryAssignment",
+    entityId: args.assignmentId,
+    payload: { otpCode: args.otp, trackingId: args.trackingId },
+    dedupeKey: `otp:${args.assignmentId}:${args.generatedAt.getTime()}`,
+    channels: ["TRACKING", "SMS"],
+  });
 }
 
 export interface ConfirmPickupResult {
@@ -972,6 +1049,7 @@ export async function confirmPickup(
     }
     const otp = generateOtpCode();
     const otpHash = await hashOtpCode(otp);
+    let takenOtpExpiresAt: Date | null = null;
     try {
       await prisma.$transaction(async (tx) => {
         await lockPackageRow(tx, assignment.packageId);
@@ -1049,6 +1127,7 @@ export async function confirmPickup(
             trackingEventId: transition.eventId,
           },
         });
+        const otpExpiresAt = new Date(now.getTime() + OTP_TTL_MS);
         await tx.deliveryAssignment.update({
           where: { id: assignment.id },
           data: {
@@ -1056,15 +1135,32 @@ export async function confirmPickup(
             startedAt: now,
             otpCodeHash: otpHash,
             otpGeneratedAt: now,
-            otpExpiresAt: new Date(now.getTime() + OTP_TTL_MS),
+            otpExpiresAt,
             otpFailedAttempts: 0,
             otpLockedAt: null,
             otpVerifiedAt: null,
             version: { increment: 1 },
           },
         });
+        // P6-R1 closure: the code goes to the RECIPIENT through the
+        // notification system, in the same transaction — if pickup
+        // rolls back, no code was ever delivered.
+        await deliverOtpToRecipientInTx(tx, {
+          assignmentId: assignment.id,
+          trackingId: assignment.package.trackingId,
+          recipientPhone: pkg.recipientPhone,
+          recipientCustomerId: pkg.recipientCustomerId,
+          otp,
+          generatedAt: now,
+        });
+        takenOtpExpiresAt = otpExpiresAt;
       });
-      taken.push({ assignmentId: assignment.id, trackingId: assignment.package.trackingId, otp });
+      taken.push({
+        assignmentId: assignment.id,
+        trackingId: assignment.package.trackingId,
+        otpGenerated: true,
+        otpExpiresAt: (takenOtpExpiresAt as Date | null)?.toISOString() ?? new Date(Date.now() + OTP_TTL_MS).toISOString(),
+      });
     } catch (err) {
       if (err instanceof ConflictError || err instanceof DomainValidationError) {
         failed.push({
@@ -1120,7 +1216,7 @@ export async function confirmPickup(
 export async function regenerateOtp(
   actor: ActorContext,
   assignmentId: string,
-): Promise<{ assignmentId: string; otp: string; expiresAt: string }> {
+): Promise<{ assignmentId: string; expiresAt: string; locked: boolean }> {
   await requirePermAudited(actor, "delivery.confirm", "DeliveryAssignment");
   const assignment = await loadAssignmentOr404(assignmentId);
   const batch = assignment.batchId ? await loadBatchOr404(assignment.batchId) : null;
@@ -1184,11 +1280,26 @@ export async function regenerateOtp(
         version: { increment: 1 },
       },
     });
+    // P6-R1 closure: the fresh code is delivered to the RECIPIENT
+    // through the notification system, in the same transaction as
+    // the hash swap — the caller learns only the new expiry.
+    const pkg = await tx.package.findUniqueOrThrow({
+      where: { id: assignment.packageId },
+      select: { trackingId: true, recipientPhone: true, recipientCustomerId: true },
+    });
+    await deliverOtpToRecipientInTx(tx, {
+      assignmentId: assignment.id,
+      trackingId: pkg.trackingId,
+      recipientPhone: pkg.recipientPhone,
+      recipientCustomerId: pkg.recipientCustomerId,
+      otp,
+      generatedAt: now,
+    });
   });
   await auditOps(actor, "delivery.otp_regenerated", "DeliveryAssignment", assignment.id, {
     after: { expiresAt: expiresAt.toISOString() },
   });
-  return { assignmentId: assignment.id, otp, expiresAt: expiresAt.toISOString() };
+  return { assignmentId: assignment.id, expiresAt: expiresAt.toISOString(), locked: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -1709,12 +1820,18 @@ export async function scanBackPackage(
     throw new ConflictError(`Package ${trackingId} has no in-progress delivery assignment`);
   }
 
+  let displacedFromRider = false;
   const outcome = await prisma.$transaction(async (tx) => {
     await lockPackageRow(tx, pkg.id);
     const fresh = await tx.package.findUniqueOrThrow({ where: { id: pkg.id } });
     if (fresh.operationalStatus !== "OUT_FOR_DELIVERY" && fresh.operationalStatus !== "DELIVERY_ATTEMPTED") {
       throw new ConflictError(`Package is ${fresh.operationalStatus} — it can no longer be scanned back`);
     }
+    // Phase 8 link point (P6-R7 follow-up): an OUT_FOR_DELIVERY
+    // scan-back severs a rider's custody — that displacement raises
+    // an incident below. DELIVERY_ATTEMPTED scan-backs are the
+    // normal end-of-round return and do not.
+    displacedFromRider = fresh.operationalStatus === "OUT_FOR_DELIVERY";
     if (fresh.operationalStatus === "OUT_FOR_DELIVERY") {
       // P6-R7, authoritative in-transaction check (the status may
       // have moved since the pre-transaction read).
@@ -1870,6 +1987,24 @@ export async function scanBackPackage(
       displacedRiderName: assignment.driver.user.fullName,
     },
   });
+  if (displacedFromRider && data.reason) {
+    // Phase 8: the displacement incident names the rider and the
+    // recorded reason. Idempotent per assignment (sourceKey) — the
+    // assignment is terminal after a scan-back, so this fires once.
+    await prisma.$transaction((tx) =>
+      raiseIncidentInTx(tx, {
+        sourceKey: `scan-back:${assignment.id}`,
+        category: "DELIVERY_FAILURE",
+        description:
+          `Rider ${assignment.driver.user.fullName} was displaced from package ${trackingId} ` +
+          `(assignment ${assignment.id}) by a warehouse scan-back. Reason: ${data.reason}`,
+        reporterId: actor.userId,
+        warehouseId: warehouse.id,
+        packageId: pkg.id,
+        deliveryAssignmentId: assignment.id,
+      }),
+    );
+  }
   return {
     packageId: pkg.id,
     trackingId,

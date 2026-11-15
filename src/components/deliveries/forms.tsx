@@ -506,7 +506,7 @@ export function PickupForm({
     () => new Set(pending.map((p) => p.trackingId)),
   );
   const [error, setError] = useState<string | null>(null);
-  const [codes, setCodes] = useState<{ trackingId: string; otp: string }[] | null>(null);
+  const [codes, setCodes] = useState<{ trackingId: string; otpExpiresAt: string }[] | null>(null);
   const [notes, setNotes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -530,7 +530,7 @@ export function PickupForm({
       setError(result.error);
       return;
     }
-    setCodes(result.data.taken.map((t) => ({ trackingId: t.trackingId, otp: t.otp })));
+    setCodes(result.data.taken.map((t) => ({ trackingId: t.trackingId, otpExpiresAt: t.otpExpiresAt })));
     const extra: string[] = [];
     if (result.data.shortages.length > 0) {
       extra.push(
@@ -575,13 +575,14 @@ export function PickupForm({
       {codes !== null ? (
         <div className="rounded-md border border-line bg-page px-3 py-2">
           <p className="text-[13px] font-semibold text-ink">
-            Delivery codes for the packages you took (shown once — the recipient will quote
-            theirs at the door):
+            A delivery code was sent to each recipient — ask the recipient for their code
+            at the door:
           </p>
           <ul className="mt-1 grid gap-1">
             {codes.map((c) => (
               <li key={c.trackingId} className="font-mono text-[13px] text-ink">
-                {c.trackingId}: <strong>{c.otp}</strong>
+                {c.trackingId}: code sent to recipient (expires{" "}
+                {new Date(c.otpExpiresAt).toLocaleTimeString()})
               </li>
             ))}
           </ul>
@@ -820,7 +821,7 @@ export function DeliverForm({ assignment }: { assignment: RiderAssignmentView })
 }
 
 export function RegenerateOtpButton({ assignmentId }: { assignmentId: string }) {
-  const [code, setCode] = useState<string | null>(null);
+  const [sent, setSent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -833,7 +834,7 @@ export function RegenerateOtpButton({ assignmentId }: { assignmentId: string }) 
       setError(res.error);
       return;
     }
-    setCode(res.data.otp);
+    setSent(res.data.expiresAt);
   }
 
   return (
@@ -841,9 +842,10 @@ export function RegenerateOtpButton({ assignmentId }: { assignmentId: string }) 
       <button type="button" className={subtleButtonClass} disabled={busy} onClick={onClick}>
         {busy ? "Issuing…" : "New delivery code"}
       </button>
-      {code ? (
-        <span className="font-mono text-[13px] text-ink">
-          New code: <strong>{code}</strong> (shown once)
+      {sent ? (
+        <span className="text-[13px] text-ink">
+          New code sent to the recipient (expires {new Date(sent).toLocaleTimeString()}) —
+          ask them for it at the door.
         </span>
       ) : null}
       {error ? <span className="text-[12px] text-red">{error}</span> : null}

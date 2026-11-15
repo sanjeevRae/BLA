@@ -331,6 +331,15 @@ export interface DetailedTrackingView extends PublicTrackingView {
     receivedByName: string | null;
     method: string;
   } | null;
+  /**
+   * The CURRENT delivery code for an OUT_FOR_DELIVERY package
+   * (Phase 8, P6-R1 closure). This phone-verified view is the ONLY
+   * surface that ever exposes the code: the caller has just proven
+   * possession of the very phone number the code protects. It is
+   * present only while a valid, unexpired, unlocked, unverified
+   * OTP exists on the active assignment; otherwise null.
+   */
+  deliveryCode: string | null;
 }
 
 const DETAILED_TRACKING_DENIAL =
@@ -441,6 +450,50 @@ export async function getDetailedTracking(
       select: { deliveredAt: true, receivedByName: true, method: true },
     }),
   ]);
+
+  // P6-R1 closure: after phone verification, the recipient — and
+  // only the recipient — can read back the current delivery code
+  // from their DELIVERY_OTP notification while the package is out
+  // for delivery and the OTP is live. The code is never derived
+  // from the assignment (only its hash lives there); the
+  // recipient-addressed notification IS the delivery record.
+  let deliveryCode: string | null = null;
+  if (pkg.operationalStatus === "OUT_FOR_DELIVERY") {
+    const assignment = await prisma.deliveryAssignment.findFirst({
+      where: { packageId: pkg.id, kind: "DELIVERY", status: "IN_PROGRESS" },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        otpCodeHash: true,
+        otpExpiresAt: true,
+        otpLockedAt: true,
+        otpVerifiedAt: true,
+      },
+    });
+    if (
+      assignment?.otpCodeHash &&
+      !assignment.otpLockedAt &&
+      !assignment.otpVerifiedAt &&
+      assignment.otpExpiresAt &&
+      assignment.otpExpiresAt.getTime() > Date.now()
+    ) {
+      const note = await prisma.notification.findFirst({
+        where: {
+          category: "DELIVERY_OTP",
+          channel: "TRACKING",
+          entityType: "DeliveryAssignment",
+          entityId: assignment.id,
+          recipientPhone: normalized,
+        },
+        orderBy: { createdAt: "desc" },
+        select: { payload: true },
+      });
+      const payload = note?.payload as { otpCode?: unknown } | null;
+      if (payload && typeof payload.otpCode === "string") {
+        deliveryCode = payload.otpCode;
+      }
+    }
+  }
   return {
     trackingId: pkg.trackingId,
     status: pkg.operationalStatus,
@@ -466,5 +519,6 @@ export async function getDetailedTracking(
           method: pod.method,
         }
       : null,
+    deliveryCode,
   };
 }

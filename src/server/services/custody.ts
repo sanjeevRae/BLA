@@ -26,6 +26,7 @@ import {
   auditOps,
   isUnscoped,
 } from "@/server/services/warehouse-ops-shared";
+import { raiseIncidentInTx } from "@/server/services/incidents";
 
 /**
  * Custody chain + handovers (docs/inventory-and-custody.md §3–§4).
@@ -556,10 +557,12 @@ export async function closeHandoverBatch(
         where: { id: line.packageId },
         select: { shipmentId: true, orderId: true, operationalStatus: true },
       });
-      // The shortfall is permanently on the package's history. The
-      // Incident record itself is raised in Phase 8 — this event and
-      // the custody.handover_disputed audit row are its link point.
-      // Custody of a missing package stays with the giver.
+      // The shortfall is permanently on the package's history.
+      // Phase 8 wired the link point: a HANDOVER_DISCREPANCY
+      // incident is raised per missing line, inside this
+      // transaction, idempotent on the line id (sourceKey) — a
+      // retried close can never raise it twice. Custody of a
+      // missing package stays with the giver.
       await tx.trackingEvent.create({
         data: {
           packageId: line.packageId,
@@ -581,6 +584,19 @@ export async function closeHandoverBatch(
       where: { id: batch.id },
       data: { status: "DISPUTED", updatedAt: now },
     });
+    for (const line of pendingLines) {
+      await raiseIncidentInTx(tx, {
+        sourceKey: `handover-dispute:${line.id}`,
+        category: "HANDOVER_DISCREPANCY",
+        description:
+          `Package was not accounted for when handover batch ${batch.id} was closed short ` +
+          `(${batch.confirmedCount}/${batch.expectedCount} confirmed). Custody remains with the giver pending investigation.`,
+        reporterId: actor.userId,
+        warehouseId: batch.warehouseId,
+        packageId: line.packageId,
+        handoverBatchId: batch.id,
+      });
+    }
   });
 
   await auditOps(actor, "custody.handover_disputed", "HandoverBatch", batch.id, {
