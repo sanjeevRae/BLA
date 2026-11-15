@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
 import { listSettlements, prepareSettlement } from "@/server/services/settlements";
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const url = new URL(request.url);
     const page = Number(url.searchParams.get("page") ?? 1);
     const pageSize = Number(url.searchParams.get("pageSize") ?? 25);
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const body = await request.json().catch(() => ({}));
     return NextResponse.json(await prepareSettlement(actor, body), { status: 201 });
   } catch (error) {

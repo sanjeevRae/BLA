@@ -10,7 +10,13 @@ import { LoginForm } from "@/components/auth/LoginForm";
  */
 export default async function LoginPage() {
   const actor = await getActorContext();
-  if (actor) redirect(actor.landingPath);
+  if (actor) {
+    // Already signed in: route onward, honouring the same restricted
+    // states the login action routes on (Phase 10 gate F13).
+    if (actor.mfaEnrolmentRequired) redirect("/mfa-setup");
+    if (actor.mfaPending) redirect("/login/mfa");
+    redirect(actor.landingPath);
+  }
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-page px-4 py-10">

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { confirmHandoverPackage } from "@/server/services/custody";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
@@ -17,7 +17,7 @@ export async function POST(
   if (!actor) return unauthenticatedResponse();
   const { id } = await params;
   try {
-    requireUnflagged(actor); // P2-3 gate
+    requireAccessGranted(actor); // P2-3 gate
     const body = (await request.json()) as {
       packageId: string;
       condition?: "GOOD" | "DAMAGED";

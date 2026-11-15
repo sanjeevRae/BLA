@@ -6,13 +6,14 @@ import { revalidatePath } from "next/cache";
 import {
   AuthorizationError,
   getActorContext,
-  requireUnflagged,
+  requireAccessGranted,
 } from "@/lib/auth/permissions";
 import { sessionCookieName } from "@/lib/auth/session-cookie";
 import { ConflictError, DomainValidationError, NotFoundError } from "@/lib/errors";
 import {
   changePassword,
   reactivateUser,
+  resetUserMfa,
   suspendUser,
   type ChangePasswordInput,
 } from "@/server/services/users";
@@ -53,10 +54,35 @@ export async function suspendUserAction(
   const actor = await getActorContext();
   if (!actor) return { success: false, error: "Authentication required" };
   try {
-    requireUnflagged(actor); // P2-3: flagged accounts act nowhere but password change
+    requireAccessGranted(actor); // P2-3: flagged accounts act nowhere but password change
     const data = await suspendUser(actor, userId, reason);
     revalidatePath("/admin/warehouses");
     revalidatePath("/super-admin/warehouses");
+    return { success: true, data };
+  } catch (error) {
+    if (
+      error instanceof AuthorizationError ||
+      error instanceof NotFoundError ||
+      error instanceof ConflictError ||
+      error instanceof DomainValidationError
+    ) {
+      return { success: false, error: error.message };
+    }
+    throw error;
+  }
+}
+
+/** Reset a user's MFA enrolment (Phase 10 gate F13 recovery):
+ *  SUPER_ADMIN only, never self; the service clears the enrolment,
+ *  deletes the target's sessions and audits the reset. */
+export async function resetUserMfaAction(
+  userId: string,
+): Promise<ActionResult<{ reset: true }>> {
+  const actor = await getActorContext();
+  if (!actor) return { success: false, error: "Authentication required" };
+  try {
+    requireAccessGranted(actor); // P2-3
+    const data = await resetUserMfa(actor, userId);
     return { success: true, data };
   } catch (error) {
     if (
@@ -77,7 +103,7 @@ export async function reactivateUserAction(
   const actor = await getActorContext();
   if (!actor) return { success: false, error: "Authentication required" };
   try {
-    requireUnflagged(actor); // P2-3
+    requireAccessGranted(actor); // P2-3
     const data = await reactivateUser(actor, userId);
     revalidatePath("/admin/warehouses");
     revalidatePath("/super-admin/warehouses");

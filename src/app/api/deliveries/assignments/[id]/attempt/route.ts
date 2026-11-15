@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import {
   recordDeliveryAttempt,
   type RecordAttemptInput,
@@ -18,7 +18,7 @@ export async function POST(
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const { id } = await params;
     const body = (await request.json().catch(() => ({}))) as RecordAttemptInput;
     return NextResponse.json(await recordDeliveryAttempt(actor, id, body));

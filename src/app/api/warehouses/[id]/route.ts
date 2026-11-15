@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import {
   AuthorizationError,
   getActorContext,
-  requireUnflagged,
+  requireAccessGranted,
 } from "@/lib/auth/permissions";
 import { NotFoundError } from "@/lib/errors";
 import { getWarehouse } from "@/server/services/warehouses";
@@ -27,7 +27,7 @@ export async function GET(
   }
   const { id } = await params;
   try {
-    requireUnflagged(actor); // P2-3
+    requireAccessGranted(actor); // P2-3
     const warehouse = await getWarehouse(actor, id);
     return NextResponse.json({ warehouse });
   } catch (error) {

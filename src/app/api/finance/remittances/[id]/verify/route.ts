@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
 import { verifyRemittance } from "@/server/services/cod-remittances";
@@ -12,7 +12,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const { id } = await params;
     const body = await request.json().catch(() => ({}));
     return NextResponse.json(await verifyRemittance(actor, id, body));

@@ -4,7 +4,7 @@ import {
   AuthorizationError,
   getActorContext,
   requirePermission,
-  requireUnflagged,
+  requireAccessGranted,
 } from "@/lib/auth/permissions";
 
 /**
@@ -27,7 +27,7 @@ export async function GET() {
   try {
     // P2-3: flagged (mustChangePassword) accounts are refused here too,
     // not only redirected on pages.
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     requirePermission(actor, "profile.update_own");
   } catch (error) {
     if (error instanceof AuthorizationError) {

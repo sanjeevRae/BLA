@@ -30,6 +30,20 @@ export interface ActorContext {
   /** True while the account is flagged to set a new password; dashboard
    *  page guards redirect to /set-password before rendering anything. */
   mustChangePassword: boolean;
+  /** Phase 10 (F13): the account has completed TOTP enrolment. */
+  mfaEnrolled?: boolean;
+  /** Phase 10 (F13): a privileged account (SUPER_ADMIN/ADMIN) that has
+   *  not yet enrolled while the SystemSetting policy requires MFA.
+   *  Such an actor is restricted to the enrolment flow — dashboard
+   *  guards redirect to /mfa-setup and requireAccessGranted refuses
+   *  every action/API call. Optional: service-level test fixtures
+   *  built by hand predate the field and are never MFA-gated. */
+  mfaEnrolmentRequired?: boolean;
+  /** Phase 10 (F13): the account is MFA-enrolled but THIS session has
+   *  not yet passed the TOTP challenge (Session.mfaVerifiedAt null).
+   *  Restricted to the challenge flow — guards redirect to
+   *  /login/mfa and requireAccessGranted refuses everything else. */
+  mfaPending?: boolean;
   roles: RoleCode[];
   primaryRole: RoleCode | null;
   permissions: ReadonlySet<string>;
@@ -80,4 +94,38 @@ export function requireUnflagged(actor: ActorContext): void {
       "Password change required: set a new password before continuing",
     );
   }
+}
+
+/**
+ * Throws AuthorizationError while a privileged actor's MFA obligation
+ * is unsatisfied (Phase 10 gate F13) — either enrolment is required
+ * but not completed, or this session has not passed the TOTP
+ * challenge. The MFA flows themselves (enrolment, challenge,
+ * password change, sign-out) are exempt, exactly like the
+ * mustChangePassword exemptions in P2-3: they resolve the actor with
+ * getActorContext() and never pass through this gate.
+ */
+export function requireMfaSatisfied(actor: ActorContext): void {
+  if (actor.mfaEnrolmentRequired) {
+    throw new AuthorizationError(
+      "MFA enrolment required: set up an authenticator before continuing",
+    );
+  }
+  if (actor.mfaPending) {
+    throw new AuthorizationError(
+      "MFA verification required: complete the authenticator challenge before continuing",
+    );
+  }
+}
+
+/**
+ * The full access gate every Server Action wrapper and Route Handler
+ * runs after resolving the actor: the P2-3 mustChangePassword check
+ * plus the Phase 10 MFA check. (This superseded the bare
+ * requireUnflagged call at every wrapper in Phase 10; requireUnflagged
+ * remains for the few paths that are MFA-exempt by design.)
+ */
+export function requireAccessGranted(actor: ActorContext): void {
+  requireUnflagged(actor);
+  requireMfaSatisfied(actor);
 }

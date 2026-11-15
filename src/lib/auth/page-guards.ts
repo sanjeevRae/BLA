@@ -16,6 +16,11 @@ export async function requireDashboardActor(allowedRoles: RoleCode[]): Promise<A
   // A flagged account sets a new password before any dashboard renders
   // (docs/security-architecture.md §2/§4).
   if (actor.mustChangePassword) redirect("/set-password");
+  // Phase 10 (F13): a privileged account satisfies MFA before any
+  // dashboard renders — enrolment first if it has not enrolled, the
+  // TOTP challenge if this session has not passed it.
+  if (actor.mfaEnrolmentRequired) redirect("/mfa-setup");
+  if (actor.mfaPending) redirect("/login/mfa");
   if (!actor.roles.some((role) => allowedRoles.includes(role))) {
     redirect(actor.landingPath);
   }

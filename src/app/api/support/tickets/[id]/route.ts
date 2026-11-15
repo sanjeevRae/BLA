@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { getTicket } from "@/server/services/support-tickets";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
@@ -13,7 +13,7 @@ export async function GET(
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const { id } = await params;
     return NextResponse.json(await getTicket(actor, id));
   } catch (error) {

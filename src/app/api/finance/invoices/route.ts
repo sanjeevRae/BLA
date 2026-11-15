@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
 import { generateVendorInvoice, listInvoices } from "@/server/services/invoices";
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const url = new URL(request.url);
     const page = Number(url.searchParams.get("page") ?? 1);
     const pageSize = Number(url.searchParams.get("pageSize") ?? 25);
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const body = (await request.json().catch(() => ({}))) as { vendorId?: string; dueInDays?: number };
     const invoice = await generateVendorInvoice(actor, body);
     return NextResponse.json({ invoice }, { status: invoice ? 201 : 200 });

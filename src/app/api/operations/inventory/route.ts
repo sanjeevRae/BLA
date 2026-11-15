@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { listInventory } from "@/server/services/inventory";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
   if (!actor) return unauthenticatedResponse();
   const params = request.nextUrl.searchParams;
   try {
-    requireUnflagged(actor); // P2-3 gate
+    requireAccessGranted(actor); // P2-3 gate
     const result = await listInventory(actor, {
       warehouseId: params.get("warehouseId") ?? undefined,
       zoneKind: params.get("zoneKind") ?? undefined,

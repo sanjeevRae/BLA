@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { getClientIp } from "@/lib/auth/client-ip";
 import { raiseTrackingComplaint } from "@/server/services/support-tickets";
 import { apiErrorResponse } from "@/server/api-errors";
 
@@ -16,9 +17,12 @@ export async function POST(
   const { trackingId } = await params;
   try {
     const body = await request.json();
-    return NextResponse.json(await raiseTrackingComplaint(trackingId, body), {
-      status: 201,
-    });
+    return NextResponse.json(
+      await raiseTrackingComplaint(trackingId, body, {
+        ipAddress: getClientIp(request.headers),
+      }),
+      { status: 201 },
+    );
   } catch (error) {
     const response = apiErrorResponse(error);
     if (response) return response;

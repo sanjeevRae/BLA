@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { loadTransferPackage } from "@/server/services/transfers";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
@@ -15,7 +15,7 @@ export async function POST(
   if (!actor) return unauthenticatedResponse();
   const { id } = await params;
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     const result = await loadTransferPackage(actor, id, {
       trackingId: String(body.trackingId ?? ""),

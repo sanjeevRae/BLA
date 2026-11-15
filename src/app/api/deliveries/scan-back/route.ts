@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import {
   scanBackPackage,
   type ScanBackInput,
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const body = (await request.json().catch(() => ({}))) as ScanBackInput;
     return NextResponse.json(await scanBackPackage(actor, body));
   } catch (error) {

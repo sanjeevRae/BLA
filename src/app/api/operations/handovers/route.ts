@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import {
   initiateHandover,
   type InitiateHandoverInput,
@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor); // P2-3 gate
+    requireAccessGranted(actor); // P2-3 gate
     const body = (await request.json()) as InitiateHandoverInput;
     const batch = await initiateHandover(actor, body);
     return NextResponse.json(batch, { status: 201 });

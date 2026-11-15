@@ -45,6 +45,12 @@ export async function loginAction(input: {
 
   await createDatabaseSession(user.id, { ipAddress, userAgent });
   // A flagged account must set a new password before any dashboard
-  // access (docs/security-architecture.md §2/§4).
-  redirect(user.mustChangePassword ? "/set-password" : "/go");
+  // access (docs/security-architecture.md §2/§4). A privileged
+  // account then satisfies MFA (Phase 10 gate F13): enrolment if it
+  // has not enrolled, the TOTP challenge if it has — the session is
+  // restricted to those flows until then.
+  if (user.mustChangePassword) redirect("/set-password");
+  if (user.mfaEnrolmentRequired) redirect("/mfa-setup");
+  if (user.mfaChallengeRequired) redirect("/login/mfa");
+  redirect("/go");
 }

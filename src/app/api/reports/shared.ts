@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import {
   getActorContext,
-  requireUnflagged,
+  requireAccessGranted,
   type ActorContext,
 } from "@/lib/auth/permissions";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
@@ -36,7 +36,7 @@ export async function reportJson<T>(
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     return NextResponse.json(await run(actor, reportFiltersFrom(request)));
   } catch (error) {
     const response = apiErrorResponse(error);

@@ -52,6 +52,61 @@ async function requireManagePermissionAudited(
   }
 }
 
+/**
+ * Reset a user's MFA enrolment (Phase 10 gate F13 recovery path).
+ * SUPER_ADMIN only — and never on oneself: recovery is one privileged
+ * user restoring another (e.g. a lost authenticator). The target is
+ * returned to the enrolment-required state: secret cleared, watermark
+ * cleared, and ALL of the target's sessions deleted (a session that
+ * had passed the old factor must not survive the reset). Audited.
+ */
+export async function resetUserMfa(
+  actor: ActorContext,
+  targetUserId: string,
+): Promise<{ reset: true }> {
+  await requireManagePermissionAudited(actor, targetUserId);
+  if (!actor.roles.includes("SUPER_ADMIN")) {
+    await prisma.auditLog.create({
+      data: {
+        actorId: actor.userId,
+        actorRole: actor.primaryRole,
+        action: "access.denied",
+        entityType: "User",
+        entityId: targetUserId,
+        after: { reason: "mfa_reset_requires_super_admin" },
+      },
+    });
+    throw new AuthorizationError("Only a Super Admin can reset a user's MFA enrolment");
+  }
+  if (targetUserId === actor.userId) {
+    throw new DomainValidationError("You cannot reset your own MFA — ask another Super Admin");
+  }
+  const target = await prisma.user.findUnique({ where: { id: targetUserId } });
+  if (!target) throw new NotFoundError(`User not found: ${targetUserId}`);
+  if (!target.mfaEnabled && !target.mfaSecretEncrypted) {
+    throw new DomainValidationError("MFA is not enrolled for this account");
+  }
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: target.id },
+      data: { mfaEnabled: false, mfaSecretEncrypted: null, mfaLastUsedCounter: null },
+    });
+    await tx.session.deleteMany({ where: { userId: target.id } });
+    await tx.auditLog.create({
+      data: {
+        actorId: actor.userId,
+        actorRole: actor.primaryRole,
+        action: "user.mfa_reset",
+        entityType: "User",
+        entityId: target.id,
+        before: { mfaEnabled: target.mfaEnabled },
+        after: { mfaEnabled: false },
+      },
+    });
+  });
+  return { reset: true };
+}
+
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(200),
   newPassword: newPasswordSchema,

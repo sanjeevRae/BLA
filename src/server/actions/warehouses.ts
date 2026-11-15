@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import {
   AuthorizationError,
   getActorContext,
-  requireUnflagged,
+  requireAccessGranted,
   type ActorContext,
 } from "@/lib/auth/permissions";
 import { ConflictError, DomainValidationError, NotFoundError } from "@/lib/errors";
@@ -46,7 +46,7 @@ async function withActor<T>(fn: (actor: ActorContext) => Promise<T>): Promise<Ac
   try {
     // P2-3: mustChangePassword accounts are gated here too, not only on
     // pages — a flagged account must set a password before any action.
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     return { success: true, data: await fn(actor) };
   } catch (error) {
     if (

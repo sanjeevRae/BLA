@@ -30,6 +30,10 @@ model User {
   mustChangePassword  Boolean   @default(false)
   mfaEnabled          Boolean   @default(false)
   mfaSecretEncrypted  String?
+  /// Phase 10 (F13): the highest TOTP time-step counter accepted for
+  /// this account. Verification rejects any counter <= this value,
+  /// so a code can never be replayed inside its validity window.
+  mfaLastUsedCounter  Int?
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
   lastLoginAt         DateTime?
@@ -37,6 +41,7 @@ model User {
   updatedAt           DateTime  @updatedAt
 
   roles             UserRole[]
+  systemSettingsUpdated SystemSetting[]   @relation("SystemSettingUpdatedBy")
   memberships       WarehouseMembership[]
   managedWarehouses Warehouse[]           @relation("WarehouseManager")
   sessions          Session[]
@@ -202,6 +207,16 @@ model Session {
   userAgent    String?
   createdAt    DateTime  @default(now())
   revokedAt    DateTime?
+  /// Phase 10 (F8): last observed activity; the idle timeout
+  /// (security doc §2 — 24h staff / 12h privileged, values in
+  /// SystemSetting) is measured from this stamp. Touched at most
+  /// once per few minutes per session, never on every request.
+  lastActivityAt DateTime @default(now())
+  /// Phase 10 (F13): when this session passed the TOTP challenge.
+  /// Null on a session belonging to an MFA-enrolled privileged user
+  /// means the session is MFA-pending and restricted to the
+  /// challenge flow until this is set.
+  mfaVerifiedAt  DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1861,8 +1876,33 @@ model TrackingAccessAttempt {
   phoneHash  String
   succeeded  Boolean  @default(false)
   createdAt  DateTime @default(now())
+  /// Phase 10 (P3-2 / P6-R6 remainder, security doc §7): the client
+  /// IP behind the attempt (trusted-header derivation, see
+  /// src/lib/auth/client-ip.ts) — the per-IP failure budget across
+  /// ALL tracking ids is computed from these rows.
+  ipAddress  String?
 
   @@index([trackingId, createdAt])
+  @@index([ipAddress, createdAt])
+  @@schema("app")
+}
+
+/// Platform configuration (docs/database-schema.md §11, successor to
+/// the legacy `admin_settings` table). Values are data, never code:
+/// session idle timeouts, the MFA-required policy flag, thresholds.
+/// Seeded create-only by prisma/seed.ts; read through
+/// src/server/services/system-settings.ts, which falls back to the
+/// documented defaults when a row is absent.
+model SystemSetting {
+  key         String   @id
+  value       Json
+  description String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  updatedBy User? @relation("SystemSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
   @@schema("app")
 }
 

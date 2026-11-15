@@ -1,5 +1,7 @@
 import "server-only";
 
+import { cookies } from "next/headers";
+
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db/prisma";
 import {
@@ -9,14 +11,22 @@ import {
 } from "@/lib/permissions/catalog";
 import {
   AuthenticationError,
-  requireUnflagged,
+  requireAccessGranted,
   type ActorContext,
 } from "@/lib/auth/actor";
+import { sessionCookieName } from "@/lib/auth/session-cookie";
+import { applySessionPolicy } from "@/lib/auth/session-enforcement";
+import {
+  isMfaPrivilegedRoleSet,
+  isMfaRequiredForPrivileged,
+} from "@/server/services/system-settings";
 
 export {
   AuthenticationError,
   AuthorizationError,
   hasPermission,
+  requireAccessGranted,
+  requireMfaSatisfied,
   requirePermission,
   requireUnflagged,
   type ActorContext,
@@ -67,6 +77,32 @@ export async function getActorContext(): Promise<ActorContext | null> {
     }
   }
 
+  // Phase 10 session-row policy (hard gates F8 + F13), enforced on
+  // the SAME database session Auth.js just resolved — the cookie in
+  // this request names it (session-cookie.ts mirrors the Auth.js
+  // cookie contract). See session-enforcement.ts.
+  let mfaPending = false;
+  let sessionToken: string | undefined;
+  try {
+    sessionToken = (await cookies()).get(sessionCookieName())?.value;
+  } catch {
+    // Outside a request scope there is no cookie to read (the
+    // service-level suites drive getActorContext directly against a
+    // stubbed Auth.js session). The resolved session then stands on
+    // its own — there is no request session row to enforce against.
+    // Inside a real request cookies() never throws.
+    sessionToken = undefined;
+  }
+  if (sessionToken) {
+    const outcome = await applySessionPolicy(sessionToken, user.id, roles, user.mfaEnabled);
+    if (outcome.expired) return null;
+    mfaPending = outcome.mfaPending;
+  }
+  const mfaEnrolmentRequired =
+    isMfaPrivilegedRoleSet(roles) &&
+    !user.mfaEnabled &&
+    (await isMfaRequiredForPrivileged());
+
   // Phase 3 scope links: the vendor organisation (via an active
   // VendorUser row on an active vendor) and the customer record linked
   // to this login. Resolved from the database on every request, never
@@ -100,6 +136,9 @@ export async function getActorContext(): Promise<ActorContext | null> {
     fullName: user.fullName,
     status: user.status,
     mustChangePassword: user.mustChangePassword,
+    mfaEnrolled: user.mfaEnabled,
+    mfaEnrolmentRequired,
+    mfaPending,
     roles,
     primaryRole: primaryRoleFor(roles),
     permissions,
@@ -124,12 +163,14 @@ export async function requireActor(): Promise<ActorContext> {
 }
 
 /**
- * requireActor + the mustChangePassword gate (Phase 2 review P2-3):
- * flagged accounts are refused everywhere except the password-change
- * and sign-out paths, not just on dashboard pages.
+ * requireActor + the full access gate: the mustChangePassword check
+ * (Phase 2 review P2-3) and the Phase 10 MFA check (gate F13).
+ * Restricted accounts are refused everywhere except the exempt
+ * resolution paths (password change, MFA enrolment/challenge,
+ * sign-out), not just on dashboard pages.
  */
 export async function requireUnflaggedActor(): Promise<ActorContext> {
   const actor = await requireActor();
-  requireUnflagged(actor);
+  requireAccessGranted(actor);
   return actor;
 }

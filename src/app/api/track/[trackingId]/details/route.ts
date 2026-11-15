@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { getClientIp } from "@/lib/auth/client-ip";
 import { getDetailedTracking } from "@/server/services/packages";
 import { apiErrorResponse } from "@/server/api-errors";
 
@@ -20,7 +21,11 @@ export async function POST(
   try {
     const body = (await request.json().catch(() => ({}))) as { phone?: unknown };
     const phone = typeof body.phone === "string" ? body.phone : "";
-    return NextResponse.json(await getDetailedTracking(trackingId, phone));
+    return NextResponse.json(
+      await getDetailedTracking(trackingId, phone, {
+        ipAddress: getClientIp(request.headers),
+      }),
+    );
   } catch (error) {
     const response = apiErrorResponse(error);
     if (response) return response;

@@ -1,4 +1,0 @@
-# Static deploy — no build step. Publish the folder as-is.
-[build]
-  publish = "."
-  command = ""

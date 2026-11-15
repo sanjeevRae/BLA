@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { departTrip } from "@/server/services/trips";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
@@ -15,7 +15,7 @@ export async function POST(
   if (!actor) return unauthenticatedResponse();
   const { id } = await params;
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     return NextResponse.json(await departTrip(actor, id));
   } catch (error) {
     const response = apiErrorResponse(error);

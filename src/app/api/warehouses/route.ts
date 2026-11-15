@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   AuthorizationError,
   getActorContext,
-  requireUnflagged,
+  requireAccessGranted,
 } from "@/lib/auth/permissions";
 import { listWarehouses } from "@/server/services/warehouses";
 
@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   }
   const params = request.nextUrl.searchParams;
   try {
-    requireUnflagged(actor); // P2-3: flagged accounts are refused, not just redirected
+    requireAccessGranted(actor); // P2-3: flagged accounts are refused, not just redirected
     const result = await listWarehouses(actor, {
       page: Number(params.get("page") ?? 1) || 1,
       pageSize: Number(params.get("pageSize") ?? 20) || 20,

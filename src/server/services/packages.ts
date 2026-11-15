@@ -16,6 +16,10 @@ import {
 } from "@/lib/deliveries/domain";
 import { auditAccessDenied, pageArgs, pageMeta } from "@/server/services/scoping";
 import {
+  isTrackingIpBudgetExceeded,
+  type TrackingRequestMeta,
+} from "@/server/services/tracking-access";
+import {
   packageInclude,
   toPackageView,
   type PackageView,
@@ -256,9 +260,18 @@ export interface PublicTrackingView {
   timeline: { status: string; label: string; occurredAt: string }[];
 }
 
-export async function getPublicTracking(trackingId: string): Promise<PublicTrackingView> {
+export async function getPublicTracking(
+  trackingId: string,
+  meta?: TrackingRequestMeta,
+): Promise<PublicTrackingView> {
   // A malformed or mistyped code is rejected before any lookup.
   if (!isValidTrackingId(trackingId)) {
+    throw new NotFoundError("Tracking code not found");
+  }
+  // Phase 10 (P3-2 / P6-R6 remainder): the per-IP failure budget
+  // (security doc §7). An exhausted IP gets the SAME denial as an
+  // unknown code, and the limiter's own denial writes no row.
+  if (await isTrackingIpBudgetExceeded(meta?.ipAddress)) {
     throw new NotFoundError("Tracking code not found");
   }
   const pkg = await prisma.package.findUnique({
@@ -276,7 +289,21 @@ export async function getPublicTracking(trackingId: string): Promise<PublicTrack
       },
     },
   });
-  if (!pkg) throw new NotFoundError("Tracking code not found");
+  if (!pkg) {
+    // A well-formed but unknown code is a failed attempt: recorded
+    // (with the caller IP) so enumeration consumes the per-IP
+    // budget. Successful lookups are NOT recorded — the basic view
+    // stays write-free for legitimate traffic.
+    await prisma.trackingAccessAttempt.create({
+      data: {
+        trackingId,
+        phoneHash: "",
+        succeeded: false,
+        ipAddress: meta?.ipAddress ?? null,
+      },
+    });
+    throw new NotFoundError("Tracking code not found");
+  }
   const events = await prisma.trackingEvent.findMany({
     where: { packageId: pkg.id },
     orderBy: { occurredAt: "asc" },
@@ -348,9 +375,11 @@ const DETAILED_TRACKING_DENIAL =
 export async function getDetailedTracking(
   trackingId: string,
   phone: string,
+  meta?: TrackingRequestMeta,
 ): Promise<DetailedTrackingView> {
   const normalized = normalizePhone(typeof phone === "string" ? phone : "");
   const phoneHash = createHash("sha256").update(normalized).digest("hex");
+  const ipAddress = meta?.ipAddress ?? null;
 
   // Phase 6 review P6-R6 — the denial bookkeeping is deliberately
   // asymmetric, because this endpoint is unauthenticated:
@@ -371,6 +400,14 @@ export async function getDetailedTracking(
   //    genuine probing signal against a genuine parcel.
   // Every path throws the identical NotFoundError.
   if (!isValidTrackingId(trackingId) || normalized.length === 0) {
+    throw new NotFoundError(DETAILED_TRACKING_DENIAL);
+  }
+
+  // Phase 10 (P3-2 / P6-R6 remainder): the per-IP failure budget is
+  // checked alongside the per-code lockout below. An exhausted IP
+  // gets the identical denial and — like the locked-code path —
+  // writes nothing, so the budget decays with its window.
+  if (await isTrackingIpBudgetExceeded(ipAddress)) {
     throw new NotFoundError(DETAILED_TRACKING_DENIAL);
   }
 
@@ -404,13 +441,13 @@ export async function getDetailedTracking(
   });
   if (!pkg) {
     await prisma.trackingAccessAttempt.create({
-      data: { trackingId, phoneHash, succeeded: false },
+      data: { trackingId, phoneHash, succeeded: false, ipAddress },
     });
     throw new NotFoundError(DETAILED_TRACKING_DENIAL);
   }
   if (normalizePhone(pkg.recipientPhone) !== normalized) {
     await prisma.trackingAccessAttempt.create({
-      data: { trackingId, phoneHash, succeeded: false },
+      data: { trackingId, phoneHash, succeeded: false, ipAddress },
     });
     await prisma.auditLog.create({
       data: {
@@ -432,7 +469,7 @@ export async function getDetailedTracking(
     where: { trackingId, succeeded: false },
   });
   await prisma.trackingAccessAttempt.create({
-    data: { trackingId, phoneHash, succeeded: true },
+    data: { trackingId, phoneHash, succeeded: true, ipAddress },
   });
   const [events, pod] = await Promise.all([
     prisma.trackingEvent.findMany({

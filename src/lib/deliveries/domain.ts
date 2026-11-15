@@ -151,6 +151,19 @@ export const OTP_TTL_MS = 12 * 60 * 60 * 1000;
 export const TRACKING_DETAIL_MAX_FAILURES = 5;
 export const TRACKING_DETAIL_LOCK_MS = 15 * 60 * 1000;
 
+/** Per-IP dimension of the public-tracking limits (Phase 10,
+ *  P3-2 / P6-R6 remainder; security-architecture.md §7: public
+ *  tracking carries per-IP AND per-tracking-id limits). Failed
+ *  attempts from one IP across ALL tracking ids are budgeted
+ *  together, so rotating through guessed codes does not reset the
+ *  allowance the per-id lockout grants. Only failures consume the
+ *  budget — a successful lookup never throttles the next customer
+ *  behind the same NAT — and a denial issued BY this limiter writes
+ *  no row, so the count decays as the window slides instead of
+ *  refreshing itself (the P6-R6 self-extension lesson). */
+export const TRACKING_IP_FAILURE_LIMIT = 60;
+export const TRACKING_IP_FAILURE_WINDOW_MS = 10 * 60 * 1000;
+
 /** Exception states that block delivery assignment (lifecycle rule
  *  T6 — held/missing/lost packages cannot be assigned — plus damaged
  *  parcels, which the delivery workflow §7 forbids delivering as-is,

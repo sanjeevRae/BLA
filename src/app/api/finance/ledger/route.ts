@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
 import { getJournalBalance, listLedgerEntries } from "@/server/services/finance-overview";
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const url = new URL(request.url);
     const balanceFor = url.searchParams.get("balanceFor");
     if (balanceFor) return NextResponse.json(await getJournalBalance(actor, balanceFor));

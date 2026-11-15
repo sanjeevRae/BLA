@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import {
   listMyNotifications,
   markAllMyNotificationsRead,
@@ -13,7 +13,7 @@ export async function GET(request: Request) {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const url = new URL(request.url);
     const page = Number(url.searchParams.get("page") ?? 1);
     const pageSize = Number(url.searchParams.get("pageSize") ?? 20);
@@ -37,7 +37,7 @@ export async function POST() {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     return NextResponse.json(await markAllMyNotificationsRead(actor));
   } catch (error) {
     const response = apiErrorResponse(error);

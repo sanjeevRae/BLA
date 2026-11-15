@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import {
   confirmPickup,
   type ConfirmPickupInput,
@@ -20,7 +20,7 @@ export async function POST(
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const { id } = await params;
     const body = (await request.json().catch(() => ({}))) as ConfirmPickupInput;
     return NextResponse.json(await confirmPickup(actor, id, body));

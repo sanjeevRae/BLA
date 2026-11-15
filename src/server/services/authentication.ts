@@ -9,6 +9,10 @@ import {
   IP_FAILURE_LIMIT,
   IP_FAILURE_WINDOW_MS,
 } from "@/lib/auth/login-guard";
+import {
+  isMfaPrivilegedRoleSet,
+  isMfaRequiredForPrivileged,
+} from "@/server/services/system-settings";
 
 /**
  * Credential verification (docs/security-architecture.md §2).
@@ -43,6 +47,12 @@ export interface AuthenticatedUser {
   /** When true the login flow must route the user to the set-password
    *  step before any dashboard access (security doc §2/§4). */
   mustChangePassword: boolean;
+  /** Phase 10 (F13): privileged account that must complete TOTP
+   *  enrolment before any dashboard access (policy in SystemSetting). */
+  mfaEnrolmentRequired: boolean;
+  /** Phase 10 (F13): privileged account with MFA enrolled — the new
+   *  session is MFA-pending until the TOTP challenge stamps it. */
+  mfaChallengeRequired: boolean;
 }
 
 export async function verifyCredentials(
@@ -84,7 +94,10 @@ export async function verifyCredentials(
     }
   }
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({
+    where: { email },
+    include: { roles: { include: { role: true } } },
+  });
   if (!user) {
     await compare(password, DUMMY_HASH); // blunt timing enumeration
     await recordAttempt(null, false, "unknown_user");
@@ -168,10 +181,19 @@ export async function verifyCredentials(
     },
   });
 
+  // Phase 10 (F13): the login action routes on these flags — the
+  // session it creates is restricted (ActorContext flags, computed
+  // from the same state in getActorContext) until enrolment or the
+  // challenge completes.
+  const roleCodes = user.roles.filter((r) => r.role.isActive).map((r) => r.role.code);
+  const mfaPrivileged = isMfaPrivilegedRoleSet(roleCodes);
   return {
     id: user.id,
     email: user.email,
     fullName: user.fullName,
     mustChangePassword: user.mustChangePassword,
+    mfaEnrolmentRequired:
+      mfaPrivileged && !user.mfaEnabled && (await isMfaRequiredForPrivileged()),
+    mfaChallengeRequired: mfaPrivileged && user.mfaEnabled,
   };
 }

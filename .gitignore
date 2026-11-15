@@ -3,31 +3,20 @@
 .env.local
 **/.env
 !**/.env.example
-backend/.env
 
 # Editor history / backups (never commit)
 .history/
 *.bak
 
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-
 # Node
 node_modules/
 dist/
-.vite/
 
 # OS / editor
 .DS_Store
 *.log
 
-# Customer tracking local config
-customer-tracking/config.js
-
-# Next.js (new app, repo root)
+# Next.js (repo root)
 .next/
 out/
 *.tsbuildinfo

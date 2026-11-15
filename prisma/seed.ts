@@ -121,11 +121,54 @@ async function main(): Promise<void> {
       `super admin ${email}.`,
   );
 
+  await seedSystemSettings();
   await seedWarehouses(roleIdByCode);
   await seedPhase3(superAdmin.id);
   await seedPhase5();
   await seedPhase6();
   await seedPhase7();
+}
+
+/**
+ * Phase 10 seed: the SystemSetting rows behind the production hard
+ * gates (docs/security-architecture.md §2). CREATE-ONLY: an operator
+ * may tighten these values in the database and a re-seed must never
+ * silently loosen them back, so existing rows are left untouched.
+ * Readers fall back to the same documented defaults when a row is
+ * absent (src/server/services/system-settings.ts).
+ */
+async function seedSystemSettings(): Promise<void> {
+  const settings: { key: string; value: unknown; description: string }[] = [
+    {
+      key: "session.idle_timeout.staff_hours",
+      value: 24,
+      description: "Session idle timeout (hours) for staff consoles — security doc §2.",
+    },
+    {
+      key: "session.idle_timeout.privileged_hours",
+      value: 12,
+      description:
+        "Session idle timeout (hours) for privileged roles (SUPER_ADMIN, ADMIN, FINANCE) — security doc §2.",
+    },
+    {
+      key: "auth.mfa_required_for_privileged",
+      value: true,
+      description:
+        "When true, SUPER_ADMIN and ADMIN accounts must enrol in TOTP MFA at first login and pass a TOTP challenge at every login — security doc §2.",
+    },
+  ];
+  for (const setting of settings) {
+    await prisma.systemSetting.upsert({
+      where: { key: setting.key },
+      update: {},
+      create: {
+        key: setting.key,
+        value: setting.value as never,
+        description: setting.description,
+      },
+    });
+  }
+  console.log(`Seeded ${settings.length} system settings (create-only).`);
 }
 
 /**

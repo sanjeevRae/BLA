@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import {
   AuthorizationError,
   getActorContext,
-  requireUnflagged,
+  requireAccessGranted,
   type ActorContext,
 } from "@/lib/auth/permissions";
 import { ConflictError, DomainValidationError, NotFoundError } from "@/lib/errors";
@@ -81,7 +81,7 @@ async function withActor<T>(fn: (actor: ActorContext) => Promise<T>): Promise<Ac
   const actor = await getActorContext();
   if (!actor) return { success: false, error: "Authentication required" };
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     return { success: true, data: await fn(actor) };
   } catch (error) {
     if (

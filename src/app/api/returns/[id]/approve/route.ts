@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import {
   approveReturn,
   type ApproveReturnInput,
@@ -17,7 +17,7 @@ export async function POST(
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const { id } = await params;
     const body = (await request.json().catch(() => ({}))) as ApproveReturnInput;
     return NextResponse.json(await approveReturn(actor, id, body));

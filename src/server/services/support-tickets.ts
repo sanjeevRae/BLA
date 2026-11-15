@@ -42,6 +42,10 @@ import {
   vendorUserIds,
 } from "@/server/services/notifications";
 import { createTaskInTx } from "@/server/services/tasks";
+import {
+  isTrackingIpBudgetExceeded,
+  type TrackingRequestMeta,
+} from "@/server/services/tracking-access";
 
 /**
  * Support tickets (spec Part 4.10; api-reference §support).
@@ -788,10 +792,12 @@ const MAX_OPEN_COMPLAINTS_PER_PACKAGE = 3;
 export async function raiseTrackingComplaint(
   trackingId: string,
   input: TrackingComplaintInput,
+  meta?: TrackingRequestMeta,
 ): Promise<{ ticketNumber: string }> {
   const data = parse(trackingComplaintSchema, input);
   const normalized = normalizePhone(data.phone);
   const phoneHash = createHash("sha256").update(normalized).digest("hex");
+  const ipAddress = meta?.ipAddress ?? null;
 
   // Phase 8 review P8-R3 (the P6-R6 bookkeeping discipline, applied
   // to this endpoint): a MALFORMED tracking code or an unusable
@@ -800,6 +806,14 @@ export async function raiseTrackingComplaint(
   // not even well-formed, the unbounded unauthenticated write the
   // detailed view was fixed for. Mirrors getDetailedTracking.
   if (!isValidTrackingId(trackingId) || normalized.length === 0) {
+    throw new NotFoundError(TRACKING_COMPLAINT_DENIAL);
+  }
+
+  // Phase 10 (P3-2 / P6-R6 remainder): the per-IP failure budget —
+  // the complaint path inherits the same limit as the tracking
+  // views, checked before the phone comparison, denial identical,
+  // no writes.
+  if (await isTrackingIpBudgetExceeded(ipAddress)) {
     throw new NotFoundError(TRACKING_COMPLAINT_DENIAL);
   }
 
@@ -832,13 +846,13 @@ export async function raiseTrackingComplaint(
   });
   if (!pkg) {
     await prisma.trackingAccessAttempt.create({
-      data: { trackingId, phoneHash, succeeded: false },
+      data: { trackingId, phoneHash, succeeded: false, ipAddress },
     });
     throw new NotFoundError(TRACKING_COMPLAINT_DENIAL);
   }
   if (normalizePhone(pkg.recipientPhone) !== normalized) {
     await prisma.trackingAccessAttempt.create({
-      data: { trackingId, phoneHash, succeeded: false },
+      data: { trackingId, phoneHash, succeeded: false, ipAddress },
     });
     await prisma.auditLog.create({
       data: {
@@ -867,7 +881,7 @@ export async function raiseTrackingComplaint(
     where: { trackingId, succeeded: false },
   });
   await prisma.trackingAccessAttempt.create({
-    data: { trackingId, phoneHash, succeeded: true },
+    data: { trackingId, phoneHash, succeeded: true, ipAddress },
   });
 
   const customer = pkg.recipientCustomerId

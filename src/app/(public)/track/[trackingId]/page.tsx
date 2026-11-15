@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 
+import { getClientIp } from "@/lib/auth/client-ip";
 import { NotFoundError } from "@/lib/errors";
 import { getPublicTracking } from "@/server/services/packages";
 import { TrackForm } from "@/components/tracking/TrackForm";
@@ -19,9 +21,12 @@ export default async function Page({
   params: Promise<{ trackingId: string }>;
 }) {
   const { trackingId } = await params;
+  const ipAddress = getClientIp(await headers());
   let tracking;
   try {
-    tracking = await getPublicTracking(decodeURIComponent(trackingId).toUpperCase());
+    tracking = await getPublicTracking(decodeURIComponent(trackingId).toUpperCase(), {
+      ipAddress,
+    });
   } catch (error) {
     if (error instanceof NotFoundError) notFound();
     throw error;

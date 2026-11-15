@@ -10,5 +10,9 @@ import { getActorContext } from "@/lib/auth/permissions";
 export default async function GoPage() {
   const actor = await getActorContext();
   if (!actor) redirect("/login");
+  if (actor.mustChangePassword) redirect("/set-password");
+  // Phase 10 (F13): MFA obligations route before the role landing.
+  if (actor.mfaEnrolmentRequired) redirect("/mfa-setup");
+  if (actor.mfaPending) redirect("/login/mfa");
   redirect(actor.landingPath);
 }

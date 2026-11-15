@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getActorContext, requireUnflagged } from "@/lib/auth/permissions";
+import { getActorContext, requireAccessGranted } from "@/lib/auth/permissions";
 import { apiErrorResponse, unauthenticatedResponse } from "@/server/api-errors";
 
 import { getVendorStatement } from "@/server/services/settlements";
@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   const actor = await getActorContext();
   if (!actor) return unauthenticatedResponse();
   try {
-    requireUnflagged(actor);
+    requireAccessGranted(actor);
     const url = new URL(request.url);
     const vendorId = url.searchParams.get("vendorId") ?? actor.vendorId ?? undefined;
     if (!vendorId) {

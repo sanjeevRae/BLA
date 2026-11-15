@@ -12,14 +12,6 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Legacy applications live in this repo until their Phase 10 removal;
-    // the new app lints only its own code.
-    "admin-dashboard/**",
-    "backend/**",
-    "customer-tracking/**",
-    "driver-app/**",
-    "vendor-portal/**",
-    "db/**",
     "docs/**",
     "prisma/migrations/**",
   ]),
