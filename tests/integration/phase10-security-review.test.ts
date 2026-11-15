@@ -448,8 +448,8 @@ describe("controls — enrolment binding, secret hygiene, access gate", () => {
   }, 60_000);
 });
 
-describe("controls — SystemSetting fallback; oversized values accepted (P10-R5 evidence)", () => {
-  it("a malformed value falls back to the documented default; a huge positive value is taken as-is", async () => {
+describe("controls — SystemSetting fallback + sanity clamp (P10-R5)", () => {
+  it("a malformed or out-of-range value falls back to the documented default; the 168h ceiling is honoured", async () => {
     const key = settingsSvc.SETTING_IDLE_TIMEOUT_STAFF_HOURS;
     const original = await prisma.systemSetting.findUnique({ where: { key } });
     try {
@@ -459,12 +459,18 @@ describe("controls — SystemSetting fallback; oversized values accepted (P10-R5
       });
       expect(await settingsSvc.getIdleTimeoutMs(["WAREHOUSE_STAFF"])).toBe(24 * HOUR);
 
-      // No sanity ceiling: 100000 hours (~11.4 years) is accepted
-      // verbatim, silently disabling the staff idle gate for anyone
-      // who can write the row (operator/DB access only — the app
-      // itself exposes no settings write path).
+      // P10-R5 (fixed in the Phase 10 fix batch): the readers now
+      // clamp idle-timeout hours to 1–168. The pre-fix code accepted
+      // 100000 hours (~11.4 years) verbatim, silently disabling the
+      // staff idle gate for anyone who could write the row
+      // (operator/DB access only — the app itself exposes no
+      // settings write path). Out-of-range now falls back to the
+      // documented default, exactly like a malformed value; the
+      // ceiling itself is a legitimate operator choice.
+      await prisma.systemSetting.update({ where: { key }, data: { value: 168 } });
+      expect(await settingsSvc.getIdleTimeoutMs(["WAREHOUSE_STAFF"])).toBe(168 * HOUR);
       await prisma.systemSetting.update({ where: { key }, data: { value: 100000 } });
-      expect(await settingsSvc.getIdleTimeoutMs(["WAREHOUSE_STAFF"])).toBe(100000 * HOUR);
+      expect(await settingsSvc.getIdleTimeoutMs(["WAREHOUSE_STAFF"])).toBe(24 * HOUR);
     } finally {
       if (original) {
         await prisma.systemSetting.update({

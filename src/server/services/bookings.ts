@@ -840,12 +840,16 @@ export async function rejectBooking(
     for (const shipment of order.shipments) {
       for (const pkg of shipment.packages) {
         if (pkg.operationalStatus === "BOOKED") {
-          await transitionPackageInTx(tx, actor, pkg.id, "CANCELLED", {
+          const transitioned = await transitionPackageInTx(tx, actor, pkg.id, "CANCELLED", {
             notes: `Booking rejected: ${reason}`,
           });
           // Mirror the package.cancel audit transitionPackage writes
           // for a standalone cancellation (inside the tx here, so it
-          // commits with the rejection it belongs to).
+          // commits with the rejection it belongs to). The `after`
+          // status is the transition RESULT's real post-transition
+          // value, not a literal — the lifecycle stays the only
+          // status writer, and the Phase 3 source-scan invariant
+          // (no operationalStatus literals outside it) holds.
           await tx.auditLog.create({
             data: {
               actorId: actor.userId,
@@ -854,7 +858,7 @@ export async function rejectBooking(
               entityType: "Package",
               entityId: pkg.id,
               before: { operationalStatus: pkg.operationalStatus },
-              after: { operationalStatus: "CANCELLED" },
+              after: { operationalStatus: transitioned.pkg.operationalStatus },
             },
           });
         }

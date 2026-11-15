@@ -430,6 +430,17 @@ beforeAll(async () => {
   expect(driverActor.driverId).toBe(fx.driverProfile);
 
   fx.rolelessUser = await makeUser("roleless", "CUSTOMER");
+  // P5-8 (Phase 10 slice 2): createDriverProfile now refuses users
+  // without a driver role, so this fixture grants LINEHAUL_DRIVER
+  // for the creation and revokes it immediately after — reproducing
+  // the role-less profile holder the crew-assignment test below
+  // exercises (a profile whose user holds no driver role, e.g. one
+  // created before the P5-8 validation existed).
+  const linehaulRole = await prisma.role.findUnique({ where: { code: "LINEHAUL_DRIVER" } });
+  if (!linehaulRole) throw new Error("role missing: LINEHAUL_DRIVER");
+  await prisma.userRole.create({
+    data: { userId: fx.rolelessUser, roleId: linehaulRole.id, assignedById: fx.adminUser },
+  });
   const roleless = await driversSvc.createDriverProfile(adminActor, {
     userId: fx.rolelessUser,
     homeWarehouseId: fx.whA,
@@ -438,6 +449,9 @@ beforeAll(async () => {
     capabilities: ["LINEHAUL"],
   });
   fx.rolelessProfile = roleless.id;
+  await prisma.userRole.deleteMany({
+    where: { userId: fx.rolelessUser, roleId: linehaulRole.id },
+  });
 
   fx.nocapUser = await makeUser("nocap", "LINEHAUL_DRIVER");
   const nocap = await driversSvc.createDriverProfile(adminActor, {

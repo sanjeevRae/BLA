@@ -45,8 +45,23 @@ async function readSettingValue(key: string): Promise<unknown> {
   return row?.value ?? null;
 }
 
-function asPositiveHours(value: unknown, fallback: number): number {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+/** Sanity bounds for operator-set idle timeouts (Phase 10 review
+ *  P10-R5): a stored value outside 1–168 hours (one week) is
+ *  treated as malformed and falls back to the documented default,
+ *  so a typo'd row (e.g. 100000) can never silently disable the
+ *  idle gate. */
+export const MIN_IDLE_TIMEOUT_HOURS = 1;
+export const MAX_IDLE_TIMEOUT_HOURS = 168;
+
+function asSaneIdleHours(value: unknown, fallback: number): number {
+  if (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_IDLE_TIMEOUT_HOURS &&
+    value <= MAX_IDLE_TIMEOUT_HOURS
+  ) {
+    return value;
+  }
   return fallback;
 }
 
@@ -58,8 +73,8 @@ export async function getIdleTimeoutMs(roles: readonly string[]): Promise<number
     readSettingValue(SETTING_IDLE_TIMEOUT_PRIVILEGED_HOURS),
   ]);
   const hours = privileged
-    ? asPositiveHours(privilegedRaw, DEFAULT_IDLE_TIMEOUT_PRIVILEGED_HOURS)
-    : asPositiveHours(staffRaw, DEFAULT_IDLE_TIMEOUT_STAFF_HOURS);
+    ? asSaneIdleHours(privilegedRaw, DEFAULT_IDLE_TIMEOUT_PRIVILEGED_HOURS)
+    : asSaneIdleHours(staffRaw, DEFAULT_IDLE_TIMEOUT_STAFF_HOURS);
   return hours * 60 * 60 * 1000;
 }
 

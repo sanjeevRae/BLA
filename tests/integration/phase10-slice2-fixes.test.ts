@@ -797,10 +797,17 @@ describe("P4-6 — capacity gate inside the intake transaction", () => {
   it("a full warehouse (capacity 1) refuses the second intake", async () => {
     // Pick a fresh capacity-1 warehouse for this run: bla_test
     // accumulates rows across runs, so a fixed warehouse would
-    // already be full from the previous run's intake.
+    // already be full from the previous run's intake. Candidates
+    // rotate through the full WH-ZS2-03..99 space from a random
+    // start — the original fixed pool of 8 exhausted after a few
+    // full-suite runs (each run fills the warehouse it picks).
     let whC: string | null = null;
     let staffC: Awaited<ReturnType<typeof actorFor>> | null = null;
-    for (let n = 3; n <= 10 && !whC; n += 1) {
+    const startN = 3 + Math.floor(Math.random() * 90);
+    const candidateNs: number[] = [];
+    for (let k = 0; k < 97; k += 1) candidateNs.push(3 + ((startN - 3 + k) % 97));
+    for (const n of candidateNs) {
+      if (whC) break;
       const code = `WH-ZS2-${String(n).padStart(2, "0")}`;
       const candidate = await ensureWarehouse(
         code,

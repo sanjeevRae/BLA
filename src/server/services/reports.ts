@@ -218,6 +218,27 @@ export interface OverviewReport {
   tickets: { created: number; open: number; byCategory: { category: string; count: number }[] };
 }
 
+/**
+ * Run `fn` over `items` in small sequential batches. Report
+ * row-builders fan out ~10-16 parallel queries per row; an unbounded
+ * Promise.all over every vendor/warehouse/driver starves the Prisma
+ * connection pool once the row count grows (observed as pool-timeout
+ * failures in the vendor report). Batches of 2 bound the in-flight
+ * queries while keeping the results identical and in input order.
+ */
+async function mapInBatches<T, R>(
+  items: T[],
+  batchSize: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    out.push(...(await Promise.all(batch.map(fn))));
+  }
+  return out;
+}
+
 export async function getOverviewReport(
   actor: ActorContext,
   input: unknown,
@@ -764,8 +785,7 @@ export async function getWarehouseReport(
   const ageStart = (days: number) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 
   const staffNameIds = new Set<string>();
-  const rows = await Promise.all(
-    warehouses.map(async (warehouse) => {
+  const rows = await mapInBatches(warehouses, 2, async (warehouse) => {
       const w = warehouse.id;
       const [
         received,
@@ -871,8 +891,7 @@ export async function getWarehouseReport(
         incidentsCreated,
         staffGroups,
       };
-    }),
-  );
+    });
 
   const staffNames = new Map<string, string>();
   if (staffNameIds.size > 0) {
@@ -1002,8 +1021,7 @@ async function buildDriverRows(
   `;
   const perfByDriver = new Map(perfRows.map((r) => [r.driver_id, r]));
 
-  return Promise.all(
-    drivers.map(async (driver) => {
+  return mapInBatches(drivers, 2, async (driver) => {
       const [
         deliveryGroups,
         pickupGroups,
@@ -1106,8 +1124,7 @@ async function buildDriverRows(
         trips: sumAll(tripGroups),
         tripsCompleted: sumStatus(tripGroups, "COMPLETED"),
       };
-    }),
-  );
+    });
 }
 
 export async function getDriverReport(
@@ -1258,8 +1275,7 @@ export async function getVendorReport(
     orderBy: { businessName: "asc" },
   });
 
-  const rows = await Promise.all(
-    vendors.map(async (vendor) => {
+  const rows = await mapInBatches(vendors, 2, async (vendor) => {
       const v = vendor.id;
       const [
         bookings,
@@ -1352,8 +1368,7 @@ export async function getVendorReport(
         settlementsPaidPaisa: bigintToString(settlementsAgg._sum.netPayablePaisa),
         payableBalancePaisa: payableBalance.toString(),
       };
-    }),
-  );
+    });
 
   return { range: rangeEcho(range), generatedAt: new Date().toISOString(), rows };
 }
