@@ -590,7 +590,26 @@ export async function listIncidents(actor: ActorContext, input: ListIncidentsInp
       take,
     }),
   ]);
-  return { items: rows.map(toIncidentView), meta: pageMeta(total, data.page, data.pageSize) };
+  return {
+    items: rows.map((row) => {
+      const view = toIncidentView(row);
+      // Customer-safe projection on the list path too (P8-R1
+      // sibling): raiser-side viewers (vendors / customers) get the
+      // same summary getIncident returns — status, category,
+      // severity, description and timestamps, with the resolution
+      // text and staff identities withheld. Full-view actors
+      // (incidentFullView) keep the base view unchanged.
+      if (incidentFullView(actor, row)) return view;
+      return {
+        ...view,
+        resolution: null,
+        reporterName: null,
+        assigneeId: null,
+        assigneeName: null,
+      };
+    }),
+    meta: pageMeta(total, data.page, data.pageSize),
+  };
 }
 
 /**

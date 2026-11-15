@@ -410,7 +410,11 @@ export async function getOverviewReport(
   if (filters.vendorId) conditions.push(Prisma.sql`o."vendorId" = ${filters.vendorId}`);
   if (filters.district) conditions.push(Prisma.sql`o."destinationDistrict" = ${filters.district}`);
   if (filters.warehouseId) {
-    conditions.push(Prisma.sql`s."originWarehouseId" = ${filters.warehouseId}`);
+    // Deliveries attribute to the DELIVERY (batch) warehouse only —
+    // the stated rule in the header. Also pushing the origin
+    // warehouse made the overview's delivered count disagree with
+    // the warehouse report and with this payload's own COD section
+    // under a warehouse filter (Phase 9 review P9-R6).
     conditions.push(Prisma.sql`b."warehouseId" = ${filters.warehouseId}`);
   }
   if (filters.serviceId) conditions.push(Prisma.sql`s."shippingServiceId" = ${filters.serviceId}`);
@@ -442,9 +446,15 @@ export async function getOverviewReport(
   const delivered = perf.delivered;
 
   // Daily series (Kathmandu days, zero-filled): two grouped SQL
-  // queries merged by date string.
+  // queries merged by date string. Bucketing (Phase 9 review
+  // P9-R1): the timestamp columns are naive TIMESTAMP(3) holding
+  // UTC wall-clock, so the Kathmandu day is the double conversion
+  // (ts AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kathmandu' — a
+  // single AT TIME ZONE on a naive value INTERPRETS it as Kathmandu
+  // time instead of converting, shifting everything booked or
+  // delivered between 00:00 and 11:30 NPT onto the previous day.
   const bookingSeries = await prisma.$queryRaw<{ day: string; n: number }[]>`
-    SELECT to_char(date_trunc('day', "createdAt" AT TIME ZONE 'Asia/Kathmandu'), 'YYYY-MM-DD') AS day,
+    SELECT to_char(date_trunc('day', ("createdAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kathmandu'), 'YYYY-MM-DD') AS day,
            count(*)::int AS n
     FROM "app"."Order"
     WHERE "createdAt" >= ${range.fromUtc} AND "createdAt" < ${range.toUtc}
@@ -454,7 +464,7 @@ export async function getOverviewReport(
     GROUP BY 1
   `;
   const deliveredSeries = await prisma.$queryRaw<{ day: string; n: number }[]>`
-    SELECT to_char(date_trunc('day', pod."deliveredAt" AT TIME ZONE 'Asia/Kathmandu'), 'YYYY-MM-DD') AS day,
+    SELECT to_char(date_trunc('day', (pod."deliveredAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kathmandu'), 'YYYY-MM-DD') AS day,
            count(*)::int AS n
     FROM "app"."ProofOfDelivery" pod
     JOIN "app"."Package" p ON p."id" = pod."packageId"
@@ -1386,9 +1396,14 @@ export async function getTransferReport(
   if (scopeIds) {
     // Scope predicate: the transfer touches one of the actor's
     // warehouses on either leg — composed inside the query under AND
-    // with the range (never a post-filter).
+    // with the range (never a post-filter). A membership-less scoped
+    // actor matches nothing: Prisma.join throws on an empty list, so
+    // the empty scope is a FALSE condition instead — the same empty
+    // report the other scoped reports return (Phase 9 review P9-R5).
     conditions.push(
-      Prisma.sql`(t."originWarehouseId" IN (${Prisma.join(scopeIds)}) OR t."destinationWarehouseId" IN (${Prisma.join(scopeIds)}))`,
+      scopeIds.length === 0
+        ? Prisma.sql`FALSE`
+        : Prisma.sql`(t."originWarehouseId" IN (${Prisma.join(scopeIds)}) OR t."destinationWarehouseId" IN (${Prisma.join(scopeIds)}))`,
     );
   }
   const routeRows = await prisma.$queryRaw<

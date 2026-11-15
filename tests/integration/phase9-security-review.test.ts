@@ -791,7 +791,20 @@ describe("controls: scope composition and denials", () => {
     const rowB = report.riders.find((r) => r.key === fx.riderBProfile)!;
     const posA = await remittancesSvc.getRiderCodPosition(adminActor, fx.riderAProfile);
     const posB = await remittancesSvc.getRiderCodPosition(adminActor, fx.riderBProfile);
-    expect(rowA.outstandingPaisa).toBe(posA.ledgerOwedPaisa);
+    // Corrected control (reviewer's own diagnosis, Phase 9 fix
+    // batch): the report's outstanding is collected − verified from
+    // the collection rows, which equals the position's OWN breakdown
+    // awaiting + in-open. It is NOT ledgerOwedPaisa: the DRIVER_CASH
+    // ledger account only moves at remittance submission, so the
+    // ledger figure excludes cash collected but not yet submitted
+    // (riderA submitted nothing, so his ledger-owed is 0 while he
+    // physically holds 125555). The original assertion equated the
+    // two different quantities.
+    expect(rowA.outstandingPaisa).toBe(
+      (
+        BigInt(posA.awaitingRemittanceTotalPaisa) + BigInt(posA.inOpenRemittancePaisa)
+      ).toString(),
+    );
     expect(rowA.awaitingRemittancePaisa).toBe(posA.awaitingRemittanceTotalPaisa);
     expect(rowA.remittedVerifiedPaisa).toBe(posA.verifiedRemittedPaisa);
     expect(rowB.outstandingPaisa).toBe(posB.ledgerOwedPaisa);

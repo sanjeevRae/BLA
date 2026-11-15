@@ -119,6 +119,65 @@ export async function getFinanceReport(
   const span = inRange(range);
   const vendorScope = filters.vendorId ? { vendorId: filters.vendorId } : {};
 
+  // Vendor filter completeness (Phase 9 review P9-R3): the sections
+  // below that carry no vendor column of their own scope through the
+  // joins that DO attribute them to a vendor —
+  //  - remittances and their open discrepancies: remittances
+  //    CONTAINING the vendor's collections (lines → collection →
+  //    shipment → order);
+  //  - adjustments: via their polymorphic target — the invoice's
+  //    vendor, the collection's shipment vendor, the payment's
+  //    payer, the settlement's vendor. LEDGER targets belong to no
+  //    vendor and drop out of a vendor-filtered report.
+  const remittanceVendorScope: Prisma.CodRemittanceWhereInput | null =
+    filters.vendorId
+      ? {
+          lines: {
+            some: {
+              codCollection: {
+                shipment: { order: { vendorId: filters.vendorId } },
+              },
+            },
+          },
+        }
+      : null;
+  let adjustmentVendorScope: Prisma.FinancialAdjustmentWhereInput | null = null;
+  if (filters.vendorId) {
+    const [invoiceIds, collectionIds, paymentIds, settlementIds] =
+      await Promise.all([
+        prisma.invoice.findMany({
+          where: { vendorId: filters.vendorId },
+          select: { id: true },
+        }),
+        prisma.deliveryCodCollection.findMany({
+          where: { shipment: { order: { vendorId: filters.vendorId } } },
+          select: { id: true },
+        }),
+        prisma.payment.findMany({
+          where: { payerVendorId: filters.vendorId },
+          select: { id: true },
+        }),
+        prisma.vendorSettlement.findMany({
+          where: { vendorId: filters.vendorId },
+          select: { id: true },
+        }),
+      ]);
+    adjustmentVendorScope = {
+      OR: [
+        { targetType: "INVOICE", targetId: { in: invoiceIds.map((r) => r.id) } },
+        {
+          targetType: "COD_COLLECTION",
+          targetId: { in: collectionIds.map((r) => r.id) },
+        },
+        { targetType: "PAYMENT", targetId: { in: paymentIds.map((r) => r.id) } },
+        {
+          targetType: "SETTLEMENT",
+          targetId: { in: settlementIds.map((r) => r.id) },
+        },
+      ],
+    };
+  }
+
   const [
     invoicedGroups,
     paymentGroups,
@@ -178,11 +237,23 @@ export async function getFinanceReport(
       },
     }),
     prisma.financialAdjustment.aggregate({
-      where: { status: "APPLIED", appliedAt: span },
+      where: {
+        AND: [
+          { status: "APPLIED", appliedAt: span },
+          ...(adjustmentVendorScope ? [adjustmentVendorScope] : []),
+        ],
+      },
       _sum: { amountPaisa: true },
       _count: { _all: true },
     }),
-    prisma.financialAdjustment.count({ where: { status: "REQUESTED" } }),
+    prisma.financialAdjustment.count({
+      where: {
+        AND: [
+          { status: "REQUESTED" },
+          ...(adjustmentVendorScope ? [adjustmentVendorScope] : []),
+        ],
+      },
+    }),
     prisma.vendorSettlement.groupBy({
       by: ["status"],
       where: { createdAt: span, ...vendorScope },
@@ -219,7 +290,12 @@ export async function getFinanceReport(
     }),
     prisma.codRemittance.groupBy({
       by: ["status"],
-      where: { submittedAt: span },
+      where: {
+        AND: [
+          { submittedAt: span },
+          ...(remittanceVendorScope ? [remittanceVendorScope] : []),
+        ],
+      },
       _sum: { declaredAmountPaisa: true, countedAmountPaisa: true },
       _count: { _all: true },
       orderBy: { status: "asc" },
@@ -229,7 +305,12 @@ export async function getFinanceReport(
       select: { id: true, totalPaisa: true, dueAt: true },
     }),
     prisma.codRemittance.findMany({
-      where: { status: "DISCREPANCY" },
+      where: {
+        AND: [
+          { status: "DISCREPANCY" },
+          ...(remittanceVendorScope ? [remittanceVendorScope] : []),
+        ],
+      },
       select: { discrepancyPaisa: true },
     }),
   ]);
@@ -286,11 +367,16 @@ export async function getFinanceReport(
     openDiscrepancyTotal += value < BigInt(0) ? -value : value;
   }
 
-  const invoicedTotal = invoicedGroups.reduce(
+  // Headline invoiced figures mirror the overview definition
+  // exactly: CANCELLED (voided) invoices are not invoiced revenue
+  // (Phase 9 review P9-R2). The byStatus breakdown in the response
+  // keeps every status group, CANCELLED included.
+  const invoicedBillable = invoicedGroups.filter((g) => g.status !== "CANCELLED");
+  const invoicedTotal = invoicedBillable.reduce(
     (sum, g) => sum + (g._sum.totalPaisa ?? BigInt(0)),
     BigInt(0),
   );
-  const invoicedCount = invoicedGroups.reduce((sum, g) => sum + g._count._all, 0);
+  const invoicedCount = invoicedBillable.reduce((sum, g) => sum + g._count._all, 0);
   const paymentsTotal = paymentGroups.reduce(
     (sum, g) => sum + (g._sum.amountPaisa ?? BigInt(0)),
     BigInt(0),

@@ -143,7 +143,15 @@ export function bigintToString(value: bigint | null | undefined): string {
 
 export function csvEscape(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return "";
-  const text = String(value);
+  let text = String(value);
+  // Spreadsheet formula injection (OWASP; Phase 9 review P9-R4):
+  // a cell whose first character is =, +, -, @, a tab or a carriage
+  // return is evaluated as a formula when the export is opened in
+  // Excel / Sheets. Cell values include vendor-controlled text
+  // (business names), so prefix such a cell with a single quote —
+  // it then renders as literal text. Applied before the quoting
+  // below so the prefix stays inside the cell.
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
   if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
   return text;
 }
