@@ -100,6 +100,20 @@ export default async function Page() {
       <TransfersHomePanel actor={actor} basePath="/warehouse" />
       <DeliveriesHomePanel actor={actor} basePath="/warehouse" />
       <WarehouseBookingsPanel actor={actor} basePath="/warehouse" />
+      <SectionCard title="Reports">
+        <p className="text-[13px] text-slate2">
+          Receiving, dispatch, inventory ageing, capacity and driver performance for your
+          warehouses — computed from live operational records.
+        </p>
+        <div className="mt-3">
+          <a
+            href="/warehouse/reports"
+            className="rounded-md border border-line bg-page px-3 py-1.5 text-[12px] font-semibold text-ink"
+          >
+            Warehouse reports →
+          </a>
+        </div>
+      </SectionCard>
     </div>
   );
 }

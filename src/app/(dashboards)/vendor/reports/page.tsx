@@ -1,0 +1,12 @@
+import { requireActor } from "@/lib/auth/permissions";
+import { VendorReportsPage, filtersFromSearchParams } from "@/components/reports/pages";
+
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const actor = await requireActor();
+  const filters = filtersFromSearchParams(await searchParams);
+  return <VendorReportsPage actor={actor} basePath="/vendor" filters={filters} />;
+}

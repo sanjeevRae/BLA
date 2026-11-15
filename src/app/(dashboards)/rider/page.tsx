@@ -21,6 +21,18 @@ export default async function Page() {
           </div>
         </div>
       </SectionCard>
+      <SectionCard title="Reports">
+        <div className="flex flex-col gap-3">
+          <p className="text-[13px] text-slate2">
+            Your delivery performance and COD figures for any period.
+          </p>
+          <div>
+            <Link href="/rider/reports" className={subtleButtonClass}>
+              Your performance →
+            </Link>
+          </div>
+        </div>
+      </SectionCard>
     </div>
   );
 }

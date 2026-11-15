@@ -1,7 +1,26 @@
+import Link from "next/link";
+
 import { requireActor } from "@/lib/auth/permissions";
 import { DriverDashboardPage } from "@/components/transfers/pages";
+import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 
 export default async function Page() {
   const actor = await requireActor();
-  return <DriverDashboardPage actor={actor} />;
+  return (
+    <div className="grid gap-5">
+      <DriverDashboardPage actor={actor} />
+      <SectionCard title="Reports">
+        <div className="flex flex-col gap-3">
+          <p className="text-[13px] text-slate2">
+            Your trip history and performance for any period.
+          </p>
+          <div>
+            <Link href="/transport-driver/reports" className={subtleButtonClass}>
+              Your performance →
+            </Link>
+          </div>
+        </div>
+      </SectionCard>
+    </div>
+  );
 }

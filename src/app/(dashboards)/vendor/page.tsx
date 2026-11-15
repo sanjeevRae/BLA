@@ -40,6 +40,9 @@ export default async function Page() {
           <Link href="/vendor/billing" className={subtleButtonClass}>
             Billing
           </Link>
+          <Link href="/vendor/reports" className={subtleButtonClass}>
+            Reports
+          </Link>
           <Link href="/vendor/profile" className={subtleButtonClass}>
             Organisation profile
           </Link>
