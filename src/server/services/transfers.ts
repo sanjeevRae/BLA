@@ -55,9 +55,11 @@ import {
  * receiving reconciles against what was dispatched.
  *
  * Invariants enforced here:
- * - A package is on at most one OPEN transfer (checked inside the
- *   item-add transaction — Phase 4 review P4-3 — with the DB trigger
- *   as backstop).
+ * - A package is on at most one OPEN transfer (candidate package
+ *   rows are locked FOR UPDATE inside the item-add transaction
+ *   before the check — Phase 5 review P5-1; the DB trigger is the
+ *   backstop). Mutations serialize on the Transfer row lock and
+ *   re-check their status gates from the locked row (P5-5).
  * - Counts are ALWAYS recounted from TransferItem rows inside the
  *   transaction that acts on them (Phase 4 review P4-1); no stored
  *   counter is ever trusted for dispatch or reconciliation.
@@ -404,6 +406,24 @@ const BLOCKING_EXCEPTIONS: readonly string[] = [
   "LOST_UNDER_INVESTIGATION",
 ];
 
+/** Lock the Transfer row for the duration of a mutating transaction
+ *  and return its FRESH status (Phase 5 review P5-5). Status gates
+ *  decided from a snapshot loaded before the transaction are
+ *  TOCTOU-unsafe: a concurrent dispatch/manifest/cancel can commit
+ *  in between and the stale gate lets the mutation through. Every
+ *  mutating transfer operation takes this lock first and re-checks
+ *  its gate from the locked row. */
+async function lockTransferRow(
+  tx: Prisma.TransactionClient,
+  transferId: string,
+): Promise<string> {
+  const rows = await tx.$queryRaw<{ status: string }[]>`
+    SELECT "status" FROM "app"."Transfer" WHERE "id" = ${transferId} FOR UPDATE
+  `;
+  if (rows.length === 0) throw new NotFoundError("Transfer not found");
+  return rows[0].status;
+}
+
 /** Recount the manifest snapshot from the transfer's CURRENT items.
  *  Runs inside the caller's transaction (P4-1: totals are derived
  *  from item rows, never maintained as a running counter). */
@@ -459,8 +479,30 @@ export async function addTransferItems(
   }
 
   const result: AddItemsResult = { added: [], rejected: [] };
+  let manifestPresent = transfer.manifest != null;
 
   await prisma.$transaction(async (tx) => {
+    // P5-5: serialize on the transfer row and re-check the status
+    // gate from the locked row — the snapshot check above can be
+    // overtaken by a concurrent dispatch/manifest/cancel.
+    const lockedStatus = await lockTransferRow(tx, transferId);
+    if (!TRANSFER_EDITABLE_STATUSES.includes(lockedStatus)) {
+      throw new ConflictError(
+        `A transfer in ${lockedStatus} cannot take new packages — items are locked once the transfer is dispatched`,
+      );
+    }
+    // P5-1: lock every candidate package row BEFORE the
+    // one-open-transfer check below. The check (and the DB trigger)
+    // is a plain EXISTS under READ COMMITTED: two concurrent adds
+    // cannot see each other's uncommitted item rows, so without this
+    // lock both pass and the package lands on two open transfers.
+    // Sorted order keeps concurrent multi-package adds deadlock-free.
+    await tx.$queryRaw`
+      SELECT "id" FROM "app"."Package"
+      WHERE "id" IN (${Prisma.join(uniqueIds)})
+      ORDER BY "id"
+      FOR UPDATE
+    `;
     for (const packageId of uniqueIds) {
       const pkg = await tx.package.findUnique({
         where: { id: packageId },
@@ -530,17 +572,25 @@ export async function addTransferItems(
       });
       result.added.push({ packageId, trackingId: pkg.trackingId });
     }
-    if (result.added.length > 0 && transfer.manifest) {
+    if (result.added.length > 0) {
       // Manifest already sealed: adding is an authorised amendment —
       // the snapshot is recounted and the amendment audited below.
-      await refreshManifestTotals(tx, transferId);
+      // (refreshManifestTotals no-ops when no manifest exists yet.)
+      manifestPresent =
+        (await tx.transferManifest.findUnique({
+          where: { transferId },
+          select: { id: true },
+        })) != null;
+      if (manifestPresent) {
+        await refreshManifestTotals(tx, transferId);
+      }
     }
   });
 
   if (result.added.length > 0) {
     await auditOps(
       actor,
-      transfer.manifest ? "transfer.manifest_amended" : "transfer.items_added",
+      manifestPresent ? "transfer.manifest_amended" : "transfer.items_added",
       "Transfer",
       transferId,
       {
@@ -577,8 +627,30 @@ export async function removeTransferItem(
     );
   }
 
+  let manifestPresent = transfer.manifest != null;
   await prisma.$transaction(async (tx) => {
-    if (item.package.operationalStatus === "TRANSFER_ASSIGNED") {
+    // P5-5: re-validate from the locked transfer row and a FRESH
+    // item row — the snapshot checks above can be overtaken by a
+    // concurrent load scan (item now LOADED) or manifest generation
+    // (package now TRANSFER_ASSIGNED), and acting on the stale item
+    // either corrupts the manifest or dies on a raw FK error.
+    const lockedStatus = await lockTransferRow(tx, transferId);
+    if (!TRANSFER_EDITABLE_STATUSES.includes(lockedStatus)) {
+      throw new ConflictError(
+        `Items cannot be removed from a transfer in ${lockedStatus}`,
+      );
+    }
+    const freshItem = await tx.transferItem.findUnique({
+      where: { transferId_packageId: { transferId, packageId } },
+      include: { package: { select: { operationalStatus: true } } },
+    });
+    if (!freshItem) throw new NotFoundError("Package is not on this transfer");
+    if (freshItem.itemStatus === "LOADED") {
+      throw new ConflictError(
+        "This package is already loaded — unload it (reverse the load scan) before removing it from the transfer",
+      );
+    }
+    if (freshItem.package.operationalStatus === "TRANSFER_ASSIGNED") {
       // Release the parcel back to origin stock (the pre-dispatch
       // release edge in the lifecycle table).
       await transitionPackageInTx(tx, actor, packageId, "READY_FOR_DISPATCH", {
@@ -587,15 +659,20 @@ export async function removeTransferItem(
         notes: `Removed from transfer ${transfer.transferNumber} before dispatch${reason ? `: ${reason}` : ""}`,
       });
     }
-    await tx.transferItem.delete({ where: { id: item.id } });
-    if (transfer.manifest) {
+    await tx.transferItem.delete({ where: { id: freshItem.id } });
+    manifestPresent =
+      (await tx.transferManifest.findUnique({
+        where: { transferId },
+        select: { id: true },
+      })) != null;
+    if (manifestPresent) {
       await refreshManifestTotals(tx, transferId);
     }
   });
 
   await auditOps(
     actor,
-    transfer.manifest ? "transfer.manifest_amended" : "transfer.item_removed",
+    manifestPresent ? "transfer.manifest_amended" : "transfer.item_removed",
     "Transfer",
     transferId,
     {
@@ -743,10 +820,39 @@ export async function generateManifest(
     throw new DomainValidationError("Add at least one package before generating the manifest");
   }
 
+  let manifestedCount = transfer.items.length;
   await prisma.$transaction(async (tx) => {
+    // P5-5: re-check the gates from the locked transfer row and
+    // iterate FRESH item rows — the snapshot above can be overtaken
+    // by a concurrent remove (which releases the package and deletes
+    // its item; manifesting the stale list would strand the package
+    // in TRANSFER_ASSIGNED with no open item) or a second generate.
+    const lockedStatus = await lockTransferRow(tx, transferId);
+    const existingManifest = await tx.transferManifest.findUnique({
+      where: { transferId },
+      select: { id: true },
+    });
+    if (existingManifest) {
+      throw new ConflictError("This transfer already has a manifest — it is frozen and cannot be regenerated");
+    }
+    if (lockedStatus === "REQUESTED") {
+      throw new ConflictError("This transfer is awaiting approval — the manifest can be prepared once it is approved");
+    }
+    if (!["DRAFT", "PREPARING", "APPROVED"].includes(lockedStatus)) {
+      throw new ConflictError(`A manifest cannot be generated for a transfer in ${lockedStatus}`);
+    }
+    const freshItems = await tx.transferItem.findMany({
+      where: { transferId },
+      include: { package: { select: { trackingId: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+    if (freshItems.length === 0) {
+      throw new DomainValidationError("Add at least one package before generating the manifest");
+    }
+    manifestedCount = freshItems.length;
     // Re-validate every item inside the transaction: stock position
     // and status may have moved since selection.
-    for (const item of transfer.items) {
+    for (const item of freshItems) {
       const pkg = await tx.package.findUniqueOrThrow({
         where: { id: item.packageId },
         select: { operationalStatus: true },
@@ -792,7 +898,7 @@ export async function generateManifest(
 
   await auditOps(actor, "transfer.manifest_generated", "Transfer", transferId, {
     warehouseId: transfer.originWarehouseId,
-    after: { packageCount: transfer.items.length },
+    after: { packageCount: manifestedCount },
   });
   return toTransferView(await loadTransferOr404(transferId));
 }
@@ -868,8 +974,32 @@ export async function assignTransferCrew(
     throw new ConflictError("Resolve the approval before assigning a crew");
   }
 
-  const [driver, vehicle] = await Promise.all([
-    prisma.driver.findUnique({
+  // P5-2: EVERY assignment check runs INSIDE the write transaction,
+  // under row locks on the transfer, the driver and the vehicle.
+  // Previously the blockers were evaluated on unlocked reads before
+  // the transaction opened, so two concurrent assignments of the
+  // same driver (or vehicle) both passed the already-on-a-trip check
+  // and the driver landed on two active trips. Lock order is fixed
+  // (transfer → driver → vehicle) so concurrent calls serialize
+  // instead of deadlocking.
+  const assigned = await prisma.$transaction(async (tx) => {
+    await lockTransferRow(tx, transfer.id);
+    await tx.$queryRaw`
+      SELECT "id" FROM "app"."Driver" WHERE "id" = ${data.driverId} FOR UPDATE
+    `;
+    await tx.$queryRaw`
+      SELECT "id" FROM "app"."Vehicle" WHERE "id" = ${data.vehicleId} FOR UPDATE
+    `;
+    const freshTransfer = await tx.transfer.findUniqueOrThrow({
+      where: { id: transfer.id },
+    });
+    if (!TRANSFER_EDITABLE_STATUSES.includes(freshTransfer.status)) {
+      throw new ConflictError(`Crew cannot be assigned to a transfer in ${freshTransfer.status}`);
+    }
+    if (freshTransfer.status === "REQUESTED" || freshTransfer.status === "REJECTED") {
+      throw new ConflictError("Resolve the approval before assigning a crew");
+    }
+    const driver = await tx.driver.findUnique({
       where: { id: data.driverId },
       include: {
         user: {
@@ -877,58 +1007,59 @@ export async function assignTransferCrew(
         },
         capabilities: true,
       },
-    }),
-    prisma.vehicle.findUnique({ where: { id: data.vehicleId } }),
-  ]);
-  if (!driver) throw new NotFoundError("Driver profile not found");
-  if (!vehicle) throw new NotFoundError("Vehicle not found");
+    });
+    if (!driver) throw new NotFoundError("Driver profile not found");
+    const vehicle = await tx.vehicle.findUnique({ where: { id: data.vehicleId } });
+    if (!vehicle) throw new NotFoundError("Vehicle not found");
 
-  const driverBlockers = await driverAssignmentBlockers(prisma, driver, transfer.id);
-  if (driverBlockers.length > 0) {
-    throw new DomainValidationError(driverBlockers.join("; "));
-  }
-  const vehicleBlockers = vehicleAssignmentBlockers(vehicle);
-  if (vehicleBlockers.length > 0) {
-    throw new DomainValidationError(vehicleBlockers.join("; "));
-  }
-  const activeVehicleTrip = await prisma.trip.findFirst({
-    where: {
-      vehicleId: vehicle.id,
-      status: { in: [...ACTIVE_TRIP_STATUSES] },
-      NOT: { transferId: transfer.id },
-    },
-    select: { tripNumber: true },
-  });
-  if (activeVehicleTrip) {
-    throw new DomainValidationError(
-      `Vehicle is already assigned to active trip ${activeVehicleTrip.tripNumber}`,
-    );
-  }
-  if (transfer.manifest && vehicle.capacityKg) {
-    if (vehicle.capacityKg.lessThan(transfer.manifest.totalWeightKg)) {
+    const driverBlockers = await driverAssignmentBlockers(tx, driver, freshTransfer.id);
+    if (driverBlockers.length > 0) {
+      throw new DomainValidationError(driverBlockers.join("; "));
+    }
+    const vehicleBlockers = vehicleAssignmentBlockers(vehicle);
+    if (vehicleBlockers.length > 0) {
+      throw new DomainValidationError(vehicleBlockers.join("; "));
+    }
+    const activeVehicleTrip = await tx.trip.findFirst({
+      where: {
+        vehicleId: vehicle.id,
+        status: { in: [...ACTIVE_TRIP_STATUSES] },
+        NOT: { transferId: freshTransfer.id },
+      },
+      select: { tripNumber: true },
+    });
+    if (activeVehicleTrip) {
       throw new DomainValidationError(
-        `Vehicle capacity ${vehicle.capacityKg.toString()} kg is below the manifest weight ${transfer.manifest.totalWeightKg} kg`,
+        `Vehicle is already assigned to active trip ${activeVehicleTrip.tripNumber}`,
       );
     }
-  }
+    const manifest = await tx.transferManifest.findUnique({
+      where: { transferId: freshTransfer.id },
+    });
+    if (manifest && vehicle.capacityKg) {
+      if (vehicle.capacityKg.lessThan(manifest.totalWeightKg)) {
+        throw new DomainValidationError(
+          `Vehicle capacity ${vehicle.capacityKg.toString()} kg is below the manifest weight ${manifest.totalWeightKg} kg`,
+        );
+      }
+    }
 
-  await prisma.$transaction(async (tx) => {
     // Replacing a previously assigned driver frees their ASSIGNED
     // availability (they never took custody — that happens at
     // dispatch).
-    if (transfer.driverId && transfer.driverId !== driver.id) {
+    if (freshTransfer.driverId && freshTransfer.driverId !== driver.id) {
       const previous = await tx.driver.findUnique({
-        where: { id: transfer.driverId },
+        where: { id: freshTransfer.driverId },
         select: { availabilityStatus: true },
       });
       if (previous?.availabilityStatus === "ASSIGNED") {
         await tx.driver.update({
-          where: { id: transfer.driverId },
+          where: { id: freshTransfer.driverId },
           data: { availabilityStatus: "AVAILABLE" },
         });
       }
     }
-    let tripId = transfer.tripId;
+    let tripId = freshTransfer.tripId;
     if (tripId) {
       await tx.trip.update({
         where: { id: tripId },
@@ -939,7 +1070,7 @@ export async function assignTransferCrew(
           plannedDepartureAt: data.plannedDepartureAt
             ? new Date(data.plannedDepartureAt)
             : undefined,
-          expectedArrivalAt: transfer.expectedArrivalAt,
+          expectedArrivalAt: freshTransfer.expectedArrivalAt,
         },
       });
     } else {
@@ -947,31 +1078,32 @@ export async function assignTransferCrew(
       const trip = await tx.trip.create({
         data: {
           tripNumber: `TRP-${seq.toString()}`,
-          transferId: transfer.id,
+          transferId: freshTransfer.id,
           driverId: driver.id,
           vehicleId: vehicle.id,
           status: "ASSIGNED",
           plannedDepartureAt: data.plannedDepartureAt
             ? new Date(data.plannedDepartureAt)
             : null,
-          expectedArrivalAt: transfer.expectedArrivalAt,
+          expectedArrivalAt: freshTransfer.expectedArrivalAt,
         },
       });
       tripId = trip.id;
     }
     await tx.transfer.update({
-      where: { id: transfer.id },
+      where: { id: freshTransfer.id },
       data: { driverId: driver.id, vehicleId: vehicle.id, tripId },
     });
     await tx.driver.update({
       where: { id: driver.id },
       data: { availabilityStatus: "ASSIGNED" },
     });
+    return { driverId: driver.id, vehicleId: vehicle.id };
   });
 
   await auditOps(actor, "transfer.crew_assigned", "Transfer", transfer.id, {
     warehouseId: transfer.originWarehouseId,
-    after: { driverId: driver.id, vehicleId: vehicle.id },
+    after: { driverId: assigned.driverId, vehicleId: assigned.vehicleId },
   });
   return toTransferView(await loadTransferOr404(transfer.id));
 }
@@ -1387,30 +1519,60 @@ export async function cancelTransfer(
     );
   }
 
+  let releasedCount = transfer.items.length;
   await prisma.$transaction(async (tx) => {
-    for (const item of transfer.items) {
+    // P5-5: re-validate from the locked transfer row — the status
+    // gate, the loaded-scan count and the item list above are
+    // pre-transaction snapshots a concurrent load/dispatch can
+    // overtake (cancelling then would release packages that are in
+    // fact loaded, or free a driver who has since departed).
+    const lockedStatus = await lockTransferRow(tx, transferId);
+    if (!TRANSFER_CANCELLABLE_STATUSES.includes(lockedStatus)) {
+      throw new ConflictError(`A transfer in ${lockedStatus} cannot be cancelled`);
+    }
+    const freshTransfer = await tx.transfer.findUniqueOrThrow({
+      where: { id: transferId },
+      select: { driverId: true, tripId: true, transferNumber: true },
+    });
+    const freshLoadScans = await tx.transferScan.count({
+      where: {
+        scanType: "LOAD",
+        transferItem: { transferId, itemStatus: "LOADED" },
+      },
+    });
+    if (freshLoadScans > 0) {
+      throw new ConflictError(
+        "Packages are loaded on this transfer — reverse the loads (unload scans) before cancelling; a loaded transfer is never silently cancelled",
+      );
+    }
+    const freshItems = await tx.transferItem.findMany({
+      where: { transferId },
+      include: { package: { select: { operationalStatus: true } } },
+    });
+    releasedCount = freshItems.length;
+    for (const item of freshItems) {
       if (item.package.operationalStatus === "TRANSFER_ASSIGNED") {
         await transitionPackageInTx(tx, actor, item.packageId, "READY_FOR_DISPATCH", {
           warehouseId: transfer.originWarehouseId,
           transferId,
-          notes: `Transfer ${transfer.transferNumber} cancelled — package released back to origin stock`,
+          notes: `Transfer ${freshTransfer.transferNumber} cancelled — package released back to origin stock`,
         });
       }
     }
-    if (transfer.tripId) {
+    if (freshTransfer.tripId) {
       await tx.trip.update({
-        where: { id: transfer.tripId },
+        where: { id: freshTransfer.tripId },
         data: { status: "CANCELLED" },
       });
     }
-    if (transfer.driverId) {
+    if (freshTransfer.driverId) {
       const driver = await tx.driver.findUnique({
-        where: { id: transfer.driverId },
+        where: { id: freshTransfer.driverId },
         select: { availabilityStatus: true, currentTripId: true },
       });
       if (driver?.availabilityStatus === "ASSIGNED" && !driver.currentTripId) {
         await tx.driver.update({
-          where: { id: transfer.driverId },
+          where: { id: freshTransfer.driverId },
           data: { availabilityStatus: "AVAILABLE" },
         });
       }
@@ -1423,7 +1585,7 @@ export async function cancelTransfer(
 
   await auditOps(actor, "transfer.cancelled", "Transfer", transferId, {
     warehouseId: transfer.originWarehouseId,
-    after: { reason: reason ?? null, releasedPackages: transfer.items.length },
+    after: { reason: reason ?? null, releasedPackages: releasedCount },
   });
   return toTransferView(await loadTransferOr404(transferId));
 }
@@ -1545,6 +1707,57 @@ export async function scanDestinationPackage(
     if (pkg.shipment.destinationWarehouseId !== transfer.destinationWarehouseId) {
       // Wrong warehouse (Scenario 2): the arrival is observed and the
       // parcel flagged MISROUTED — it is NEVER stocked here.
+      //
+      // P5-4: the flag is raised ONLY when the package's state is
+      // consistent with a physical arrival: dispatched / in transit /
+      // arrived, holding an open item on an arrived transfer, or
+      // received into warehouse stock (an open InventoryRecord — e.g.
+      // a READY_FOR_DISPATCH parcel sitting in origin stock is a
+      // physical parcel in the network, and a scan at the wrong
+      // warehouse is a genuine misroute). A parcel still BOOKED at
+      // origin has never been received anywhere — no stock record
+      // exists — so a scan of its tracking ID is observed and
+      // returned WITHOUT mutating it: previously any insider who
+      // knew a tracking ID could brand any package MISROUTED, and
+      // every repeat scan stacked another permanent EXCEPTION_RAISED
+      // event + audit row. Repeat scans from a warehouse that
+      // already recorded the flag likewise write nothing further
+      // (P4-4 dedupe).
+      const arrivalPlausible =
+        ["DISPATCHED", "IN_TRANSIT", "ARRIVED_AT_DESTINATION"].includes(
+          pkg.operationalStatus,
+        ) ||
+        (await prisma.transferItem.findFirst({
+          where: {
+            packageId: pkg.id,
+            transfer: {
+              status: {
+                in: ["DISPATCHED", "IN_TRANSIT", ...RECEIVING_WINDOW_STATUSES],
+              },
+            },
+          },
+          select: { id: true },
+        })) != null ||
+        (await prisma.inventoryRecord.findFirst({
+          where: { packageId: pkg.id, releasedAt: null },
+          select: { id: true },
+        })) != null;
+      if (!arrivalPlausible) {
+        return { kind: "WRONG_PACKAGE", trackingId: pkg.trackingId, alreadyReceived: false, package: summary };
+      }
+      const alreadyFlaggedHere =
+        pkg.exceptionStatus === "MISROUTED" &&
+        (await prisma.trackingEvent.findFirst({
+          where: {
+            packageId: pkg.id,
+            eventType: "EXCEPTION_RAISED",
+            warehouseId: transfer.destinationWarehouseId,
+          },
+          select: { id: true },
+        })) != null;
+      if (alreadyFlaggedHere) {
+        return { kind: "WRONG_PACKAGE", trackingId: pkg.trackingId, alreadyReceived: false, package: summary };
+      }
       await prisma.$transaction(async (tx) => {
         await tx.package.update({
           where: { id: pkg.id },
@@ -1801,7 +2014,16 @@ export async function completePackageReceiving(
       where: { id: data.packageId },
       data: {
         condition: data.condition,
-        ...(damaged ? { exceptionStatus: "DAMAGED" } : {}),
+        // P5-3: a package that was branded MISSING (e.g. by an early
+        // finishReceiving) but has in fact been scanned and received
+        // clears the flag on completion — mirroring the scan path.
+        // Without this the flag outlived the receiving it denied,
+        // because a rescan short-circuits as already-received.
+        ...(damaged
+          ? { exceptionStatus: "DAMAGED" }
+          : pkg.exceptionStatus === "MISSING"
+            ? { exceptionStatus: "NONE" }
+            : {}),
       },
     });
     if (damaged) {
@@ -1852,11 +2074,13 @@ export async function completePackageReceiving(
   return toTransferView(await loadTransferOr404(transferId));
 }
 
-/** Declare unloading finished. Unreceived items are marked MISSING
- *  (packages stay in the driver's custody with a MISSING exception —
- *  the Phase 8 incident link point, exactly like Phase 4's disputed
- *  handovers) and the trip completes: the transfer, not the trip,
- *  carries the open shortage. */
+/** Declare unloading finished. Items whose packages were never
+ *  unload-scanned are marked MISSING (those packages stay in the
+ *  driver's custody with a MISSING exception — the Phase 8 incident
+ *  link point, exactly like Phase 4's disputed handovers);
+ *  scanned-but-incomplete items are left completable and unbranded
+ *  (P5-3). The trip completes: the transfer, not the trip, carries
+ *  the open shortage. */
 export async function finishReceiving(
   actor: ActorContext,
   transferId: string,
@@ -1880,6 +2104,18 @@ export async function finishReceiving(
     });
     for (const item of items) {
       if (ACCOUNTED_ITEM_STATUSES.includes(item.itemStatus)) continue;
+      // P5-3: only a package that was NEVER unload-scanned is
+      // missing. A scanned package sits in RECEIVING_INSPECTION at
+      // the destination, in the warehouse's custody, with an open
+      // inventory record — branding it MISSING wrote a false
+      // "remains in the driver's custody" exception onto its history
+      // and the flag could never be cleared afterwards. Scanned-but-
+      // incomplete items stay unaccounted (reconciliation still
+      // blocks) but completable, without the false branding.
+      const neverScanned = ["IN_TRANSIT", "ARRIVED_AT_DESTINATION"].includes(
+        item.package.operationalStatus,
+      );
+      if (!neverScanned) continue;
       missingTrackingIds.push(item.package.trackingId);
       if (item.itemStatus !== "MISSING") {
         await tx.transferItem.update({
@@ -1966,30 +2202,53 @@ export async function reconcileTransfer(
       `Reconciliation runs after receiving is finished (current: ${transfer.status}) — finish receiving first`,
     );
   }
-  // P4-1: recount from item rows; a stored count is never trusted.
-  const unaccounted = transfer.items.filter(
-    (i) => !ACCOUNTED_ITEM_STATUSES.includes(i.itemStatus),
-  );
-  if (unaccounted.length > 0) {
-    await prisma.transfer.update({
-      where: { id: transferId },
-      data: { status: "EXCEPTION" },
+  // P5-6: the recount and the status claim run in ONE transaction
+  // over FRESH item rows. Previously the recount filtered the
+  // pre-call snapshot and the RECONCILED write was an unguarded
+  // update, so two concurrent reconciles both "succeeded" and wrote
+  // duplicate transfer.reconciled audits. The claim below
+  // (updateMany on id + status) serializes them: exactly one wins.
+  const outcome = await prisma.$transaction(async (tx) => {
+    const freshItems = await tx.transferItem.findMany({
+      where: { transferId },
+      include: { package: { select: { trackingId: true } } },
     });
+    const unaccounted = freshItems.filter(
+      (i) => !ACCOUNTED_ITEM_STATUSES.includes(i.itemStatus),
+    );
+    if (unaccounted.length > 0) {
+      await tx.transfer.updateMany({
+        where: { id: transferId, status: "RECONCILIATION_PENDING" },
+        data: { status: "EXCEPTION" },
+      });
+      return {
+        blocked: unaccounted.map((i) => i.package.trackingId),
+        packageCount: freshItems.length,
+      } as const;
+    }
+    const claimed = await tx.transfer.updateMany({
+      where: { id: transferId, status: "RECONCILIATION_PENDING" },
+      data: { status: "RECONCILED", reconciledAt: new Date() },
+    });
+    if (claimed.count !== 1) {
+      throw new ConflictError(
+        "This transfer's state changed while reconciliation was running — reload and retry",
+      );
+    }
+    return { blocked: null, packageCount: freshItems.length } as const;
+  });
+  if (outcome.blocked) {
     await auditOps(actor, "transfer.reconciliation_blocked", "Transfer", transferId, {
       warehouseId: transfer.destinationWarehouseId,
-      after: { unaccountedTrackingIds: unaccounted.map((i) => i.package.trackingId) },
+      after: { unaccountedTrackingIds: outcome.blocked },
     });
     throw new ConflictError(
-      `Reconciliation refused: ${unaccounted.length} manifested package(s) are unaccounted for: ${unaccounted.map((i) => i.package.trackingId).join(", ")}. The transfer stays open until every package is received or resolved through the loss process.`,
+      `Reconciliation refused: ${outcome.blocked.length} manifested package(s) are unaccounted for: ${outcome.blocked.join(", ")}. The transfer stays open until every package is received or resolved through the loss process.`,
     );
   }
-  await prisma.transfer.update({
-    where: { id: transferId },
-    data: { status: "RECONCILED", reconciledAt: new Date() },
-  });
   await auditOps(actor, "transfer.reconciled", "Transfer", transferId, {
     warehouseId: transfer.destinationWarehouseId,
-    after: { packageCount: transfer.items.length },
+    after: { packageCount: outcome.packageCount },
   });
   return toTransferView(await loadTransferOr404(transferId));
 }
