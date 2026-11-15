@@ -3,6 +3,7 @@ import { DashboardHome } from "@/components/dashboards/DashboardHome";
 import { WarehouseBookingsPanel } from "@/components/bookings/pages";
 import { WarehouseOpsHomePanel } from "@/components/warehouse-ops/pages";
 import { TransfersHomePanel } from "@/components/transfers/pages";
+import { DeliveriesHomePanel } from "@/components/deliveries/pages";
 
 /**
  * Warehouse Staff home: identity summary plus the bookings/packages
@@ -16,6 +17,7 @@ export default async function Page() {
       <DashboardHome actor={actor} roleLabel="Warehouse Staff" />
       <WarehouseOpsHomePanel actor={actor} basePath="/staff" />
       <TransfersHomePanel actor={actor} basePath="/staff" />
+      <DeliveriesHomePanel actor={actor} basePath="/staff" />
       <WarehouseBookingsPanel actor={actor} basePath="/staff" />
     </div>
   );

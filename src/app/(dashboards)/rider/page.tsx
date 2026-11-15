@@ -1,7 +1,7 @@
 import { requireActor } from "@/lib/auth/permissions";
-import { DashboardHome } from "@/components/dashboards/DashboardHome";
+import { RiderHomePage } from "@/components/deliveries/pages";
 
 export default async function Page() {
   const actor = await requireActor();
-  return <DashboardHome actor={actor} roleLabel="Delivery Rider" />;
+  return <RiderHomePage actor={actor} />;
 }

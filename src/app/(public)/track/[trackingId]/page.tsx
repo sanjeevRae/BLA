@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { NotFoundError } from "@/lib/errors";
 import { getPublicTracking } from "@/server/services/packages";
 import { TrackForm } from "@/components/tracking/TrackForm";
+import { DetailedTrackGate } from "@/components/tracking/DetailedTrackGate";
 import { StatusBadge, formatDateTime } from "@/components/bookings/ui";
 
 /**
@@ -62,6 +63,8 @@ export default async function Page({
           ) : null}
         </ol>
       </section>
+
+      <DetailedTrackGate trackingId={tracking.trackingId} />
 
       <div className="mt-6">
         <TrackForm initialValue={tracking.trackingId} />

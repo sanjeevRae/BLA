@@ -123,6 +123,7 @@ async function main(): Promise<void> {
   await seedWarehouses(roleIdByCode);
   await seedPhase3(superAdmin.id);
   await seedPhase5();
+  await seedPhase6();
 }
 
 /**
@@ -668,4 +669,89 @@ async function seedPhase5(): Promise<void> {
   }
 
   console.log("Seeded Phase 5 demo fleet fixtures (create-only).");
+}
+
+/**
+ * Phase 6 seed: local demo rider fixture.
+ * - A rider login (rider@bla.test) holding the RIDER role, an active
+ *   warehouse membership at WH-KTM-01, and a Driver profile homed at
+ *   WH-KTM-01 with DELIVERY + PICKUP capabilities and a licence
+ *   valid into 2030 — everything the delivery-batch eligibility
+ *   check requires.
+ * Local-only + create-only, exactly like the Phase 2/3/5 fixtures
+ * (targetsLocalDatabase guard, P2-6/P3-3).
+ */
+async function seedPhase6(): Promise<void> {
+  if (!targetsLocalDatabase()) {
+    console.log(
+      "Refusing to seed Phase 6 demo rider fixture: DATABASE_URL does " +
+        "not target a local database (localhost/127.0.0.1 + bla_dev/bla_test).",
+    );
+    return;
+  }
+  const testPassword = process.env.SEED_TEST_WA_PASSWORD;
+  if (!testPassword) {
+    throw new Error("SEED_TEST_WA_PASSWORD must be set (see prisma/.env).");
+  }
+
+  const ktm = await prisma.warehouse.findUnique({ where: { code: "WH-KTM-01" } });
+  if (!ktm) throw new Error("WH-KTM-01 missing after warehouse seed");
+  const riderRole = await prisma.role.findUnique({ where: { code: "RIDER" } });
+  if (!riderRole) throw new Error("RIDER role missing after catalog seed");
+
+  let riderUser = await prisma.user.findUnique({
+    where: { email: "rider@bla.test" },
+  });
+  if (!riderUser) {
+    riderUser = await prisma.user.create({
+      data: {
+        email: "rider@bla.test",
+        fullName: "Demo Delivery Rider",
+        passwordHash: await hash(testPassword, 10),
+        status: "ACTIVE",
+        emailVerifiedAt: new Date(),
+      },
+    });
+  } else {
+    console.log(
+      "Demo rider rider@bla.test already exists — leaving password and status untouched.",
+    );
+  }
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: riderUser.id, roleId: riderRole.id } },
+    update: {},
+    create: { userId: riderUser.id, roleId: riderRole.id },
+  });
+  const existingMembership = await prisma.warehouseMembership.findFirst({
+    where: { userId: riderUser.id, warehouseId: ktm.id, roleId: riderRole.id, revokedAt: null },
+  });
+  if (!existingMembership) {
+    await prisma.warehouseMembership.create({
+      data: { userId: riderUser.id, warehouseId: ktm.id, roleId: riderRole.id },
+    });
+  }
+
+  const existingDriver = await prisma.driver.findUnique({
+    where: { userId: riderUser.id },
+  });
+  if (!existingDriver) {
+    await prisma.driver.create({
+      data: {
+        userId: riderUser.id,
+        homeWarehouseId: ktm.id,
+        licenseNumber: "LIC-P6-DEMO-001",
+        licenseCategory: "B",
+        licenseExpiry: new Date("2030-01-01T00:00:00.000Z"),
+        employmentStatus: "ACTIVE",
+        availabilityStatus: "AVAILABLE",
+        capabilities: {
+          create: [{ capability: "DELIVERY" }, { capability: "PICKUP" }],
+        },
+      },
+    });
+  } else {
+    console.log("Demo rider driver profile already exists — leaving it untouched.");
+  }
+
+  console.log("Seeded Phase 6 demo rider fixture (create-only).");
 }

@@ -81,6 +81,19 @@ model User {
   tripStopsRecorded          TripStop[]         @relation("TripStopRecordedBy")
   vehicleMaintenanceRecorded VehicleMaintenance[] @relation("VehicleMaintenanceRecordedBy")
 
+  deliveryBatchesCreated   DeliveryBatch[]       @relation("DeliveryBatchCreatedBy")
+  deliveryBatchesClosed    DeliveryBatch[]       @relation("DeliveryBatchClosedBy")
+  deliveryAssignmentsMade  DeliveryAssignment[]  @relation("DeliveryAssignmentBy")
+  deliveryAttemptsRecorded DeliveryAttempt[]     @relation("DeliveryAttemptRecordedBy")
+  proofsRecorded           ProofOfDelivery[]     @relation("ProofRecordedBy")
+  codCollectionsMade       DeliveryCodCollection[] @relation("CodCollectedBy")
+  returnsRequested         ReturnRequest[]       @relation("ReturnRequestedBy")
+  returnsAuthorised        ReturnRequest[]       @relation("ReturnAuthorisedBy")
+  returnsReceived          ReturnRequest[]       @relation("ReturnReceivedBy")
+  returnsInspected         ReturnRequest[]       @relation("ReturnInspectedBy")
+  returnsCompleted         ReturnRequest[]       @relation("ReturnCompletedBy")
+  returnsHandedTo          ReturnRequest[]       @relation("ReturnHandedTo")
+
   @@index([phone])
   @@schema("app")
 }
@@ -335,6 +348,9 @@ model Warehouse {
   transfersDest     Transfer[]                  @relation("TransferDestinationWarehouse")
   transferScans     TransferScan[]              @relation("TransferScanWarehouse")
 
+  deliveryBatches   DeliveryBatch[]             @relation("DeliveryBatchWarehouse")
+  returnRequests    ReturnRequest[]             @relation("ReturnWarehouse")
+
   @@index([district])
   @@index([status])
   @@schema("app")
@@ -449,6 +465,7 @@ model ServiceArea {
   shipments        Shipment[]
   pricingDest      PricingRule[] @relation("PricingDestinationArea")
   pricingOrigin    PricingRule[] @relation("PricingOriginArea")
+  deliveryBatches  DeliveryBatch[]
 
   @@unique([district, name])
   @@index([district])
@@ -763,6 +780,7 @@ model Order {
   shipments              Shipment[]
   packages               Package[]
   trackingEvents         TrackingEvent[]
+  returnRequests         ReturnRequest[]
 
   @@index([vendorId, createdAt])
   @@index([customerId])
@@ -828,6 +846,8 @@ model Shipment {
   pricingRule            PricingRule?    @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
   packages               Package[]
   trackingEvents         TrackingEvent[]
+  codCollections         DeliveryCodCollection[]
+  returnRequests         ReturnRequest[]
 
   @@index([orderId])
   @@index([originWarehouseId, status])
@@ -896,6 +916,11 @@ model Package {
   custodies         PackageCustody[]
   handoverLines     CustodyHandover[]
   transferItems     TransferItem[]
+  deliveryAssignments DeliveryAssignment[]
+  deliveryAttempts  DeliveryAttempt[]
+  proofsOfDelivery  ProofOfDelivery[]
+  codCollection     DeliveryCodCollection?
+  returnRequests    ReturnRequest[]
 
   @@index([shipmentId])
   @@index([currentWarehouseId, operationalStatus])
@@ -956,6 +981,7 @@ model TrackingEvent {
   orderId        String?
   transferId     String?
   tripId         String?
+  deliveryAssignmentId String?
   subjectType    String
   eventType      String
   previousStatus String?
@@ -974,6 +1000,7 @@ model TrackingEvent {
   order     Order?     @relation(fields: [orderId], references: [id], onDelete: Restrict)
   transfer  Transfer?  @relation(fields: [transferId], references: [id], onDelete: Restrict)
   trip      Trip?      @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  deliveryAssignment DeliveryAssignment? @relation(fields: [deliveryAssignmentId], references: [id], onDelete: Restrict)
   actor     User?      @relation("TrackingEventActor", fields: [actorId], references: [id], onDelete: Restrict)
   warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
 
@@ -1248,6 +1275,8 @@ model Driver {
   trips         Trip[]            @relation("TripDriver")
   transfers     Transfer[]        @relation("TransferDriver")
   vehiclesDefault Vehicle[]       @relation("VehicleAssignedDriver")
+  deliveryBatches    DeliveryBatch[]    @relation("DeliveryBatchRider")
+  deliveryAssignments DeliveryAssignment[] @relation("DeliveryAssignmentDriver")
 
   @@index([homeWarehouseId, availabilityStatus])
   @@index([licenseExpiry])
@@ -1294,6 +1323,7 @@ model Vehicle {
   trips          Trip[]              @relation("TripVehicle")
   transfers      Transfer[]          @relation("TransferVehicle")
   maintenance    VehicleMaintenance[]
+  deliveryAssignments DeliveryAssignment[] @relation("DeliveryAssignmentVehicle")
 
   @@index([status])
   @@index([homeWarehouseId, status])
@@ -1495,5 +1525,272 @@ model TripStop {
 
   @@unique([tripId, sequence])
   @@index([tripId, createdAt])
+  @@schema("app")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 — Last-mile delivery: batches, per-package assignments,
+// append-only attempts, proof of delivery, COD collection events and
+// the return workflow (docs/database-schema.md §8,
+// docs/delivery-workflow.md, docs/return-workflow.md).
+// ---------------------------------------------------------------------------
+
+/// A rider's grouped run for a shift/area (schema doc §8). The unit
+/// of work the rider picks up, delivers from, and is reconciled
+/// against at close-out (delivery-workflow.md §8): the batch closes
+/// only when every assignment is accounted for.
+model DeliveryBatch {
+  id            String    @id @default(uuid())
+  riderId       String
+  warehouseId   String
+  serviceAreaId String?
+  batchDate     DateTime  @db.Date
+  kind          String    @default("DELIVERY")
+  status        String    @default("OPEN")
+  createdById   String
+  closedAt      DateTime?
+  closedById    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  rider       Driver           @relation("DeliveryBatchRider", fields: [riderId], references: [id], onDelete: Restrict)
+  warehouse   Warehouse        @relation("DeliveryBatchWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  serviceArea ServiceArea?     @relation(fields: [serviceAreaId], references: [id], onDelete: Restrict)
+  createdBy   User             @relation("DeliveryBatchCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  closedBy    User?            @relation("DeliveryBatchClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  assignments DeliveryAssignment[]
+  codCollections DeliveryCodCollection[]
+
+  @@index([riderId, batchDate])
+  @@index([warehouseId, status])
+  @@schema("app")
+}
+
+/// One package ↔ one rider task (schema doc §8) — the single
+/// per-package assignment system for the last mile. The OTP challenge
+/// lives here (NOT on the proof record): the code is generated at
+/// pickup, only its bcrypt hash is stored, wrong entries are counted
+/// and lock after OTP_MAX_FAILURES (delivery-workflow.md §10); the
+/// hash is copied onto the ProofOfDelivery as evidence when the
+/// delivery is confirmed, and cleared here.
+model DeliveryAssignment {
+  id                   String    @id @default(uuid())
+  packageId            String
+  driverId             String
+  batchId              String?
+  vehicleId            String?
+  kind                 String    @default("DELIVERY")
+  status               String    @default("PENDING")
+  assignedById         String
+  assignedAt           DateTime  @default(now())
+  acceptedAt           DateTime?
+  startedAt            DateTime?
+  completedAt          DateTime?
+  routeSequence        Int?
+  deliveryInstructions String?
+  failureNote          String?
+  reassignedFromId     String?
+  otpCodeHash          String?
+  otpGeneratedAt       DateTime?
+  otpExpiresAt         DateTime?
+  otpFailedAttempts    Int       @default(0)
+  otpLockedAt          DateTime?
+  otpVerifiedAt        DateTime?
+  version              Int       @default(1)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  package        Package            @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  driver         Driver             @relation("DeliveryAssignmentDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  batch          DeliveryBatch?     @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  vehicle        Vehicle?           @relation("DeliveryAssignmentVehicle", fields: [vehicleId], references: [id], onDelete: Restrict)
+  assignedBy     User               @relation("DeliveryAssignmentBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  reassignedFrom DeliveryAssignment? @relation("AssignmentReassignment", fields: [reassignedFromId], references: [id], onDelete: Restrict)
+  reassignments  DeliveryAssignment[] @relation("AssignmentReassignment")
+  attempts       DeliveryAttempt[]
+  proofs         ProofOfDelivery[]
+  codCollection  DeliveryCodCollection?
+  trackingEvents TrackingEvent[]
+
+  @@index([driverId, status])
+  @@index([packageId, status])
+  @@index([batchId])
+  @@schema("app")
+}
+
+/// Append-only record of every delivery visit (schema doc §8) —
+/// replaces any failed-attempts counter. `attemptNumber` increments
+/// per PACKAGE across riders and days (delivery-workflow.md §5).
+/// No `updatedAt`; protected by the append-only trigger.
+model DeliveryAttempt {
+  id             String   @id @default(uuid())
+  assignmentId   String
+  packageId      String
+  attemptNumber  Int
+  attemptedAt    DateTime @default(now())
+  latitude       Decimal? @db.Decimal(10, 7)
+  longitude      Decimal? @db.Decimal(10, 7)
+  result         String
+  failureReason  String?
+  contactOutcome String?
+  evidenceFileId String?
+  nextAction     String   @default("NONE")
+  notes          String?
+  recordedById   String
+  createdAt      DateTime @default(now())
+
+  assignment DeliveryAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  package    Package            @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  recordedBy User               @relation("DeliveryAttemptRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  proof      ProofOfDelivery?
+
+  @@unique([assignmentId, attemptNumber])
+  @@index([packageId, attemptedAt])
+  @@schema("app")
+}
+
+/// The evidence that makes DELIVERED legal (schema doc §8): a package
+/// in DELIVERED requires a non-superseded ProofOfDelivery (partial
+/// unique index in the hardening migration) or an authorised
+/// exception — the delivery service creates this row in the same
+/// transaction as the DELIVERED transition, so there is no third
+/// path. OTP fields carry the verified challenge as evidence; only
+/// the hash is ever stored.
+model ProofOfDelivery {
+  id                      String    @id @default(uuid())
+  packageId               String
+  assignmentId            String
+  attemptId               String?   @unique
+  method                  String    @default("OTP")
+  receivedByName          String?
+  relationshipToRecipient String?
+  otpCodeHash             String?
+  otpExpiresAt            DateTime?
+  otpVerifiedAt           DateTime?
+  signatureFileId         String?
+  photoFileId             String?
+  latitude                Decimal?  @db.Decimal(10, 7)
+  longitude               Decimal?  @db.Decimal(10, 7)
+  deliveredAt             DateTime
+  recordedById            String
+  supersededById          String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  package      Package            @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  assignment   DeliveryAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  attempt      DeliveryAttempt?   @relation(fields: [attemptId], references: [id], onDelete: Restrict)
+  recordedBy   User               @relation("ProofRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+  supersededBy ProofOfDelivery?   @relation("ProofSupersededBy", fields: [supersededById], references: [id], onDelete: Restrict)
+  supersedes   ProofOfDelivery[]  @relation("ProofSupersededBy")
+
+  @@index([packageId])
+  @@index([assignmentId])
+  @@schema("app")
+}
+
+/// The delivery-time COD collection EVENT (Phase 6 scope per the
+/// brief: the finance ledger — CODCollection, DriverRemittance,
+/// LedgerTransaction — is Phase 7; this row is the immutable door
+/// record Phase 7 will consume). Expected vs collected are recorded
+/// exactly in paisa; a difference is a MISMATCH state with a required
+/// explanation, never a silent adjustment. One collection per
+/// package (`packageId` unique). Append-only: no `updatedAt`,
+/// protected by the history trigger.
+model DeliveryCodCollection {
+  id             String   @id @default(uuid())
+  packageId      String   @unique
+  shipmentId     String
+  assignmentId   String   @unique
+  batchId        String?
+  expectedPaisa  BigInt
+  collectedPaisa BigInt
+  status         String
+  method         String   @default("CASH")
+  collectedById  String
+  collectedAt    DateTime @default(now())
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  package    Package       @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  shipment   Shipment      @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  assignment DeliveryAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  batch      DeliveryBatch? @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  collectedBy User          @relation("CodCollectedBy", fields: [collectedById], references: [id], onDelete: Restrict)
+
+  @@index([collectedById, collectedAt])
+  @@index([batchId])
+  @@schema("app")
+}
+
+/// The return record (docs/return-workflow.md §2): a first-class
+/// workflow linked to the original package/shipment/order — never a
+/// replacement for them, and the original delivery history is never
+/// touched. One OPEN return per package (partial unique index in
+/// the hardening migration; return-workflow rule 6). The return
+/// warehouse is the warehouse that receives the parcel back (the
+/// delivery/destination warehouse for last-mile returns).
+/// `returnNumber` comes from the `return_number_seq` sequence
+/// (RTN-1001…, hardening migration), read inside the creating
+/// transaction like order/shipment numbers.
+model ReturnRequest {
+  id                    String    @id @default(uuid())
+  returnNumber          String    @unique
+  packageId             String
+  shipmentId            String
+  orderId               String
+  warehouseId           String
+  reason                String
+  status                String    @default("REQUESTED")
+  requestedById         String
+  authorisedById        String?
+  authorisedAt          DateTime?
+  rejectionReason       String?
+  chargeBearer          String?
+  chargeAmountPaisa     BigInt    @default(0)
+  conditionAtInitiation String    @default("GOOD")
+  conditionAtInspection String?
+  receivedById          String?
+  receivedAt            DateTime?
+  inspectedById         String?
+  inspectedAt           DateTime?
+  completedById         String?
+  completedAt           DateTime?
+  handedToUserId        String?
+  notes                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  package     Package   @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  shipment    Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  warehouse   Warehouse @relation("ReturnWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  requestedBy User      @relation("ReturnRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  authorisedBy User?    @relation("ReturnAuthorisedBy", fields: [authorisedById], references: [id], onDelete: Restrict)
+  receivedBy  User?     @relation("ReturnReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  inspectedBy User?     @relation("ReturnInspectedBy", fields: [inspectedById], references: [id], onDelete: Restrict)
+  completedBy User?     @relation("ReturnCompletedBy", fields: [completedById], references: [id], onDelete: Restrict)
+  handedTo    User?     @relation("ReturnHandedTo", fields: [handedToUserId], references: [id], onDelete: Restrict)
+
+  @@index([packageId, status])
+  @@index([warehouseId, status])
+  @@index([shipmentId])
+  @@schema("app")
+}
+
+/// Second-factor verification attempts against the public detailed
+/// tracking view (docs/security-architecture.md §7: rate-limit
+/// counters are database-backed). Every verification — success or
+/// failure, known or unknown tracking id — writes one row; the
+/// lockout is computed from the failed rows in the cooling window.
+/// The presented phone is stored only as a SHA-256 hash.
+model TrackingAccessAttempt {
+  id         String   @id @default(uuid())
+  trackingId String
+  phoneHash  String
+  succeeded  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([trackingId, createdAt])
   @@schema("app")
 }

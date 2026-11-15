@@ -272,16 +272,36 @@ export interface TransitionOptions {
    *  transfer/trip legs attribute their events to the movement). */
   transferId?: string | null;
   tripId?: string | null;
+  /** Phase 6: delivery legs attribute their events to the assignment. */
+  deliveryAssignmentId?: string | null;
 }
 
 /** Delivery-progress side effects of operational moves (schema doc §5:
- *  the delivery status field tracks the last-mile dimension). */
-const DELIVERY_STATUS_BY_TARGET: Readonly<Record<string, string>> = {
-  DELIVERY_ASSIGNED: "ASSIGNED",
-  OUT_FOR_DELIVERY: "OUT_FOR_DELIVERY",
-  DELIVERY_ATTEMPTED: "ATTEMPTED",
-  DELIVERED: "DELIVERED",
-};
+ *  the delivery status field tracks the last-mile dimension). Keyed by
+ *  (from, to): the return/release edges into READY_FOR_DELIVERY mean
+ *  different things depending on where the parcel came from — a
+ *  pre-pickup release resets the final-mile state, a return scan
+ *  after attempts keeps ATTEMPTED truthful, and a return scan with no
+ *  attempt recorded marks the run FAILED for that parcel. */
+function deliveryStatusFor(from: string, to: string): string | undefined {
+  switch (to) {
+    case "DELIVERY_ASSIGNED":
+      return "ASSIGNED";
+    case "OUT_FOR_DELIVERY":
+      return "OUT_FOR_DELIVERY";
+    case "DELIVERY_ATTEMPTED":
+      return "ATTEMPTED";
+    case "DELIVERED":
+      return "DELIVERED";
+    case "READY_FOR_DELIVERY":
+      if (from === "DELIVERY_ASSIGNED") return "NOT_STARTED";
+      if (from === "DELIVERY_ATTEMPTED") return "ATTEMPTED";
+      if (from === "OUT_FOR_DELIVERY") return "FAILED";
+      return undefined;
+    default:
+      return undefined;
+  }
+}
 
 export async function transitionPackage(
   actor: ActorContext,
@@ -370,6 +390,7 @@ async function applyTransitionInTx(
   toStatus: OperationalStatus,
   options: TransitionOptions,
 ): Promise<{ updated: PackageRow; eventId: string }> {
+  const deliveryStatus = deliveryStatusFor(pkg.operationalStatus, toStatus);
   const claimed = await tx.package.updateMany({
     where: { id: pkg.id, version: pkg.version, operationalStatus: pkg.operationalStatus },
     data: {
@@ -378,9 +399,7 @@ async function applyTransitionInTx(
       ...(options.warehouseId !== undefined
         ? { currentWarehouseId: options.warehouseId }
         : {}),
-      ...(DELIVERY_STATUS_BY_TARGET[toStatus]
-        ? { deliveryStatus: DELIVERY_STATUS_BY_TARGET[toStatus] }
-        : {}),
+      ...(deliveryStatus ? { deliveryStatus } : {}),
     },
   });
   if (claimed.count !== 1) {
@@ -405,6 +424,7 @@ async function applyTransitionInTx(
       idempotencyKey: options.idempotencyKey ?? null,
       transferId: options.transferId ?? null,
       tripId: options.tripId ?? null,
+      deliveryAssignmentId: options.deliveryAssignmentId ?? null,
     },
   });
   await rollupShipmentStatus(tx, pkg.shipmentId);

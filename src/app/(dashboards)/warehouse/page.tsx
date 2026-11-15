@@ -13,6 +13,7 @@ import { ZonesPanel } from "@/components/warehouses/ZonesPanel";
 import { WarehouseBookingsPanel } from "@/components/bookings/pages";
 import { WarehouseOpsHomePanel } from "@/components/warehouse-ops/pages";
 import { TransfersHomePanel } from "@/components/transfers/pages";
+import { DeliveriesHomePanel } from "@/components/deliveries/pages";
 
 /**
  * Warehouse Admin dashboard: the actor's OWN warehouse(s) only — real
@@ -97,6 +98,7 @@ export default async function Page() {
 
       <WarehouseOpsHomePanel actor={actor} basePath="/warehouse" />
       <TransfersHomePanel actor={actor} basePath="/warehouse" />
+      <DeliveriesHomePanel actor={actor} basePath="/warehouse" />
       <WarehouseBookingsPanel actor={actor} basePath="/warehouse" />
     </div>
   );

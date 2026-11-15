@@ -93,6 +93,20 @@ export const PACKAGE_TRANSITIONS: readonly PackageTransition[] = [
   T("DELIVERY_ATTEMPTED", "OUT_FOR_DELIVERY", "reattempt_delivery", "delivery.confirm"),
   T("OUT_FOR_DELIVERY", "DELIVERED", "confirm_delivery", "delivery.confirm"),
   T("DELIVERY_ATTEMPTED", "DELIVERED", "confirm_delivery", "delivery.confirm"),
+  // Pre-pickup release (Phase 6): an assignment cancelled before the
+  // rider takes custody — or superseded by a dispatcher release —
+  // returns the parcel to the delivery pool. The parcel never left
+  // warehouse custody, so this is a defined release path (rule T10),
+  // not a backwards edit; it exists only before OUT_FOR_DELIVERY.
+  T("DELIVERY_ASSIGNED", "READY_FOR_DELIVERY", "release_delivery_assignment", "delivery.assign"),
+  // Warehouse return scan (Phase 6, delivery-workflow.md §8 close-out):
+  // an undelivered parcel is scanned back into the destination
+  // warehouse at the end of the rider's run — inventory reopens and
+  // custody returns to the warehouse. From OUT_FOR_DELIVERY when no
+  // attempt was recorded, from DELIVERY_ATTEMPTED after failed
+  // attempts. Redelivery re-enters via a fresh assignment.
+  T("OUT_FOR_DELIVERY", "READY_FOR_DELIVERY", "delivery_return_scan", "package.receive"),
+  T("DELIVERY_ATTEMPTED", "READY_FOR_DELIVERY", "delivery_return_scan", "package.receive"),
 ];
 
 export function findTransition(

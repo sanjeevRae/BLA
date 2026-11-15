@@ -1,12 +1,19 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db/prisma";
 import { AuthorizationError, type ActorContext } from "@/lib/auth/actor";
 import { NotFoundError } from "@/lib/errors";
 import { publicStatusLabel } from "@/lib/bookings/lifecycle";
+import { normalizePhone } from "@/lib/bookings/phone";
 import { isValidTrackingId } from "@/lib/bookings/tracking";
+import {
+  TRACKING_DETAIL_LOCK_MS,
+  TRACKING_DETAIL_MAX_FAILURES,
+} from "@/lib/deliveries/domain";
 import { auditAccessDenied, pageArgs, pageMeta } from "@/server/services/scoping";
 import {
   packageInclude,
@@ -291,5 +298,145 @@ export async function getPublicTracking(trackingId: string): Promise<PublicTrack
         label: publicStatusLabel(e.newStatus as string),
         occurredAt: e.occurredAt.toISOString(),
       })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Detailed public tracking — SECOND FACTOR (security-architecture §7,
+// roadmap Phase 6). The basic projection above stays available with
+// the tracking code alone. The DETAILED timeline additionally
+// requires the recipient phone number on the package record (exact
+// match after the same normalisation used at booking). Every failure
+// mode — unknown code, wrong phone, locked — throws the SAME
+// NotFoundError so the responses are indistinguishable, and every
+// failure is recorded (TrackingAccessAttempt + an audit row with no
+// actor). After TRACKING_DETAIL_MAX_FAILURES failures inside the
+// cooling window the detailed view locks for that tracking code.
+// No financial data (COD amounts, charges) is ever exposed here.
+// ---------------------------------------------------------------------------
+
+export interface DetailedTrackingView extends PublicTrackingView {
+  recipientName: string;
+  timeline: {
+    status: string;
+    label: string;
+    occurredAt: string;
+    warehouseCity: string | null;
+  }[];
+  proofOfDelivery: {
+    deliveredAt: string;
+    receivedByName: string | null;
+    method: string;
+  } | null;
+}
+
+const DETAILED_TRACKING_DENIAL =
+  "Tracking details are not available for this tracking code and phone number";
+
+export async function getDetailedTracking(
+  trackingId: string,
+  phone: string,
+): Promise<DetailedTrackingView> {
+  const normalized = normalizePhone(typeof phone === "string" ? phone : "");
+  const phoneHash = createHash("sha256").update(normalized).digest("hex");
+
+  const deny = async (packageId: string | null, reason: string): Promise<never> => {
+    await prisma.trackingAccessAttempt.create({
+      data: { trackingId, phoneHash, succeeded: false },
+    });
+    await prisma.auditLog.create({
+      data: {
+        actorId: null,
+        actorRole: null,
+        action: "tracking.detailed_access_denied",
+        entityType: "Package",
+        entityId: packageId,
+        after: { trackingId, reason },
+      },
+    });
+    throw new NotFoundError(DETAILED_TRACKING_DENIAL);
+  };
+
+  const failures = await prisma.trackingAccessAttempt.count({
+    where: {
+      trackingId,
+      succeeded: false,
+      createdAt: { gt: new Date(Date.now() - TRACKING_DETAIL_LOCK_MS) },
+    },
+  });
+  if (failures >= TRACKING_DETAIL_MAX_FAILURES) {
+    return deny(null, "locked");
+  }
+  if (!isValidTrackingId(trackingId) || normalized.length === 0) {
+    return deny(null, "credentials_unusable");
+  }
+  const pkg = await prisma.package.findUnique({
+    where: { trackingId },
+    select: {
+      id: true,
+      trackingId: true,
+      operationalStatus: true,
+      deliveryCity: true,
+      deliveryDistrict: true,
+      recipientName: true,
+      recipientPhone: true,
+      createdAt: true,
+      updatedAt: true,
+      shipment: {
+        select: { originWarehouse: { select: { city: true } } },
+      },
+    },
+  });
+  if (!pkg) {
+    return deny(null, "unknown_tracking_id");
+  }
+  if (normalizePhone(pkg.recipientPhone) !== normalized) {
+    return deny(pkg.id, "phone_mismatch");
+  }
+
+  await prisma.trackingAccessAttempt.create({
+    data: { trackingId, phoneHash, succeeded: true },
+  });
+  const [events, pod] = await Promise.all([
+    prisma.trackingEvent.findMany({
+      where: { packageId: pkg.id },
+      orderBy: { occurredAt: "asc" },
+      select: {
+        newStatus: true,
+        occurredAt: true,
+        warehouse: { select: { city: true } },
+      },
+    }),
+    prisma.proofOfDelivery.findFirst({
+      where: { packageId: pkg.id, supersededById: null },
+      orderBy: { deliveredAt: "desc" },
+      select: { deliveredAt: true, receivedByName: true, method: true },
+    }),
+  ]);
+  return {
+    trackingId: pkg.trackingId,
+    status: pkg.operationalStatus,
+    statusLabel: publicStatusLabel(pkg.operationalStatus),
+    originCity: pkg.shipment.originWarehouse.city,
+    destinationCity: pkg.deliveryCity,
+    destinationDistrict: pkg.deliveryDistrict,
+    bookedAt: pkg.createdAt.toISOString(),
+    lastUpdateAt: pkg.updatedAt.toISOString(),
+    recipientName: pkg.recipientName,
+    timeline: events
+      .filter((e) => e.newStatus)
+      .map((e) => ({
+        status: e.newStatus as string,
+        label: publicStatusLabel(e.newStatus as string),
+        occurredAt: e.occurredAt.toISOString(),
+        warehouseCity: e.warehouse?.city ?? null,
+      })),
+    proofOfDelivery: pod
+      ? {
+          deliveredAt: pod.deliveredAt.toISOString(),
+          receivedByName: pod.receivedByName,
+          method: pod.method,
+        }
+      : null,
   };
 }
