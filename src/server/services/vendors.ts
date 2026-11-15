@@ -213,20 +213,37 @@ export async function updateVendor(
   const data = parse(updateVendorSchema, input);
   const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
   if (!vendor) throw new NotFoundError("Vendor not found");
-  const updated = await prisma.vendor.update({
-    where: { id: vendorId },
-    data: {
-      ...(data.businessName !== undefined ? { businessName: data.businessName } : {}),
-      ...(data.registrationNumber !== undefined ? { registrationNumber: data.registrationNumber } : {}),
-      ...(data.contactName !== undefined ? { contactName: data.contactName } : {}),
-      ...(data.email !== undefined ? { email: data.email } : {}),
-      ...(data.phone !== undefined ? { phone: data.phone } : {}),
-      ...(data.billingPreference !== undefined ? { billingPreference: data.billingPreference } : {}),
-      ...(data.creditLimitPaisa !== undefined
-        ? { creditLimitPaisa: data.creditLimitPaisa ? BigInt(data.creditLimitPaisa) : null }
-        : {}),
-      ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.vendor.update({
+      where: { id: vendorId },
+      data: {
+        ...(data.businessName !== undefined ? { businessName: data.businessName } : {}),
+        ...(data.registrationNumber !== undefined ? { registrationNumber: data.registrationNumber } : {}),
+        ...(data.contactName !== undefined ? { contactName: data.contactName } : {}),
+        ...(data.email !== undefined ? { email: data.email } : {}),
+        ...(data.phone !== undefined ? { phone: data.phone } : {}),
+        ...(data.billingPreference !== undefined ? { billingPreference: data.billingPreference } : {}),
+        ...(data.creditLimitPaisa !== undefined
+          ? { creditLimitPaisa: data.creditLimitPaisa ? BigInt(data.creditLimitPaisa) : null }
+          : {}),
+        ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+      },
+    });
+    if (data.isActive === false) {
+      // Deactivation cuts vendor portal access immediately (P3-4):
+      // kill the vendor users' sessions, mirroring the verification
+      // lifecycle's handling of exits from APPROVED.
+      const links = await tx.vendorUser.findMany({
+        where: { vendorId, isActive: true },
+        select: { userId: true },
+      });
+      if (links.length > 0) {
+        await tx.session.deleteMany({
+          where: { userId: { in: links.map((l) => l.userId) } },
+        });
+      }
+    }
+    return row;
   });
   await prisma.auditLog.create({
     data: {
@@ -314,8 +331,11 @@ export async function setVendorVerificationStatus(
           : {}),
       },
     });
-    if (data.target === "SUSPENDED") {
-      // Suspension kills the vendor users' sessions immediately.
+    if (current === "APPROVED" && data.target !== "APPROVED") {
+      // Leaving APPROVED (suspend / reject / deactivate) kills the
+      // vendor users' sessions immediately (P3-4). Combined with
+      // getActorContext resolving vendor links only for APPROVED
+      // vendors, a fresh login no longer restores portal access.
       const userIds = vendor.users.map((u) => u.userId);
       if (userIds.length > 0) {
         await tx.session.deleteMany({ where: { userId: { in: userIds } } });

@@ -71,9 +71,16 @@ export async function getActorContext(): Promise<ActorContext | null> {
   // VendorUser row on an active vendor) and the customer record linked
   // to this login. Resolved from the database on every request, never
   // from client input (security doc §3.3).
+  // P3-4: the vendor link resolves only while the vendor is APPROVED —
+  // a suspended / rejected / not-yet-approved vendor's users keep their
+  // login and roles but lose all vendor portal data immediately.
   const [vendorLink, customerProfile] = await Promise.all([
     prisma.vendorUser.findFirst({
-      where: { userId: user.id, isActive: true, vendor: { isActive: true } },
+      where: {
+        userId: user.id,
+        isActive: true,
+        vendor: { isActive: true, verificationStatus: "APPROVED" },
+      },
       orderBy: { createdAt: "asc" },
     }),
     prisma.customer.findUnique({ where: { userId: user.id } }),

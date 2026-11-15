@@ -128,17 +128,25 @@ export async function listPackages(
     await auditAccessDenied(actor, "Package", { reason: "no_package_read_scope" });
     throw new AuthorizationError("You do not have access to packages");
   }
+  // P3-1: scope and filters are composed with AND, never spread into
+  // one object — the warehouse scope is an OR clause, and a spread
+  // search OR would overwrite it, silently dropping the tenant filter
+  // and leaking every tenant's packages.
   const where: Prisma.PackageWhereInput = {
-    ...scope,
-    ...(query.status ? { operationalStatus: query.status } : {}),
-    ...(query.search
-      ? {
-          OR: [
-            { trackingId: { contains: query.search, mode: "insensitive" } },
-            { recipientName: { contains: query.search, mode: "insensitive" } },
-          ],
-        }
-      : {}),
+    AND: [
+      scope,
+      ...(query.status ? [{ operationalStatus: query.status }] : []),
+      ...(query.search
+        ? [
+            {
+              OR: [
+                { trackingId: { contains: query.search, mode: "insensitive" } },
+                { recipientName: { contains: query.search, mode: "insensitive" } },
+              ],
+            } as Prisma.PackageWhereInput,
+          ]
+        : []),
+    ],
   };
   const [rows, total] = await Promise.all([
     prisma.package.findMany({ where, orderBy: { createdAt: "desc" }, skip, take, include: packageInclude }),

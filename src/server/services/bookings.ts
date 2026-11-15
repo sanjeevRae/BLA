@@ -678,19 +678,31 @@ export async function listBookings(
     await auditAccessDenied(actor, "Order", { reason: "no_booking_read_scope" });
     throw new AuthorizationError("You do not have access to bookings");
   }
+  // P3-1: scope and filters are composed with AND, never spread into
+  // one object — for customer/warehouse actors the scope itself is an
+  // OR clause, and a spread search OR would overwrite it, silently
+  // dropping the tenant filter and leaking every tenant's bookings.
   const where: Prisma.OrderWhereInput = {
-    ...scope,
-    ...(query.status ? { status: query.status } : {}),
-    ...(query.approvalStatus ? { approvalStatus: query.approvalStatus } : {}),
-    ...(query.search
-      ? {
-          OR: [
-            { orderNumber: { contains: query.search, mode: "insensitive" } },
-            { senderName: { contains: query.search, mode: "insensitive" } },
-            { packages: { some: { trackingId: { contains: query.search, mode: "insensitive" } } } },
-          ],
-        }
-      : {}),
+    AND: [
+      scope,
+      ...(query.status ? [{ status: query.status }] : []),
+      ...(query.approvalStatus ? [{ approvalStatus: query.approvalStatus }] : []),
+      ...(query.search
+        ? [
+            {
+              OR: [
+                { orderNumber: { contains: query.search, mode: "insensitive" } },
+                { senderName: { contains: query.search, mode: "insensitive" } },
+                {
+                  packages: {
+                    some: { trackingId: { contains: query.search, mode: "insensitive" } },
+                  },
+                },
+              ],
+            } as Prisma.OrderWhereInput,
+          ]
+        : []),
+    ],
   };
   const [rows, total] = await Promise.all([
     prisma.order.findMany({

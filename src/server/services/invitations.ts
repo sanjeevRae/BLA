@@ -165,7 +165,9 @@ export async function createInvitation(
       );
     }
     vendorInviteId = vendor.id;
-    vendorInviteRole = parsed.data.vendorRole ?? "OWNER";
+    // P3-9: an unspecified sub-role defaults to the least-privileged
+    // booking role — OWNER must always be granted explicitly.
+    vendorInviteRole = parsed.data.vendorRole ?? "BOOKING_STAFF";
   }
 
   // P2-1: scoped inviters (no user.manage) may invite WAREHOUSE_STAFF
@@ -420,11 +422,11 @@ export async function acceptInvitation(
       // organisation with the inviter-fixed sub-role (Phase 3).
       await tx.vendorUser.upsert({
         where: { vendorId_userId: { vendorId: invitation.vendorId, userId: user.id } },
-        update: { isActive: true, vendorRole: invitation.vendorRole ?? "OWNER" },
+        update: { isActive: true, vendorRole: invitation.vendorRole ?? "BOOKING_STAFF" },
         create: {
           vendorId: invitation.vendorId,
           userId: user.id,
-          vendorRole: invitation.vendorRole ?? "OWNER",
+          vendorRole: invitation.vendorRole ?? "BOOKING_STAFF",
           invitedById: invitation.invitedById,
         },
       });
