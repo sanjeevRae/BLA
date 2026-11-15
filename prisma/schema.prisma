@@ -61,6 +61,15 @@ model User {
   packagesWeighed         Package[]                   @relation("PackageWeightMeasuredBy")
   labelsPrinted           PackageLabel[]              @relation("PackageLabelPrintedBy")
   trackingEventsActed     TrackingEvent[]             @relation("TrackingEventActor")
+  inventoryReceived       InventoryRecord[]           @relation("InventoryReceivedBy")
+  inventoryReleased       InventoryRecord[]           @relation("InventoryReleasedBy")
+  inventoryMovementsActed InventoryMovement[]         @relation("InventoryMovementActor")
+  custodiesHeld           PackageCustody[]            @relation("CustodyUser")
+  stockMovementsPerformed StockMovement[]             @relation("StockMovementPerformedBy")
+  handoversInitiated      HandoverBatch[]             @relation("HandoverInitiatedBy")
+  handoversConfirmed      HandoverBatch[]             @relation("HandoverConfirmedBy")
+  handoverBatchesFrom     HandoverBatch[]             @relation("HandoverBatchFromUser")
+  handoverBatchesTo       HandoverBatch[]             @relation("HandoverBatchToUser")
 
   @@index([phone])
   @@schema("app")
@@ -300,6 +309,15 @@ model Warehouse {
   shipmentsDest     Shipment[]                  @relation("ShipmentDestinationWarehouse")
   packagesCurrent   Package[]                   @relation("PackageCurrentWarehouse")
   trackingEvents    TrackingEvent[]
+  inventoryRecords  InventoryRecord[]
+  movementsFrom     InventoryMovement[]         @relation("MovementFromWarehouse")
+  movementsTo       InventoryMovement[]         @relation("MovementToWarehouse")
+  packageCustodies  PackageCustody[]
+  stockItems        StockItem[]
+  stockMovements    StockMovement[]
+  handoverBatches   HandoverBatch[]             @relation("HandoverBatchWarehouse")
+  handoverBatchesFrom HandoverBatch[]           @relation("HandoverBatchFromWarehouse")
+  handoverBatchesTo   HandoverBatch[]           @relation("HandoverBatchToWarehouse")
 
   @@index([district])
   @@index([status])
@@ -365,6 +383,11 @@ model StorageLocation {
   updatedAt        DateTime @updatedAt
 
   zone WarehouseZone @relation(fields: [zoneId], references: [id], onDelete: Restrict)
+
+  inventoryRecords InventoryRecord[]
+  movementsFrom    InventoryMovement[] @relation("MovementFromLocation")
+  movementsTo      InventoryMovement[] @relation("MovementToLocation")
+  packageCustodies PackageCustody[]
 
   @@index([zoneId])
   @@schema("app")
@@ -852,6 +875,10 @@ model Package {
   items             PackageItem[]
   labels            PackageLabel[]
   trackingEvents    TrackingEvent[]
+  inventoryRecords  InventoryRecord[]
+  inventoryMovements InventoryMovement[]
+  custodies         PackageCustody[]
+  handoverLines     CustodyHandover[]
 
   @@index([shipmentId])
   @@index([currentWarehouseId, operationalStatus])
@@ -929,10 +956,236 @@ model TrackingEvent {
   actor     User?      @relation("TrackingEventActor", fields: [actorId], references: [id], onDelete: Restrict)
   warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
 
+  inventoryRecords InventoryRecord[] @relation("InventoryReceivingEvent")
+  inventoryMovements InventoryMovement[]
+  packageCustodies PackageCustody[]
+
   @@index([packageId, occurredAt])
   @@index([shipmentId, occurredAt])
   @@index([orderId, occurredAt])
   @@index([actorId, createdAt])
   @@index([eventType, createdAt])
+  @@schema("app")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — Warehouse operations: parcel inventory, movements, custody,
+// handovers, and the strictly separate supplies inventory
+// (docs/database-schema.md §6, docs/inventory-and-custody.md).
+// ---------------------------------------------------------------------------
+
+/// Parcel inventory — one row per package per continuous warehouse stay.
+/// `releasedAt = null` means physically there now. A package can never
+/// be in two warehouses' stock at once: a partial unique index on
+/// (packageId) WHERE releasedAt IS NULL lives in the Phase 4 hardening
+/// migration (Prisma cannot express partial indexes). Inventory exists
+/// only because a receiving scan created it (invariant I3): the
+/// receiving TrackingEvent is a mandatory FK.
+model InventoryRecord {
+  id                 String    @id @default(uuid())
+  packageId          String
+  warehouseId        String
+  storageLocationId  String?
+  receivingEventId   String
+  receivedAt         DateTime  @default(now())
+  receivedById       String
+  conditionOnArrival String    @default("GOOD")
+  releasedAt         DateTime?
+  releasedById       String?
+  releaseReason      String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  package         Package          @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  warehouse       Warehouse        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  storageLocation StorageLocation? @relation(fields: [storageLocationId], references: [id], onDelete: Restrict)
+  receivingEvent  TrackingEvent    @relation("InventoryReceivingEvent", fields: [receivingEventId], references: [id], onDelete: Restrict)
+  receivedBy      User             @relation("InventoryReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  releasedBy      User?            @relation("InventoryReleasedBy", fields: [releasedById], references: [id], onDelete: Restrict)
+  movements       InventoryMovement[]
+
+  @@index([warehouseId, releasedAt])
+  @@index([packageId, receivedAt])
+  @@index([storageLocationId, releasedAt])
+  @@schema("app")
+}
+
+/// Append-only record of every physical/logical parcel movement inside
+/// or out of a warehouse (schema doc §6 movement vocabulary). No
+/// `updatedAt`; protected by the append-only trigger like TrackingEvent.
+model InventoryMovement {
+  id                String   @id @default(uuid())
+  packageId         String
+  inventoryRecordId String?
+  type              String
+  fromWarehouseId   String?
+  toWarehouseId     String?
+  fromLocationId    String?
+  toLocationId      String?
+  actorId           String
+  reason            String?
+  trackingEventId   String?
+  createdAt         DateTime @default(now())
+
+  package         Package          @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  inventoryRecord InventoryRecord? @relation(fields: [inventoryRecordId], references: [id], onDelete: Restrict)
+  fromWarehouse   Warehouse?       @relation("MovementFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  toWarehouse     Warehouse?       @relation("MovementToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+  fromLocation    StorageLocation? @relation("MovementFromLocation", fields: [fromLocationId], references: [id], onDelete: Restrict)
+  toLocation      StorageLocation? @relation("MovementToLocation", fields: [toLocationId], references: [id], onDelete: Restrict)
+  actor           User             @relation("InventoryMovementActor", fields: [actorId], references: [id], onDelete: Restrict)
+  trackingEvent   TrackingEvent?   @relation(fields: [trackingEventId], references: [id], onDelete: Restrict)
+
+  @@index([packageId, createdAt])
+  @@index([toWarehouseId, createdAt])
+  @@schema("app")
+}
+
+/// The custody chain — who is accountable for a package right now is
+/// the open row (`endedAt IS NULL`); history is the closed rows. Rows
+/// are closed, never edited afterwards. A partial unique index on
+/// (packageId) WHERE endedAt IS NULL (hardening migration) makes
+/// "exactly one accountable custodian" a database fact, and a CHECK
+/// constraint enforces that exactly the fields matching custodianType
+/// are set.
+model PackageCustody {
+  id                String    @id @default(uuid())
+  packageId         String
+  custodianType     String
+  custodianUserId   String?
+  warehouseId       String?
+  storageLocationId String?
+  startedAt         DateTime  @default(now())
+  endedAt           DateTime?
+  handoverId        String?
+  trackingEventId   String?
+  createdAt         DateTime  @default(now())
+
+  package         Package          @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  custodianUser   User?            @relation("CustodyUser", fields: [custodianUserId], references: [id], onDelete: Restrict)
+  warehouse       Warehouse?       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  storageLocation StorageLocation? @relation(fields: [storageLocationId], references: [id], onDelete: Restrict)
+  handover        CustodyHandover? @relation("CustodyBeganWithHandover", fields: [handoverId], references: [id], onDelete: Restrict)
+  trackingEvent   TrackingEvent?   @relation(fields: [trackingEventId], references: [id], onDelete: Restrict)
+  handoverLinesFrom CustodyHandover[] @relation("HandoverFromCustody")
+  handoverLinesTo   CustodyHandover[] @relation("HandoverToCustody")
+
+  @@index([packageId, endedAt])
+  @@index([custodianUserId, endedAt])
+  @@index([warehouseId, endedAt])
+  @@schema("app")
+}
+
+/// One physical handover act covering many packages (schema doc §6).
+/// `warehouseId` is the operational context warehouse — every Phase 4
+/// batch happens inside one warehouse, and scoping/listing key off it.
+/// If confirmedCount != expectedCount when the batch is closed, the
+/// batch goes DISPUTED and the shortfall is audit/event recorded; the
+/// Incident record itself lands in Phase 8. `evidenceFileId` from the
+/// schema doc is deferred with FileAsset (platform phase), as in
+/// Phase 3.
+model HandoverBatch {
+  id                String    @id @default(uuid())
+  warehouseId       String
+  fromCustodianType String
+  fromUserId        String?
+  fromWarehouseId   String?
+  toCustodianType   String
+  toUserId          String?
+  toWarehouseId     String?
+  expectedCount     Int
+  confirmedCount    Int       @default(0)
+  status            String    @default("PENDING")
+  initiatedById     String
+  confirmedById     String?
+  createdAt         DateTime  @default(now())
+  confirmedAt       DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  warehouse     Warehouse       @relation("HandoverBatchWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  fromUser      User?           @relation("HandoverBatchFromUser", fields: [fromUserId], references: [id], onDelete: Restrict)
+  fromWarehouse Warehouse?      @relation("HandoverBatchFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  toUser        User?           @relation("HandoverBatchToUser", fields: [toUserId], references: [id], onDelete: Restrict)
+  toWarehouse   Warehouse?      @relation("HandoverBatchToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+  initiatedBy   User            @relation("HandoverInitiatedBy", fields: [initiatedById], references: [id], onDelete: Restrict)
+  confirmedBy   User?           @relation("HandoverConfirmedBy", fields: [confirmedById], references: [id], onDelete: Restrict)
+  lines         CustodyHandover[]
+
+  @@index([warehouseId, status])
+  @@index([status, createdAt])
+  @@schema("app")
+}
+
+/// One package's line inside a HandoverBatch. Custody moves only when
+/// the receiver confirms the line: the old custody closes and the new
+/// one opens (pointing back at this line via `handoverId`).
+model CustodyHandover {
+  id            String    @id @default(uuid())
+  batchId       String
+  packageId     String
+  fromCustodyId String
+  toCustodyId   String?
+  status        String    @default("PENDING")
+  confirmedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  batch          HandoverBatch  @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  package        Package        @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  fromCustody    PackageCustody @relation("HandoverFromCustody", fields: [fromCustodyId], references: [id], onDelete: Restrict)
+  toCustody      PackageCustody? @relation("HandoverToCustody", fields: [toCustodyId], references: [id], onDelete: Restrict)
+  beganCustodies PackageCustody[] @relation("CustodyBeganWithHandover")
+
+  @@unique([batchId, packageId])
+  @@index([packageId])
+  @@schema("app")
+}
+
+/// Supplies catalogue — company consumables (boxes, tape, labels),
+/// kept strictly separate from parcel inventory (schema doc §6):
+/// no tracking IDs, no custody, no customer linkage. quantityOnHand
+/// is maintained transactionally from StockMovement rows and can
+/// never go negative (CHECK in the hardening migration).
+model StockItem {
+  id             String   @id @default(uuid())
+  warehouseId    String
+  sku            String
+  name           String
+  unit           String   @default("PCS")
+  quantityOnHand Int      @default(0)
+  reorderLevel   Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  warehouse Warehouse       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  movements StockMovement[]
+
+  @@unique([warehouseId, sku])
+  @@index([warehouseId, isActive])
+  @@schema("app")
+}
+
+/// Append-only supplies ledger. Before/after quantity snapshots make
+/// the ledger self-auditing: every row proves the running balance.
+model StockMovement {
+  id             String   @id @default(uuid())
+  stockItemId    String
+  warehouseId    String
+  type           String
+  quantityDelta  Int
+  quantityBefore Int
+  quantityAfter  Int
+  reason         String?
+  reference      String?
+  performedById  String
+  createdAt      DateTime @default(now())
+
+  stockItem   StockItem @relation(fields: [stockItemId], references: [id], onDelete: Restrict)
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  performedBy User      @relation("StockMovementPerformedBy", fields: [performedById], references: [id], onDelete: Restrict)
+
+  @@index([stockItemId, createdAt])
+  @@index([warehouseId, createdAt])
   @@schema("app")
 }

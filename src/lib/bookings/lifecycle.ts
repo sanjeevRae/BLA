@@ -61,6 +61,10 @@ export const PACKAGE_TRANSITIONS: readonly PackageTransition[] = [
   T("PICKUP_IN_PROGRESS", "PICKED_UP", "confirm_pickup", "pickup.confirm"),
   // Origin warehouse (Phase 4)
   T("PICKED_UP", "RECEIVED_AT_ORIGIN", "receive_at_origin", "package.receive"),
+  // Counter drop-off (lifecycle doc rule T1): a vendor/staff drop-off at
+  // the origin warehouse counter is received by WA/WS scan without a
+  // prior pickup leg — the receiving scan IS the intake event.
+  T("BOOKED", "RECEIVED_AT_ORIGIN", "receive_at_origin", "package.receive"),
   T("RECEIVED_AT_ORIGIN", "INSPECTION_PENDING", "move_to_inspection", "package.inspect"),
   T("INSPECTION_PENDING", "PROCESSING", "start_inspection", "package.inspect"),
   T("PROCESSING", "SORTED", "complete_sorting", "package.sort"),

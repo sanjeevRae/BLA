@@ -678,15 +678,33 @@ export async function updateWarehouse(
 }
 
 /**
- * Blockers that prevent deactivation (workflow §6). Inventory, transfer
- * and trip checks join here in Phases 4–5; in Phase 2 no operational
- * tables reference a warehouse yet, so the list is empty by construction.
+ * Blockers that prevent deactivation (workflow §6). Phase 4 wires the
+ * inventory/custody checks the Phase 2 review required: a warehouse
+ * still holding parcels — open InventoryRecords or open WAREHOUSE
+ * custodies — cannot be deactivated. Transfer and trip checks join
+ * here in Phase 5.
  */
 export async function collectDeactivationBlockers(
   warehouseId: string,
 ): Promise<string[]> {
-  void warehouseId; // consumed by the Phase 4–5 checks
-  return [];
+  const [openInventory, openCustodies] = await Promise.all([
+    prisma.inventoryRecord.count({ where: { warehouseId, releasedAt: null } }),
+    prisma.packageCustody.count({
+      where: { warehouseId, custodianType: "WAREHOUSE", endedAt: null },
+    }),
+  ]);
+  const blockers: string[] = [];
+  if (openInventory > 0) {
+    blockers.push(
+      `${openInventory} package(s) still in stock (open inventory records)`,
+    );
+  }
+  if (openCustodies > 0) {
+    blockers.push(
+      `${openCustodies} package(s) still in this warehouse's custody`,
+    );
+  }
+  return blockers;
 }
 
 export async function setWarehouseStatus(

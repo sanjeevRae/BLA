@@ -330,43 +330,8 @@ export async function transitionPackage(
   }
 
   const updated = await prisma.$transaction(async (tx) => {
-    const claimed = await tx.package.updateMany({
-      where: { id: packageId, version: pkg.version, operationalStatus: pkg.operationalStatus },
-      data: {
-        operationalStatus: toStatus,
-        version: { increment: 1 },
-        ...(options.warehouseId !== undefined
-          ? { currentWarehouseId: options.warehouseId }
-          : {}),
-        ...(DELIVERY_STATUS_BY_TARGET[toStatus]
-          ? { deliveryStatus: DELIVERY_STATUS_BY_TARGET[toStatus] }
-          : {}),
-      },
-    });
-    if (claimed.count !== 1) {
-      throw new ConflictError(
-        "The package changed while this operation was running — reload and try again",
-      );
-    }
-    await tx.trackingEvent.create({
-      data: {
-        packageId,
-        shipmentId: pkg.shipmentId,
-        orderId: pkg.orderId,
-        subjectType: "PACKAGE",
-        eventType: toStatus,
-        previousStatus: pkg.operationalStatus,
-        newStatus: toStatus,
-        actorId: actor.userId,
-        actorRole: actor.primaryRole,
-        warehouseId: options.warehouseId ?? pkg.currentWarehouseId,
-        notes: options.notes ?? null,
-        source: options.source ?? "WEB",
-        idempotencyKey: options.idempotencyKey ?? null,
-      },
-    });
-    await rollupShipmentStatus(tx, pkg.shipmentId);
-    return tx.package.findUniqueOrThrow({ where: { id: packageId }, include: packageInclude });
+    const applied = await applyTransitionInTx(tx, actor, pkg, toStatus, options);
+    return applied.updated;
   });
 
   if (toStatus === "CANCELLED") {
@@ -383,4 +348,123 @@ export async function transitionPackage(
     });
   }
   return toPackageView(updated);
+}
+
+// ---------------------------------------------------------------------------
+// Transaction-composable transitions (Phase 4+)
+// ---------------------------------------------------------------------------
+
+/**
+ * The shared write core of a transition: optimistic-lock claim,
+ * TrackingEvent, shipment roll-up — inside the caller's transaction.
+ * Throws ConflictError when the version/status claim is lost.
+ */
+async function applyTransitionInTx(
+  tx: Tx,
+  actor: ActorContext,
+  pkg: PackageRow,
+  toStatus: OperationalStatus,
+  options: TransitionOptions,
+): Promise<{ updated: PackageRow; eventId: string }> {
+  const claimed = await tx.package.updateMany({
+    where: { id: pkg.id, version: pkg.version, operationalStatus: pkg.operationalStatus },
+    data: {
+      operationalStatus: toStatus,
+      version: { increment: 1 },
+      ...(options.warehouseId !== undefined
+        ? { currentWarehouseId: options.warehouseId }
+        : {}),
+      ...(DELIVERY_STATUS_BY_TARGET[toStatus]
+        ? { deliveryStatus: DELIVERY_STATUS_BY_TARGET[toStatus] }
+        : {}),
+    },
+  });
+  if (claimed.count !== 1) {
+    throw new ConflictError(
+      "The package changed while this operation was running — reload and try again",
+    );
+  }
+  const event = await tx.trackingEvent.create({
+    data: {
+      packageId: pkg.id,
+      shipmentId: pkg.shipmentId,
+      orderId: pkg.orderId,
+      subjectType: "PACKAGE",
+      eventType: toStatus,
+      previousStatus: pkg.operationalStatus,
+      newStatus: toStatus,
+      actorId: actor.userId,
+      actorRole: actor.primaryRole,
+      warehouseId: options.warehouseId ?? pkg.currentWarehouseId,
+      notes: options.notes ?? null,
+      source: options.source ?? "WEB",
+      idempotencyKey: options.idempotencyKey ?? null,
+    },
+  });
+  await rollupShipmentStatus(tx, pkg.shipmentId);
+  const updated = await tx.package.findUniqueOrThrow({
+    where: { id: pkg.id },
+    include: packageInclude,
+  });
+  return { updated, eventId: event.id };
+}
+
+export interface TransitionInTxResult {
+  pkg: PackageView;
+  eventId: string | null;
+  transitioned: boolean;
+}
+
+/**
+ * Transaction-composable variant of {@link transitionPackage} for
+ * composite warehouse operations (Phase 4 receiving; Phase 5 transfer
+ * receiving) that must write the status change AND dependent rows
+ * (InventoryRecord, PackageCustody, InventoryMovement) in ONE
+ * transaction — inventory invariant I3: a package is in stock at a
+ * warehouse only because a receiving event exists.
+ *
+ * Differences from `transitionPackage`: invalid edges and missing
+ * permissions THROW (the caller translates/audits in its own context),
+ * and authorization SCOPE over the package (warehouse membership) is
+ * the caller's responsibility — this service checks only the
+ * transition-table edge and its permission, exactly like
+ * `transitionPackage` (Phase 3 review P3-7b).
+ */
+export async function transitionPackageInTx(
+  tx: Tx,
+  actor: ActorContext,
+  packageId: string,
+  toStatus: OperationalStatus,
+  options: TransitionOptions = {},
+): Promise<TransitionInTxResult> {
+  const pkg = await tx.package.findUnique({
+    where: { id: packageId },
+    include: packageInclude,
+  });
+  if (!pkg) throw new NotFoundError("Package not found");
+
+  if (options.idempotencyKey) {
+    const prior = await tx.trackingEvent.findUnique({
+      where: { idempotencyKey: options.idempotencyKey },
+    });
+    if (prior && prior.packageId === packageId) {
+      return { pkg: toPackageView(pkg), eventId: prior.id, transitioned: false };
+    }
+  }
+
+  const transition = findTransition(pkg.operationalStatus, toStatus);
+  if (!transition) {
+    const allowed = allowedTransitionsFrom(pkg.operationalStatus)
+      .map((t) => t.to)
+      .join(", ");
+    throw new ConflictError(
+      `A package in ${pkg.operationalStatus} cannot move to ${toStatus}. Allowed next states: ${allowed || "none (terminal)"}`,
+    );
+  }
+  if (!actor.permissions.has(transition.permission)) {
+    throw new AuthorizationError(`Missing required permission: ${transition.permission}`);
+  }
+
+  const applied = await applyTransitionInTx(tx, actor, pkg, toStatus, options);
+  return { pkg: toPackageView(applied.updated), eventId: applied.eventId, transitioned: true };
 }
