@@ -20,6 +20,7 @@ import {
   vendorPayableAccount,
 } from "@/server/services/finance-ledger";
 import {
+  invoicePaidComponents,
   recomputeInvoiceStatus,
   recomputeOrderPaymentStatus,
 } from "@/server/services/invoices";
@@ -84,6 +85,21 @@ export async function requestRefund(actor: ActorContext, input: unknown) {
     const rows = await tx.$queryRaw<{ id: string }[]>`
       SELECT "id" FROM "app"."Payment" WHERE "id" = ${data.paymentId} FOR UPDATE`;
     if (rows.length === 0) throw new NotFoundError("Payment not found");
+    const payment = await tx.payment.findUnique({
+      where: { id: data.paymentId },
+      select: { payerType: true },
+    });
+    if (!payment) throw new NotFoundError("Payment not found");
+    // Settlement payouts are company money governed by the
+    // settlement itself (Phase 7 review F7): the generic refund
+    // mirror would debit the wrong account and never re-open the
+    // vendor's payable. Corrections go through a settlement-aware
+    // reversal or a financial adjustment instead.
+    if (payment.payerType === "COMPANY") {
+      throw new DomainValidationError(
+        "Company payments (settlement payouts) cannot be refunded through the generic refund path — correct them through a settlement-aware reversal or a financial adjustment",
+      );
+    }
     const remaining = await refundableRemaining(tx, data.paymentId);
     if (data.amountPaisa > remaining) {
       throw new DomainValidationError(
@@ -106,36 +122,52 @@ export async function requestRefund(actor: ActorContext, input: unknown) {
   return serializeRefund(refund);
 }
 
+/** Lock a Refund row inside a transaction and re-read it — the
+ * approve/reject pair must serialize on the row so a racing
+ * decision can never overwrite the other (Phase 7 review F3). */
+async function lockRefund(tx: Tx, refundId: string) {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "app"."Refund" WHERE "id" = ${refundId} FOR UPDATE`;
+  if (rows.length === 0) throw new NotFoundError("Refund not found");
+  const refund = await tx.refund.findUnique({ where: { id: refundId } });
+  if (!refund) throw new NotFoundError("Refund not found");
+  return refund;
+}
+
 export async function approveRefund(actor: ActorContext, refundId: string) {
   await requirePermAudited(actor, "refund.process", "Refund");
-  const refund = await prisma.refund.findUnique({ where: { id: refundId } });
-  if (!refund) throw new NotFoundError("Refund not found");
-  if (refund.status !== "REQUESTED") {
-    throw new ConflictError(`Refund is ${refund.status} and cannot be approved`);
-  }
-  if (refund.requestedById === actor.userId) {
-    throw new DomainValidationError("A refund must be approved by someone other than its requester");
-  }
-  const updated = await prisma.refund.update({
-    where: { id: refundId },
-    data: { status: "APPROVED", approvedById: actor.userId },
+  const updated = await prisma.$transaction(async (tx) => {
+    const refund = await lockRefund(tx, refundId);
+    if (refund.status !== "REQUESTED") {
+      throw new ConflictError(`Refund is ${refund.status} and cannot be approved`);
+    }
+    if (refund.requestedById === actor.userId) {
+      throw new DomainValidationError("A refund must be approved by someone other than its requester");
+    }
+    const row = await tx.refund.update({
+      where: { id: refundId },
+      data: { status: "APPROVED", approvedById: actor.userId },
+    });
+    await auditOps(actor, "refund.approved", "Refund", refundId, {});
+    return row;
   });
-  await auditOps(actor, "refund.approved", "Refund", refundId, {});
   return serializeRefund(updated);
 }
 
 export async function rejectRefund(actor: ActorContext, refundId: string) {
   await requirePermAudited(actor, "refund.process", "Refund");
-  const refund = await prisma.refund.findUnique({ where: { id: refundId } });
-  if (!refund) throw new NotFoundError("Refund not found");
-  if (refund.status !== "REQUESTED" && refund.status !== "APPROVED") {
-    throw new ConflictError(`Refund is ${refund.status} and cannot be rejected`);
-  }
-  const updated = await prisma.refund.update({
-    where: { id: refundId },
-    data: { status: "REJECTED" },
+  const updated = await prisma.$transaction(async (tx) => {
+    const refund = await lockRefund(tx, refundId);
+    if (refund.status !== "REQUESTED" && refund.status !== "APPROVED") {
+      throw new ConflictError(`Refund is ${refund.status} and cannot be rejected`);
+    }
+    const row = await tx.refund.update({
+      where: { id: refundId },
+      data: { status: "REJECTED" },
+    });
+    await auditOps(actor, "refund.rejected", "Refund", refundId, {});
+    return row;
   });
-  await auditOps(actor, "refund.rejected", "Refund", refundId, {});
   return serializeRefund(updated);
 }
 
@@ -155,6 +187,14 @@ export async function processRefund(actor: ActorContext, refundId: string) {
     if (paymentRows.length === 0) throw new NotFoundError("Payment not found");
     const payment = await tx.payment.findUnique({ where: { id: refund.paymentId } });
     if (!payment) throw new NotFoundError("Payment not found");
+    // Backstop for F7: even a refund row created before the guard
+    // (or by another path) must never process against a company
+    // settlement payout.
+    if (payment.payerType === "COMPANY") {
+      throw new DomainValidationError(
+        "Company payments (settlement payouts) cannot be refunded through the generic refund path — correct them through a settlement-aware reversal or a financial adjustment",
+      );
+    }
 
     const processed = await tx.refund.aggregate({
       where: { paymentId: payment.id, status: "PROCESSED" },
@@ -375,6 +415,54 @@ export async function approveAdjustment(actor: ActorContext, adjustmentId: strin
       throw new DomainValidationError("An adjustment must be approved by someone other than its creator (four-eyes)");
     }
 
+    // Cumulative bound re-check under the target's row lock
+    // (Phase 7 review F4): creation bounded a single adjustment,
+    // but several REQUESTED adjustments are created independently —
+    // without re-checking here, two credit notes that each fit the
+    // invoice could both apply past its total (and likewise for
+    // COD write-offs past the collection's shortfall).
+    if (adjustment.targetType === "INVOICE") {
+      const targetRows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "app"."Invoice" WHERE "id" = ${adjustment.targetId} FOR UPDATE`;
+      if (targetRows.length === 0) throw new NotFoundError("Invoice not found");
+      const invoice = await tx.invoice.findUnique({ where: { id: adjustment.targetId } });
+      if (!invoice) throw new NotFoundError("Invoice not found");
+      if (invoice.status === "CANCELLED") {
+        throw new DomainValidationError("A cancelled invoice cannot be adjusted");
+      }
+      const paid = await invoicePaidComponents(tx, invoice.id);
+      const remaining = invoice.totalPaisa - paid.totalPaidPaisa;
+      if (adjustment.amountPaisa > remaining) {
+        throw new DomainValidationError(
+          `Credit note of ${adjustment.amountPaisa} exceeds the invoice's remaining bound ${remaining} (total minus allocations, settlement coverage and applied credit notes)`,
+        );
+      }
+    } else if (adjustment.targetType === "COD_COLLECTION") {
+      const targetRows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "app"."DeliveryCodCollection" WHERE "id" = ${adjustment.targetId} FOR UPDATE`;
+      if (targetRows.length === 0) throw new NotFoundError("COD collection not found");
+      const collection = await tx.deliveryCodCollection.findUnique({
+        where: { id: adjustment.targetId },
+        include: { remittanceLines: { select: { verifiedPaisa: true } } },
+      });
+      if (!collection) throw new NotFoundError("COD collection not found");
+      const verified = collection.remittanceLines.reduce(
+        (s, l) => s + (l.verifiedPaisa ?? BigInt(0)),
+        BigInt(0),
+      );
+      const priorWriteOffs = await tx.financialAdjustment.aggregate({
+        where: { targetType: "COD_COLLECTION", targetId: adjustment.targetId, status: "APPLIED" },
+        _sum: { amountPaisa: true },
+      });
+      const shortfall =
+        collection.collectedPaisa - verified - (priorWriteOffs._sum.amountPaisa ?? BigInt(0));
+      if (adjustment.amountPaisa > shortfall) {
+        throw new DomainValidationError(
+          `Write-off of ${adjustment.amountPaisa} exceeds the collection's remaining unverified shortfall ${shortfall}`,
+        );
+      }
+    }
+
     const journalRef = `ADJ-${adjustment.id}`;
     // Mark APPLIED first: the invoice status recompute below counts
     // this adjustment among the invoice's paid components.
@@ -471,16 +559,26 @@ export async function approveAdjustment(actor: ActorContext, adjustmentId: strin
 
 export async function rejectAdjustment(actor: ActorContext, adjustmentId: string) {
   await requirePermAudited(actor, "finance.approve_adjustment", "FinancialAdjustment");
-  const adjustment = await prisma.financialAdjustment.findUnique({ where: { id: adjustmentId } });
-  if (!adjustment) throw new NotFoundError("Adjustment not found");
-  if (adjustment.status !== "REQUESTED") {
-    throw new ConflictError(`Adjustment is ${adjustment.status} and cannot be rejected`);
-  }
-  const updated = await prisma.financialAdjustment.update({
-    where: { id: adjustmentId },
-    data: { status: "REJECTED", approvedById: actor.userId },
+  // Transactional with a row lock + in-transaction status re-check
+  // (Phase 7 review F3): a reject racing an approve must fail with
+  // a conflict once the approval has committed — never overwrite an
+  // APPLIED adjustment whose journal already stands.
+  const updated = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "app"."FinancialAdjustment" WHERE "id" = ${adjustmentId} FOR UPDATE`;
+    if (rows.length === 0) throw new NotFoundError("Adjustment not found");
+    const adjustment = await tx.financialAdjustment.findUnique({ where: { id: adjustmentId } });
+    if (!adjustment) throw new NotFoundError("Adjustment not found");
+    if (adjustment.status !== "REQUESTED") {
+      throw new ConflictError(`Adjustment is ${adjustment.status} and cannot be rejected`);
+    }
+    const row = await tx.financialAdjustment.update({
+      where: { id: adjustmentId },
+      data: { status: "REJECTED", approvedById: actor.userId },
+    });
+    await auditOps(actor, "finance.adjustment_rejected", "FinancialAdjustment", adjustmentId, {});
+    return row;
   });
-  await auditOps(actor, "finance.adjustment_rejected", "FinancialAdjustment", adjustmentId, {});
   return serializeAdjustment(updated);
 }
 

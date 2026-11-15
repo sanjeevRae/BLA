@@ -22,6 +22,7 @@ import {
   driverCashAccount,
   nextFinanceSequence,
   postJournal,
+  reverseLiveJournalLegs,
   vendorPayableAccount,
 } from "@/server/services/finance-ledger";
 
@@ -40,6 +41,18 @@ import {
  */
 
 type Tx = Prisma.TransactionClient;
+
+/** Roles whose `cod.read` is company-wide (cod-reconciliation §5:
+ * finance and admin read all COD records). Every other cod.read
+ * holder is scoped: riders to themselves, vendors to remittances
+ * covering their own collections, warehouse admins to remittances
+ * handed in at — and riders homed at — their own warehouses
+ * (Phase 7 review F2). */
+const GLOBAL_COD_READ_ROLES: readonly string[] = ["FINANCE", "ADMIN", "SUPER_ADMIN"];
+
+function hasGlobalCodScope(actor: ActorContext): boolean {
+  return actor.roles.some((role) => GLOBAL_COD_READ_ROLES.includes(role));
+}
 
 const moneyString = z
   .string()
@@ -149,12 +162,34 @@ export async function getRiderCodPosition(
     }
     driverId = actor.driverId;
   }
+  // Vendors never see a rider's COD position (F2): their scoped
+  // cod.read covers remittances of their own collections only.
+  if (actor.vendorId) {
+    await auditAccessDenied(actor, "CodRemittance", {
+      entityId: driverIdInput ?? null,
+      reason: "vendor_scope_rider_cod_position",
+    });
+    throw new AuthorizationError("Vendors cannot view rider COD positions");
+  }
   if (!driverId) throw new DomainValidationError("A driverId is required");
   const driver = await prisma.driver.findUnique({
     where: { id: driverId },
-    select: { id: true, userId: true },
+    select: { id: true, userId: true, homeWarehouseId: true },
   });
   if (!driver) throw new NotFoundError("Driver not found");
+  // Warehouse-scoped readers (warehouse admins) see only riders
+  // homed at their own warehouses (F2).
+  if (!actor.driverId && !hasGlobalCodScope(actor)) {
+    if (!driver.homeWarehouseId || !actor.warehouseIds.includes(driver.homeWarehouseId)) {
+      await auditAccessDenied(actor, "CodRemittance", {
+        entityId: driverId,
+        reason: "warehouse_scope_other_warehouse_driver_position",
+      });
+      throw new AuthorizationError(
+        "Warehouse-scoped readers can only view COD positions for riders homed at their own warehouses",
+      );
+    }
+  }
 
   const collections = await prisma.deliveryCodCollection.findMany({
     where: { collectedById: driver.userId },
@@ -301,11 +336,28 @@ export async function submitRemittance(actor: ActorContext, input: unknown) {
       // submission is where Phase 7 first records it in the ledger).
       const driverAccount = await driverCashAccount(tx, driverId);
       for (const collection of collections) {
-        const already = await tx.ledgerTransaction.findUnique({
-          where: { idempotencyKey: `cod-collection:${collection.id}` },
+        // Exactly-once posting (Phase 7 review F1): the guard key
+        // lives on the journal's DEBIT leg (the column is @unique,
+        // so the two legs cannot carry the identical key — the
+        // CREDIT leg carries a suffixed variant). A keyed leg whose
+        // posting was later reversed (rejected remittance) does NOT
+        // block re-posting; the re-post's keys are namespaced by the
+        // new remittance number so the unique index still backstops
+        // every posting.
+        const baseKey = `cod-collection:${collection.id}`;
+        const keyed = await tx.ledgerTransaction.findUnique({
+          where: { idempotencyKey: baseKey },
           select: { id: true },
         });
-        if (already) continue;
+        let debitKey = baseKey;
+        if (keyed) {
+          const reversal = await tx.ledgerTransaction.findUnique({
+            where: { reversalOfId: keyed.id },
+            select: { id: true },
+          });
+          if (!reversal) continue; // a live posting already exists
+          debitKey = `${baseKey}:${created.remittanceNumber}`;
+        }
         // The credit side is the vendor's payable; for a walk-in
         // customer order (no vendor) the COD is the company's own
         // money and credits COD clearing directly.
@@ -325,6 +377,7 @@ export async function submitRemittance(actor: ActorContext, input: unknown) {
               type: "COD_COLLECTED",
               codCollectionId: collection.id,
               packageId: collection.packageId,
+              idempotencyKey: debitKey,
             },
             {
               accountCode: creditAccount.code,
@@ -333,6 +386,7 @@ export async function submitRemittance(actor: ActorContext, input: unknown) {
               type: "COD_COLLECTED",
               codCollectionId: collection.id,
               packageId: collection.packageId,
+              idempotencyKey: `${debitKey}:credit`,
             },
           ],
         });
@@ -526,6 +580,29 @@ export async function resolveRemittance(actor: ActorContext, remittanceId: strin
     }
 
     if (data.resolution === "REJECTED") {
+      // Hand the collections back untouched (Phase 7 review F1):
+      // reverse each collection's live COD_COLLECTED journal so the
+      // rider's ledger obligation and the credited payable unwind
+      // with the rejection — otherwise a re-submission would post
+      // the same collection a second time and double the position.
+      // The packages return to COD_DUE so the re-submission's own
+      // status step applies cleanly.
+      for (const line of remittance.lines) {
+        await reverseLiveJournalLegs(tx, {
+          journalRef: `COD-${line.codCollectionId}`,
+          actorId: actor.userId,
+        });
+        const collection = await tx.deliveryCodCollection.findUnique({
+          where: { id: line.codCollectionId },
+          select: { packageId: true },
+        });
+        if (collection) {
+          await tx.package.updateMany({
+            where: { id: collection.packageId, paymentStatus: "COD_COLLECTED" },
+            data: { paymentStatus: "COD_DUE" },
+          });
+        }
+      }
       await tx.codRemittanceLine.deleteMany({ where: { remittanceId } });
       const closed = await tx.codRemittance.update({
         where: { id: remittanceId },
@@ -641,7 +718,21 @@ export async function listRemittances(
   await requirePermAudited(actor, "cod.read", "CodRemittance");
   const { skip, take, page, pageSize } = pageArgs(filters.page ?? 1, filters.pageSize ?? 25);
   const conditions: Prisma.CodRemittanceWhereInput[] = [];
-  if (actor.driverId) conditions.push({ driverId: actor.driverId });
+  if (actor.driverId) {
+    conditions.push({ driverId: actor.driverId });
+  } else if (actor.vendorId) {
+    // Vendor scope (F2): only remittances covering at least one of
+    // the vendor's own collections.
+    conditions.push({
+      lines: {
+        some: { codCollection: { shipment: { order: { vendorId: actor.vendorId } } } },
+      },
+    });
+  } else if (!hasGlobalCodScope(actor)) {
+    // Warehouse scope (F2): only remittances handed in at the
+    // actor's own warehouses (an empty membership matches nothing).
+    conditions.push({ warehouseId: { in: actor.warehouseIds } });
+  }
   if (filters.status) conditions.push({ status: filters.status });
   const where: Prisma.CodRemittanceWhereInput = conditions.length ? { AND: conditions } : {};
   const [total, rows] = await Promise.all([
@@ -679,7 +770,15 @@ export async function getRemittance(actor: ActorContext, remittanceId: string): 
       driver: { include: { user: { select: { fullName: true } } } },
       lines: {
         orderBy: { createdAt: "asc" },
-        include: { codCollection: { select: { packageId: true, status: true } } },
+        include: {
+          codCollection: {
+            select: {
+              packageId: true,
+              status: true,
+              shipment: { select: { order: { select: { vendorId: true } } } },
+            },
+          },
+        },
       },
     },
   });
@@ -690,6 +789,32 @@ export async function getRemittance(actor: ActorContext, remittanceId: string): 
       reason: "rider_scope_other_driver_remittance",
     });
     throw new AuthorizationError("Riders can only view their own remittances");
+  }
+  if (actor.vendorId) {
+    // Vendor scope (F2): the remittance must cover at least one of
+    // the vendor's own collections.
+    const coversOwn = remittance.lines.some(
+      (line) => line.codCollection.shipment.order.vendorId === actor.vendorId,
+    );
+    if (!coversOwn) {
+      await auditAccessDenied(actor, "CodRemittance", {
+        entityId: remittanceId,
+        reason: "vendor_scope_other_vendor_remittance",
+      });
+      throw new AuthorizationError("Vendors can only view remittances covering their own collections");
+    }
+  } else if (!actor.driverId && !hasGlobalCodScope(actor)) {
+    // Warehouse scope (F2): the remittance must have been handed in
+    // at one of the actor's own warehouses.
+    if (!remittance.warehouseId || !actor.warehouseIds.includes(remittance.warehouseId)) {
+      await auditAccessDenied(actor, "CodRemittance", {
+        entityId: remittanceId,
+        reason: "warehouse_scope_other_warehouse_remittance",
+      });
+      throw new AuthorizationError(
+        "Warehouse-scoped readers can only view remittances handed in at their own warehouses",
+      );
+    }
   }
   const base = toRemittanceView(remittance);
   return {

@@ -265,6 +265,57 @@ export async function reverseJournal(
   return created;
 }
 
+/**
+ * Reverse only the still-live legs of a journal: legs that are not
+ * themselves reversals and have not already been mirrored. Unlike
+ * `reverseJournal` (which refuses when any leg was reversed before),
+ * this tolerates journals whose earlier posting was already reversed
+ * and re-posted under the same journalRef — the COD remittance
+ * reject → re-submit cycle (Phase 7 review F1) posts `COD-<id>`
+ * again after a rejection reversed the first posting, and a second
+ * rejection must reverse only the live second posting. Returns the
+ * mirror entries created (empty when nothing was live).
+ */
+export async function reverseLiveJournalLegs(
+  tx: Tx,
+  input: { journalRef: string; actorId: string },
+) {
+  const originals = await tx.ledgerTransaction.findMany({
+    where: { journalRef: input.journalRef, reversalOfId: null, reversedBy: null },
+    orderBy: { createdAt: "asc" },
+  });
+  if (originals.length === 0) return [];
+  const reversalRef = `REV:${input.journalRef}`;
+  const created = [];
+  for (const entry of originals) {
+    const seq = await nextFinanceSequence(tx, "ledger_reference_seq");
+    created.push(
+      await tx.ledgerTransaction.create({
+        data: {
+          reference: `TXN-${seq.toString()}`,
+          journalRef: reversalRef,
+          accountId: entry.accountId,
+          direction: entry.direction === "DEBIT" ? "CREDIT" : "DEBIT",
+          amountPaisa: entry.amountPaisa,
+          type: "REVERSAL",
+          orderId: entry.orderId,
+          packageId: entry.packageId,
+          invoiceId: entry.invoiceId,
+          paymentId: entry.paymentId,
+          codCollectionId: entry.codCollectionId,
+          remittanceId: entry.remittanceId,
+          settlementId: entry.settlementId,
+          paymentMethod: entry.paymentMethod,
+          occurredAt: new Date(),
+          actorId: input.actorId,
+          reversalOfId: entry.id,
+        },
+      }),
+    );
+  }
+  return created;
+}
+
 /** Derived balance for one account: debit-normal kinds read
  * ΣDEBIT − ΣCREDIT; credit-normal kinds the reverse. */
 export function balanceFromSums(

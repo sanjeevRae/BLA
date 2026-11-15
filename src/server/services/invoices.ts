@@ -361,6 +361,12 @@ export async function generateVendorInvoice(
     const revenue = await companyAccount(tx, "SHIPPING_REVENUE");
     const accrualLegs: LedgerLeg[] = [];
     for (const line of invoice.lines) {
+      // Zero-charge lines (free-shipping shipments) stay on the
+      // invoice but post no accrual legs (Phase 7 review F11):
+      // postJournal rejects non-positive amounts, and one
+      // zero-charge delivery must not roll back the vendor's whole
+      // billing run.
+      if (line.amountPaisa === BigInt(0)) continue;
       accrualLegs.push({
         accountCode: payable.code,
         direction: "DEBIT",
@@ -378,11 +384,13 @@ export async function generateVendorInvoice(
         orderId: line.orderId,
       });
     }
-    await postJournal(tx, {
-      journalRef: invoiceNumber,
-      actorId: actor.userId,
-      legs: accrualLegs,
-    });
+    if (accrualLegs.length > 0) {
+      await postJournal(tx, {
+        journalRef: invoiceNumber,
+        actorId: actor.userId,
+        legs: accrualLegs,
+      });
+    }
 
     await auditOps(actor, "invoice.generated", "Invoice", invoice.id, {
       after: {

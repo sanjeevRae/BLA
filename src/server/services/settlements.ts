@@ -157,8 +157,22 @@ export async function prepareSettlement(actor: ActorContext, input: unknown) {
       for (const invoice of vendorInvoices) {
         const paid = await invoicePaidComponents(tx, invoice.id);
         const reserved = await invoiceReservedPaisa(tx, invoice.id);
+        // Charges already claimed by an open settlement (PENDING /
+        // RECONCILED / APPROVED) are reserved by that settlement
+        // (Phase 7 review F5): a second settlement must not claim
+        // the same invoice's charges again. SETTLED coverage is
+        // already netted through invoicePaidComponents; CANCELLED
+        // settlements release their lines at cancellation (F6).
+        const openClaim = await tx.vendorSettlementLine.findFirst({
+          where: {
+            invoiceId: invoice.id,
+            kind: "SHIPPING_CHARGE",
+            settlement: { status: { in: ["PENDING", "RECONCILED", "APPROVED"] } },
+          },
+          select: { id: true },
+        });
         const outstanding = invoice.totalPaisa - paid.totalPaidPaisa;
-        if (outstanding > BigInt(0) && reserved === BigInt(0)) {
+        if (outstanding > BigInt(0) && reserved === BigInt(0) && !openClaim) {
           chargeLines.push({ invoice, outstanding });
         }
       }
@@ -447,6 +461,14 @@ export async function cancelSettlement(actor: ActorContext, settlementId: string
     if (settlement.status !== "PENDING" && settlement.status !== "APPROVED") {
       throw new ConflictError(`Settlement is ${settlement.status} and cannot be cancelled`);
     }
+    // Release the settlement's claims (Phase 7 review F6): the
+    // lines are deleted inside this locked transaction so the COD
+    // collections and invoice charges become preparable again —
+    // otherwise the one-settlement-per-collection unique index
+    // would strand them under the cancelled settlement forever.
+    // The header (with its frozen figures) and this audit row
+    // remain the record of the cancelled settlement.
+    await tx.vendorSettlementLine.deleteMany({ where: { settlementId } });
     const cancelled = await tx.vendorSettlement.update({
       where: { id: settlementId },
       data: { status: "CANCELLED", notes: data.reason },
