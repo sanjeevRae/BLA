@@ -21,6 +21,7 @@ function actorForRole(role: RoleCode): ActorContext {
     email: `${role.toLowerCase()}@example.test`,
     fullName: `Test ${role}`,
     status: "ACTIVE",
+    mustChangePassword: false,
     roles: [role],
     primaryRole: role,
     permissions: new Set(ROLE_PERMISSIONS[role]),

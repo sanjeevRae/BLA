@@ -27,6 +27,9 @@ export interface ActorContext {
   email: string;
   fullName: string;
   status: string;
+  /** True while the account is flagged to set a new password; dashboard
+   *  page guards redirect to /set-password before rendering anything. */
+  mustChangePassword: boolean;
   roles: RoleCode[];
   primaryRole: RoleCode | null;
   permissions: ReadonlySet<string>;

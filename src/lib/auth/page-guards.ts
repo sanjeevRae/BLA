@@ -13,6 +13,9 @@ import type { RoleCode } from "@/lib/permissions/catalog";
 export async function requireDashboardActor(allowedRoles: RoleCode[]): Promise<ActorContext> {
   const actor = await getActorContext();
   if (!actor) redirect("/login");
+  // A flagged account sets a new password before any dashboard renders
+  // (docs/security-architecture.md §2/§4).
+  if (actor.mustChangePassword) redirect("/set-password");
   if (!actor.roles.some((role) => allowedRoles.includes(role))) {
     redirect(actor.landingPath);
   }

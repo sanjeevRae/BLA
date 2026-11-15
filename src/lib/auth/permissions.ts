@@ -70,6 +70,7 @@ export async function getActorContext(): Promise<ActorContext | null> {
     email: user.email,
     fullName: user.fullName,
     status: user.status,
+    mustChangePassword: user.mustChangePassword,
     roles,
     primaryRole: primaryRoleFor(roles),
     permissions,
