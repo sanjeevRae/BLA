@@ -23,7 +23,9 @@ export function generateOtpCode(): string {
 }
 
 export async function hashOtpCode(code: string): Promise<string> {
-  return bcrypt.hash(code, 10);
+  // Cost 12 — the house standard for stored credential hashes
+  // (Phase 2 review P2-12; aligned in the Phase 6 fix batch).
+  return bcrypt.hash(code, 12);
 }
 
 export async function verifyOtpCode(code: string, hash: string): Promise<boolean> {

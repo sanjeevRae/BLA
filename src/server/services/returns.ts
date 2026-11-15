@@ -417,6 +417,22 @@ export async function approveReturn(
   }
   await prisma.$transaction(async (tx) => {
     await lockPackageRow(tx, row.packageId);
+    // Re-read the status inside the transaction (Phase 6 review
+    // P6-R5): the pre-transaction REQUESTED check races a
+    // concurrent reject/approve — both writers gated on the same
+    // stale snapshot and both applied, the second silently
+    // overwriting the first's authorisation outcome. Under the
+    // package lock the loser now sees the moved status and
+    // refuses, so exactly one outcome is ever recorded.
+    const fresh = await tx.returnRequest.findUniqueOrThrow({
+      where: { id: row.id },
+      select: { status: true },
+    });
+    if (fresh.status !== "REQUESTED") {
+      throw new ConflictError(
+        `Return ${row.returnNumber} is ${fresh.status} — only REQUESTED returns can be approved`,
+      );
+    }
     await tx.returnRequest.update({
       where: { id: row.id },
       data: {
@@ -492,6 +508,18 @@ export async function rejectReturn(
   }
   await prisma.$transaction(async (tx) => {
     await lockPackageRow(tx, row.packageId);
+    // In-transaction status re-check (Phase 6 review P6-R5) — see
+    // approveReturn: a concurrent approve must not be overwritten
+    // by this rejection, nor the reverse.
+    const fresh = await tx.returnRequest.findUniqueOrThrow({
+      where: { id: row.id },
+      select: { status: true },
+    });
+    if (fresh.status !== "REQUESTED") {
+      throw new ConflictError(
+        `Return ${row.returnNumber} is ${fresh.status} — only REQUESTED returns can be rejected`,
+      );
+    }
     await tx.returnRequest.update({
       where: { id: row.id },
       data: {

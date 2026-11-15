@@ -769,7 +769,10 @@ describe("failed attempts → return flow", () => {
     expect(res.returnRequest).not.toBeNull();
     const ret = await prisma.returnRequest.findFirstOrThrow({ where: { packageId } });
     expect(ret.reason).toBe("RECIPIENT_REFUSED");
-    // Tidy the batch: scan back + close.
+    // Tidy the batch: authorise the return, then scan back + close.
+    // (Phase 6 fix batch, P6-R4: a scan-back can no longer receive
+    // a REQUESTED return — authorisation must come first.)
+    await returnsSvc.approveReturn(waBActor, ret.id, { chargeBearer: "VENDOR" });
     const pkg = await prisma.package.findUniqueOrThrow({ where: { id: packageId } });
     await deliveriesSvc.scanBackPackage(staffBActor, {
       warehouseId: fx.whB,
@@ -899,9 +902,12 @@ describe("pickup shortage + batch closure rules", () => {
       new RegExp(`unaccounted.*${p2.trackingId}`),
     );
     // Scan the second package back; closure now succeeds.
-    await deliveriesSvc.scanBackPackage(staffBActor, {
+    // (Phase 6 fix batch, P6-R7: the package is OUT_FOR_DELIVERY,
+    // so the scan-back needs a Warehouse Admin + a reason.)
+    await deliveriesSvc.scanBackPackage(waBActor, {
       warehouseId: fx.whB,
       trackingId: p2.trackingId,
+      reason: "Rider returned to base with the parcel undelivered",
     });
     const closed = await deliveriesSvc.closeBatch(riderAActor, batch.id);
     expect(closed.batch.status).toBe("COMPLETED");
@@ -1013,6 +1019,9 @@ describe("detailed tracking second factor", () => {
     const failures = await prisma.trackingAccessAttempt.count({
       where: { trackingId: parcel.trackingId, succeeded: false },
     });
-    expect(failures).toBeGreaterThanOrEqual(6);
+    // Exactly the 5 genuine failures: the locked denial above must
+    // NOT append another failure row (Phase 6 fix batch, P6-R6 —
+    // the lockout previously extended itself on every denial).
+    expect(failures).toBe(5);
   });
 });

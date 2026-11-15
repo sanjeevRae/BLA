@@ -307,6 +307,21 @@ async function loadAssignmentOr404(assignmentId: string): Promise<AssignmentRow>
   return row;
 }
 
+/** Lock the DeliveryAssignment row inside the caller's transaction
+ *  (Phase 6 review P6-R2: OTP state — hash, failure counter, lock —
+ *  is mutated by both confirmDelivery and regenerateOtp; the two
+ *  must serialise on the assignment row, always taken AFTER the
+ *  Package row lock, so the POD can never be written against a
+ *  hash that a concurrent regeneration has already replaced). */
+async function lockAssignmentRow(
+  tx: Prisma.TransactionClient,
+  assignmentId: string,
+): Promise<void> {
+  await tx.$queryRaw(
+    Prisma.sql`SELECT "id" FROM "app"."DeliveryAssignment" WHERE "id" = ${assignmentId} FOR UPDATE`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Shared guards
 // ---------------------------------------------------------------------------
@@ -324,6 +339,32 @@ async function assertAssignedRider(
     reason,
   });
   throw new AuthorizationError("Only the assigned rider can perform this action");
+}
+
+/** Scan-back of a package that is OUT FOR DELIVERY severs the
+ *  rider's custody on a tracking ID alone (Phase 6 review P6-R7):
+ *  it is restricted to a Warehouse Admin OF THAT WAREHOUSE (P2-4
+ *  membership-role rule, same as return authorisation) or an
+ *  unscoped actor. Ordinary warehouse staff keep scan-back for
+ *  packages that are not out with a rider. Denials are audited. */
+async function assertScanBackAdmin(
+  actor: ActorContext,
+  warehouseId: string,
+  packageId: string,
+): Promise<void> {
+  if (isUnscoped(actor)) return;
+  const isWa = actor.membershipRoles.some(
+    (m) => m.warehouseId === warehouseId && m.roleCode === "WAREHOUSE_ADMIN",
+  );
+  if (isWa) return;
+  await auditAccessDenied(actor, "Package", {
+    entityId: packageId,
+    warehouseId,
+    reason: "scan_back_out_for_delivery_requires_warehouse_admin",
+  });
+  throw new AuthorizationError(
+    "Scanning back a package that is out for delivery requires a Warehouse Admin of this warehouse",
+  );
 }
 
 /** Warehouse-side access to a batch: unscoped actors, actors with
@@ -675,6 +716,21 @@ export async function cancelAssignment(
   }
   await prisma.$transaction(async (tx) => {
     await lockPackageRow(tx, assignment.packageId);
+    // Re-validate under the lock (Phase 6 review P6-R3, the P5-5
+    // stale-snapshot class): the pre-transaction status check above
+    // races a concurrent pickup — cancelling on the stale snapshot
+    // left an assignment CANCELLED while its package was
+    // OUT_FOR_DELIVERY in the rider's custody. Mirror
+    // reassignAssignment: re-read and refuse if the status moved.
+    const fresh = await tx.deliveryAssignment.findUniqueOrThrow({
+      where: { id: assignment.id },
+      select: { status: true },
+    });
+    if (fresh.status !== "PENDING" && fresh.status !== "ACCEPTED") {
+      throw new ConflictError(
+        `Assignment is ${fresh.status} — only PENDING/ACCEPTED assignments can be cancelled`,
+      );
+    }
     await tx.deliveryAssignment.update({
       where: { id: assignment.id },
       data: {
@@ -793,6 +849,21 @@ export async function cancelBatch(
     throw new ConflictError(`Batch is ${batch.status} — it can no longer be cancelled`);
   }
   await prisma.$transaction(async (tx) => {
+    // Lock the batch row and re-validate its status inside the
+    // transaction (Phase 6 review P6-R3): the pre-transaction check
+    // races a concurrent close/cancel — acting on the stale
+    // snapshot could overwrite a COMPLETED batch or re-cancel
+    // assignments another operation already settled.
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "app"."DeliveryBatch" WHERE "id" = ${batch.id} FOR UPDATE`,
+    );
+    const freshBatch = await tx.deliveryBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+      select: { status: true },
+    });
+    if (freshBatch.status !== "OPEN" && freshBatch.status !== "IN_PROGRESS") {
+      throw new ConflictError(`Batch is ${freshBatch.status} — it can no longer be cancelled`);
+    }
     const active = await tx.deliveryAssignment.findMany({
       where: { batchId: batch.id, status: { in: [...ACTIVE_ASSIGNMENT_STATUSES] } },
       select: { id: true, packageId: true, status: true },
@@ -804,6 +875,20 @@ export async function cancelBatch(
     }
     for (const a of active) {
       await lockPackageRow(tx, a.packageId);
+      // Per-assignment re-check under the package lock (P6-R3):
+      // a pickup may have committed since the findMany above.
+      const freshAssignment = await tx.deliveryAssignment.findUniqueOrThrow({
+        where: { id: a.id },
+        select: { status: true },
+      });
+      if (freshAssignment.status === "IN_PROGRESS") {
+        throw new ConflictError(
+          "Batch has packages out with the rider — it cannot be cancelled; close it at end of day instead",
+        );
+      }
+      if (freshAssignment.status !== "PENDING" && freshAssignment.status !== "ACCEPTED") {
+        continue; // already terminal — nothing to cancel
+      }
       await tx.deliveryAssignment.update({
         where: { id: a.id },
         data: {
@@ -1038,17 +1123,30 @@ export async function regenerateOtp(
 ): Promise<{ assignmentId: string; otp: string; expiresAt: string }> {
   await requirePermAudited(actor, "delivery.confirm", "DeliveryAssignment");
   const assignment = await loadAssignmentOr404(assignmentId);
-  const isRider = actor.driverId === assignment.driverId;
+  const batch = assignment.batchId ? await loadBatchOr404(assignment.batchId) : null;
+  const warehouseId = batch?.warehouseId ?? assignment.package.currentWarehouseId ?? "";
+  const isRider = actor.driverId !== null && actor.driverId === assignment.driverId;
   if (!isRider) {
-    // Warehouse staff may regenerate for a package at their
-    // warehouse (e.g. recipient calls the warehouse).
-    const batch = assignment.batchId ? await loadBatchOr404(assignment.batchId) : null;
-    await assertWarehouseScope(
-      actor,
-      batch?.warehouseId ?? assignment.package.currentWarehouseId ?? "",
-      "DeliveryAssignment",
-      assignment.id,
+    // Phase 6 review P6-R1 (interim restriction; the full fix —
+    // recipient-side code delivery — is Phase 8): minting a fresh
+    // delivery code is restricted to the assigned rider, a
+    // Warehouse Admin OF THE BATCH'S WAREHOUSE (P2-4 membership
+    // role, e.g. the recipient calls the warehouse and the WA
+    // re-issues), or an unscoped actor. Ordinary warehouse staff
+    // in scope can no longer mint codes.
+    const isWa = actor.membershipRoles.some(
+      (m) => m.warehouseId === warehouseId && m.roleCode === "WAREHOUSE_ADMIN",
     );
+    if (!isUnscoped(actor) && !isWa) {
+      await auditAccessDenied(actor, "DeliveryAssignment", {
+        entityId: assignment.id,
+        warehouseId,
+        reason: "otp_regenerate_requires_rider_or_warehouse_admin",
+      });
+      throw new AuthorizationError(
+        "Only the assigned rider or a Warehouse Admin of this warehouse can regenerate the delivery code",
+      );
+    }
   }
   if (assignment.status !== "IN_PROGRESS") {
     throw new ConflictError(`Assignment is ${assignment.status} — the package is not out for delivery`);
@@ -1057,16 +1155,35 @@ export async function regenerateOtp(
   const otpHash = await hashOtpCode(otp);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + OTP_TTL_MS);
-  await prisma.deliveryAssignment.update({
-    where: { id: assignment.id },
-    data: {
-      otpCodeHash: otpHash,
-      otpGeneratedAt: now,
-      otpExpiresAt: expiresAt,
-      otpFailedAttempts: 0,
-      otpLockedAt: null,
-      version: { increment: 1 },
-    },
+  // Phase 6 review P6-R2: the reset happens inside a transaction
+  // under the Package + assignment row locks (the same locks, in
+  // the same order, as confirmDelivery), with the status re-read
+  // in-transaction — a regeneration landing mid-delivery can no
+  // longer swap the hash between the delivery's OTP verification
+  // and its proof-of-delivery write.
+  await prisma.$transaction(async (tx) => {
+    await lockPackageRow(tx, assignment.packageId);
+    await lockAssignmentRow(tx, assignment.id);
+    const fresh = await tx.deliveryAssignment.findUniqueOrThrow({
+      where: { id: assignment.id },
+      select: { status: true },
+    });
+    if (fresh.status !== "IN_PROGRESS") {
+      throw new ConflictError(
+        `Assignment is ${fresh.status} — the package is not out for delivery`,
+      );
+    }
+    await tx.deliveryAssignment.update({
+      where: { id: assignment.id },
+      data: {
+        otpCodeHash: otpHash,
+        otpGeneratedAt: now,
+        otpExpiresAt: expiresAt,
+        otpFailedAttempts: 0,
+        otpLockedAt: null,
+        version: { increment: 1 },
+      },
+    });
   });
   await auditOps(actor, "delivery.otp_regenerated", "DeliveryAssignment", assignment.id, {
     after: { expiresAt: expiresAt.toISOString() },
@@ -1287,43 +1404,11 @@ export async function confirmDelivery(
     throw new ConflictError(`Package is ${pkgStatus} — it cannot be delivered now`);
   }
 
-  // --- OTP gate (security-architecture §7, delivery-workflow §10).
-  // Runs BEFORE the delivery transaction so failure counts persist.
-  if (!assignment.otpCodeHash || !assignment.otpExpiresAt) {
-    throw new DomainValidationError("No delivery code was generated for this package");
-  }
-  if (assignment.otpLockedAt) {
-    throw new DomainValidationError(
-      "The delivery code is locked after too many wrong entries — request a new code",
-    );
-  }
-  if (assignment.otpExpiresAt.getTime() < Date.now()) {
-    throw new DomainValidationError("The delivery code has expired — request a new code");
-  }
-  const otpOk = await verifyOtpCode(data.otpCode, assignment.otpCodeHash);
-  if (!otpOk) {
-    const failures = assignment.otpFailedAttempts + 1;
-    const locksNow = failures >= OTP_MAX_FAILURES;
-    await prisma.deliveryAssignment.update({
-      where: { id: assignment.id },
-      data: {
-        otpFailedAttempts: failures,
-        ...(locksNow ? { otpLockedAt: new Date() } : {}),
-      },
-    });
-    await auditOps(actor, "delivery.otp_failed", "DeliveryAssignment", assignment.id, {
-      after: { failedAttempts: failures, locked: locksNow },
-    });
-    throw new DomainValidationError(
-      locksNow
-        ? "Incorrect delivery code — the code is now locked after too many wrong entries; request a new code"
-        : "Incorrect delivery code",
-    );
-  }
-
   // --- COD gate: exact paisa; a mismatch needs an explanation and
   // is recorded as MISMATCH — never silently accepted (Phase 7 owns
-  // the ledger; this records the collection event only).
+  // the ledger; this records the collection event only). Reads the
+  // booking snapshot (immutable), so it can run before the
+  // transaction.
   const expectedPaisa = assignment.package.codAmountPaisa;
   let collectedPaisa: bigint | null = null;
   if (expectedPaisa > BigInt(0)) {
@@ -1340,16 +1425,61 @@ export async function confirmDelivery(
     }
   }
 
-  const outcome = await prisma.$transaction(async (tx) => {
+  type DeliveryOutcome =
+    | { kind: "otp_failed"; failures: number; locksNow: boolean }
+    | { kind: "delivered"; proofOfDeliveryId: string; cod: ConfirmDeliveryResult["cod"] };
+
+  const outcome = await prisma.$transaction(async (tx): Promise<DeliveryOutcome> => {
     await lockPackageRow(tx, assignment.packageId);
-    const pkg = await tx.package.findUniqueOrThrow({ where: { id: assignment.packageId } });
-    const freshAssignment = await tx.deliveryAssignment.findUniqueOrThrow({
+    await lockAssignmentRow(tx, assignment.id);
+    const fresh = await tx.deliveryAssignment.findUniqueOrThrow({
       where: { id: assignment.id },
-      select: { status: true },
     });
-    if (freshAssignment.status !== "IN_PROGRESS") {
-      throw new ConflictError(`Assignment is ${freshAssignment.status} — it can no longer be delivered`);
+    if (fresh.status !== "IN_PROGRESS") {
+      throw new ConflictError(`Assignment is ${fresh.status} — it can no longer be delivered`);
     }
+
+    // --- OTP gate (security-architecture §7, delivery-workflow
+    // §10), Phase 6 review P6-R2: verification and failure counting
+    // run INSIDE this transaction, under the Package + assignment
+    // row locks, against the in-transaction hash. The previous
+    // shape — verify a pre-transaction snapshot, then write
+    // snapshot+1 back — let concurrent wrong codes each read the
+    // same counter and overwrite each other (6 parallel guesses
+    // left the counter at 1 and never locked), and let a
+    // regeneration swap the hash between verification and the POD
+    // write. A wrong code returns an outcome (committing ONLY the
+    // atomic increment + the lock write) instead of throwing, so
+    // the failure count persists without a partial delivery.
+    if (!fresh.otpCodeHash || !fresh.otpExpiresAt) {
+      throw new DomainValidationError("No delivery code was generated for this package");
+    }
+    if (fresh.otpLockedAt) {
+      throw new DomainValidationError(
+        "The delivery code is locked after too many wrong entries — request a new code",
+      );
+    }
+    if (fresh.otpExpiresAt.getTime() < Date.now()) {
+      throw new DomainValidationError("The delivery code has expired — request a new code");
+    }
+    const otpOk = await verifyOtpCode(data.otpCode, fresh.otpCodeHash);
+    if (!otpOk) {
+      const updated = await tx.deliveryAssignment.update({
+        where: { id: assignment.id },
+        data: { otpFailedAttempts: { increment: 1 } },
+      });
+      const failures = updated.otpFailedAttempts;
+      const locksNow = failures >= OTP_MAX_FAILURES;
+      if (locksNow && !updated.otpLockedAt) {
+        await tx.deliveryAssignment.update({
+          where: { id: assignment.id },
+          data: { otpLockedAt: new Date() },
+        });
+      }
+      return { kind: "otp_failed", failures, locksNow };
+    }
+
+    const pkg = await tx.package.findUniqueOrThrow({ where: { id: assignment.packageId } });
     if (pkg.operationalStatus === "DELIVERY_ATTEMPTED") {
       await transitionPackageInTx(tx, actor, pkg.id, "OUT_FOR_DELIVERY", {
         deliveryAssignmentId: assignment.id,
@@ -1382,8 +1512,12 @@ export async function confirmDelivery(
         method: "OTP",
         receivedByName: data.receivedByName.trim(),
         relationshipToRecipient: data.relationshipToRecipient ?? null,
-        otpCodeHash: assignment.otpCodeHash,
-        otpExpiresAt: assignment.otpExpiresAt,
+        // The hash verified above, read inside this transaction
+        // under the row locks (P6-R2) — never the pre-transaction
+        // snapshot, which a concurrent regeneration may have
+        // already replaced.
+        otpCodeHash: fresh.otpCodeHash,
+        otpExpiresAt: fresh.otpExpiresAt,
         otpVerifiedAt: now,
         latitude: data.latitude ?? null,
         longitude: data.longitude ?? null,
@@ -1399,7 +1533,7 @@ export async function confirmDelivery(
           packageId: pkg.id,
           shipmentId: pkg.shipmentId,
           assignmentId: assignment.id,
-          batchId: assignment.batchId,
+          batchId: fresh.batchId,
           expectedPaisa,
           collectedPaisa,
           status,
@@ -1465,8 +1599,21 @@ export async function confirmDelivery(
         version: { increment: 1 },
       },
     });
-    return { proofOfDeliveryId: pod.id, cod };
-  });
+    return { kind: "delivered", proofOfDeliveryId: pod.id, cod };
+  }, { timeout: 30_000 });
+
+  if (outcome.kind === "otp_failed") {
+    // The transaction committed ONLY the failure increment (+ the
+    // lock write at the threshold); no delivery artefacts exist.
+    await auditOps(actor, "delivery.otp_failed", "DeliveryAssignment", assignment.id, {
+      after: { failedAttempts: outcome.failures, locked: outcome.locksNow },
+    });
+    throw new DomainValidationError(
+      outcome.locksNow
+        ? "Incorrect delivery code — the code is now locked after too many wrong entries; request a new code"
+        : "Incorrect delivery code",
+    );
+  }
 
   await auditOps(actor, "delivery.confirmed", "DeliveryAssignment", assignment.id, {
     after: { proofOfDeliveryId: outcome.proofOfDeliveryId, codStatus: outcome.cod?.status ?? null },
@@ -1479,14 +1626,21 @@ export async function confirmDelivery(
 }
 
 // ---------------------------------------------------------------------------
-// Warehouse scan-back — undelivered packages return to stock and any
-// open return advances to RECEIVED (return-workflow §3.5)
+// Warehouse scan-back — undelivered packages return to stock and an
+// APPROVED open return advances to RECEIVED (return-workflow §3.5).
+// A REQUESTED return blocks the scan (P6-R4): receiving must never
+// substitute for the Warehouse Admin's authorisation.
 // ---------------------------------------------------------------------------
 
 export const scanBackSchema = z.object({
   warehouseId: z.string().uuid(),
   trackingId: z.string().min(1).max(40),
   condition: z.enum(PACKAGE_CONDITIONS).optional(),
+  /** Phase 6 review P6-R7: mandatory when the package is
+   *  OUT_FOR_DELIVERY (enforced in the service, where the
+   *  authoritative status is read) — a scan-back severs the
+   *  rider's custody, and the reason is part of the record. */
+  reason: z.string().min(3).max(500).optional(),
 });
 export type ScanBackInput = z.input<typeof scanBackSchema>;
 
@@ -1533,9 +1687,23 @@ export async function scanBackPackage(
       `Package ${trackingId} is ${pkg.operationalStatus} — only packages out with a rider can be scanned back`,
     );
   }
+  if (pkg.operationalStatus === "OUT_FOR_DELIVERY") {
+    // P6-R7 fast path (re-checked in-transaction below): a
+    // Warehouse Admin + a recorded reason are required to sever
+    // an out-for-delivery rider's custody.
+    await assertScanBackAdmin(actor, warehouse.id, pkg.id);
+    if (!data.reason) {
+      throw new DomainValidationError(
+        "A reason is required when scanning back a package that is out for delivery",
+      );
+    }
+  }
   const assignment = await prisma.deliveryAssignment.findFirst({
     where: { packageId: pkg.id, status: "IN_PROGRESS" },
     orderBy: { createdAt: "desc" },
+    include: {
+      driver: { select: { userId: true, user: { select: { fullName: true } } } },
+    },
   });
   if (!assignment) {
     throw new ConflictError(`Package ${trackingId} has no in-progress delivery assignment`);
@@ -1547,6 +1715,16 @@ export async function scanBackPackage(
     if (fresh.operationalStatus !== "OUT_FOR_DELIVERY" && fresh.operationalStatus !== "DELIVERY_ATTEMPTED") {
       throw new ConflictError(`Package is ${fresh.operationalStatus} — it can no longer be scanned back`);
     }
+    if (fresh.operationalStatus === "OUT_FOR_DELIVERY") {
+      // P6-R7, authoritative in-transaction check (the status may
+      // have moved since the pre-transaction read).
+      await assertScanBackAdmin(actor, warehouse.id, pkg.id);
+      if (!data.reason) {
+        throw new DomainValidationError(
+          "A reason is required when scanning back a package that is out for delivery",
+        );
+      }
+    }
     const openReturn = await tx.returnRequest.findFirst({
       where: {
         packageId: pkg.id,
@@ -1554,6 +1732,20 @@ export async function scanBackPackage(
       },
       orderBy: { createdAt: "asc" },
     });
+    if (openReturn && openReturn.status === "REQUESTED") {
+      // Phase 6 review P6-R4: receiving the package back must not
+      // advance a return that was never authorised — doing so
+      // permanently skipped the Warehouse Admin's authorisation
+      // and the mandatory charge-bearer decision (approveReturn
+      // refuses anything not REQUESTED). The scan is rejected
+      // until the return is APPROVED. (Alternative considered by
+      // the reviewer: a RECEIVED_UNAUTHORISED holding state —
+      // rejection is the smaller change and keeps one clear rule:
+      // no authorisation, no receiving.)
+      throw new ConflictError(
+        `Return ${openReturn.returnNumber} is still REQUESTED — a Warehouse Admin must authorise it before the package can be received back`,
+      );
+    }
     const zoneType = openReturn ? "RETURNS" : "RECEIVING";
     const zone = await tx.warehouseZone.findFirst({
       where: { warehouseId: warehouse.id, kind: zoneType, isActive: true },
@@ -1574,6 +1766,8 @@ export async function scanBackPackage(
     const transition = await transitionPackageInTx(tx, actor, pkg.id, "READY_FOR_DELIVERY", {
       deliveryAssignmentId: assignment.id,
       warehouseId: warehouse.id,
+      // P6-R7: the scan-back reason rides on the tracking event.
+      notes: data.reason ? `Scanned back at the warehouse: ${data.reason}` : undefined,
     });
     if (!transition.transitioned || !transition.eventId) {
       throw new ConflictError("Package could not be moved back to READY_FOR_DELIVERY");
@@ -1622,7 +1816,9 @@ export async function scanBackPackage(
       data: {
         status: "FAILED",
         completedAt: now,
-        failureNote: "RETURNED_TO_WAREHOUSE — scanned back at the warehouse",
+        failureNote: data.reason
+          ? `RETURNED_TO_WAREHOUSE — scanned back at the warehouse: ${data.reason}`
+          : "RETURNED_TO_WAREHOUSE — scanned back at the warehouse",
         otpCodeHash: null,
         version: { increment: 1 },
       },
@@ -1663,7 +1859,16 @@ export async function scanBackPackage(
 
   await auditOps(actor, "delivery.scan_back", "Package", pkg.id, {
     warehouseId: warehouse.id,
-    after: { assignmentId: assignment.id, returnNumber: outcome.advancedReturn?.returnNumber ?? null },
+    after: {
+      assignmentId: assignment.id,
+      returnNumber: outcome.advancedReturn?.returnNumber ?? null,
+      // P6-R7: the reason and the displaced rider's identity are
+      // part of the scan-back record.
+      reason: data.reason ?? null,
+      displacedRiderId: assignment.driverId,
+      displacedRiderUserId: assignment.driver.userId,
+      displacedRiderName: assignment.driver.user.fullName,
+    },
   });
   return {
     packageId: pkg.id,
@@ -1715,12 +1920,26 @@ export async function closeBatch(
     if (fresh.status === "COMPLETED" || fresh.status === "CANCELLED") {
       throw new ConflictError(`Batch is ${fresh.status} — it cannot be closed`);
     }
+    const rider = await tx.driver.findUniqueOrThrow({
+      where: { id: batch.riderId },
+      select: { userId: true },
+    });
+    const riderUserId = rider.userId;
     const assignments = await tx.deliveryAssignment.findMany({
       where: { batchId: batch.id },
       include: {
         package: {
           select: {
             trackingId: true,
+            operationalStatus: true,
+            custodies: {
+              where: { endedAt: null },
+              select: { custodianType: true, custodianUserId: true },
+            },
+            deliveryAssignments: {
+              where: { status: { in: [...ACTIVE_ASSIGNMENT_STATUSES] } },
+              select: { id: true },
+            },
             inventoryRecords: {
               where: { releasedAt: null, warehouseId: batch.warehouseId },
               select: { id: true },
@@ -1740,6 +1959,34 @@ export async function closeBatch(
     for (const a of assignments) {
       if (a.status === "COMPLETED") {
         delivered += 1;
+        continue;
+      }
+      // Phase 6 review P6-R3 (defence in depth behind the
+      // cancelAssignment/cancelBatch in-transaction re-checks): a
+      // non-completed assignment NEVER accounts for a package that
+      // is physically out with THIS batch's rider —
+      // OUT_FOR_DELIVERY / DELIVERY_ATTEMPTED, or an open custody
+      // row held by the rider — no matter what the assignment's
+      // own status says. The reviewer's reproduced end-state
+      // (assignment CANCELLED, package out, batch closed
+      // COMPLETED) must stay impossible even if such a row is
+      // ever produced by another path. (A USER custody held by
+      // someone else — e.g. the vendor owner after a completed
+      // return handover — is not "out": the FAILED branch below
+      // accounts for it via the received/completed return.)
+      // Exception: the package has since been committed to
+      // ANOTHER active assignment — that batch accounts for it.
+      const physicallyOut =
+        a.package.operationalStatus === "OUT_FOR_DELIVERY" ||
+        a.package.operationalStatus === "DELIVERY_ATTEMPTED" ||
+        a.package.custodies.some(
+          (c) => c.custodianType === "USER" && c.custodianUserId === riderUserId,
+        );
+      const committedElsewhere = a.package.deliveryAssignments.some(
+        (other) => other.id !== a.id,
+      );
+      if (physicallyOut && !committedElsewhere) {
+        unaccounted.push(a.package.trackingId);
       } else if (a.status === "CANCELLED" || a.status === "REASSIGNED") {
         cancelledOrReassigned += 1;
       } else if (a.status === "FAILED") {
@@ -1748,7 +1995,11 @@ export async function closeBatch(
         // return was received. A pickup shortage (package never
         // left, still DELIVERY_ASSIGNED) also counts: stock is
         // open at this warehouse.
-        if (a.package.inventoryRecords.length > 0 || a.package.returnRequests.length > 0) {
+        if (
+          a.package.inventoryRecords.length > 0 ||
+          a.package.returnRequests.length > 0 ||
+          committedElsewhere
+        ) {
           returnedOrBack += 1;
         } else {
           unaccounted.push(a.package.trackingId);

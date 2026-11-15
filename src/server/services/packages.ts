@@ -308,10 +308,13 @@ export async function getPublicTracking(trackingId: string): Promise<PublicTrack
 // requires the recipient phone number on the package record (exact
 // match after the same normalisation used at booking). Every failure
 // mode — unknown code, wrong phone, locked — throws the SAME
-// NotFoundError so the responses are indistinguishable, and every
-// failure is recorded (TrackingAccessAttempt + an audit row with no
-// actor). After TRACKING_DETAIL_MAX_FAILURES failures inside the
-// cooling window the detailed view locks for that tracking code.
+// NotFoundError so the responses are indistinguishable. Failure
+// bookkeeping is deliberately minimal on this unauthenticated
+// surface (Phase 6 review P6-R6, detailed at the function): only a
+// phone mismatch against a real package writes both a
+// TrackingAccessAttempt and an audit row. After
+// TRACKING_DETAIL_MAX_FAILURES failures inside the cooling window
+// the detailed view locks for that tracking code.
 // No financial data (COD amounts, charges) is ever exposed here.
 // ---------------------------------------------------------------------------
 
@@ -340,22 +343,27 @@ export async function getDetailedTracking(
   const normalized = normalizePhone(typeof phone === "string" ? phone : "");
   const phoneHash = createHash("sha256").update(normalized).digest("hex");
 
-  const deny = async (packageId: string | null, reason: string): Promise<never> => {
-    await prisma.trackingAccessAttempt.create({
-      data: { trackingId, phoneHash, succeeded: false },
-    });
-    await prisma.auditLog.create({
-      data: {
-        actorId: null,
-        actorRole: null,
-        action: "tracking.detailed_access_denied",
-        entityType: "Package",
-        entityId: packageId,
-        after: { trackingId, reason },
-      },
-    });
+  // Phase 6 review P6-R6 — the denial bookkeeping is deliberately
+  // asymmetric, because this endpoint is unauthenticated:
+  //  - a MALFORMED tracking code (or an unusable phone) writes
+  //    NOTHING at all: no attempt row, no audit row. Attackers
+  //    could otherwise grow both tables without bound.
+  //  - a LOCKED code writes nothing either: previously every
+  //    denial — including "already locked" — appended a fresh
+  //    failure row inside the cooling window, so the lock
+  //    refreshed itself forever (and a legitimate customer
+  //    retrying with the CORRECT phone kept extending their own
+  //    lockout). The lock now simply expires with the window.
+  //  - an UNKNOWN (well-formed) code records the failed attempt
+  //    (keyed by the code, so the lockout can still engage) but
+  //    no audit row.
+  //  - a phone mismatch on a REAL package records both the
+  //    attempt and the audit row — that is the case with a
+  //    genuine probing signal against a genuine parcel.
+  // Every path throws the identical NotFoundError.
+  if (!isValidTrackingId(trackingId) || normalized.length === 0) {
     throw new NotFoundError(DETAILED_TRACKING_DENIAL);
-  };
+  }
 
   const failures = await prisma.trackingAccessAttempt.count({
     where: {
@@ -365,11 +373,9 @@ export async function getDetailedTracking(
     },
   });
   if (failures >= TRACKING_DETAIL_MAX_FAILURES) {
-    return deny(null, "locked");
+    throw new NotFoundError(DETAILED_TRACKING_DENIAL);
   }
-  if (!isValidTrackingId(trackingId) || normalized.length === 0) {
-    return deny(null, "credentials_unusable");
-  }
+
   const pkg = await prisma.package.findUnique({
     where: { trackingId },
     select: {
@@ -388,12 +394,34 @@ export async function getDetailedTracking(
     },
   });
   if (!pkg) {
-    return deny(null, "unknown_tracking_id");
+    await prisma.trackingAccessAttempt.create({
+      data: { trackingId, phoneHash, succeeded: false },
+    });
+    throw new NotFoundError(DETAILED_TRACKING_DENIAL);
   }
   if (normalizePhone(pkg.recipientPhone) !== normalized) {
-    return deny(pkg.id, "phone_mismatch");
+    await prisma.trackingAccessAttempt.create({
+      data: { trackingId, phoneHash, succeeded: false },
+    });
+    await prisma.auditLog.create({
+      data: {
+        actorId: null,
+        actorRole: null,
+        action: "tracking.detailed_access_denied",
+        entityType: "Package",
+        entityId: pkg.id,
+        after: { trackingId, reason: "phone_mismatch" },
+      },
+    });
+    throw new NotFoundError(DETAILED_TRACKING_DENIAL);
   }
 
+  // Success clears the code's prior failure rows (P6-R6): a
+  // customer who mistyped, then verified, starts clean instead of
+  // sitting one failure away from a lockout.
+  await prisma.trackingAccessAttempt.deleteMany({
+    where: { trackingId, succeeded: false },
+  });
   await prisma.trackingAccessAttempt.create({
     data: { trackingId, phoneHash, succeeded: true },
   });
