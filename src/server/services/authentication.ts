@@ -38,6 +38,9 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   fullName: string;
+  /** When true the login flow must route the user to the set-password
+   *  step before any dashboard access (security doc §2/§4). */
+  mustChangePassword: boolean;
 }
 
 export async function verifyCredentials(
@@ -59,16 +62,21 @@ export async function verifyCredentials(
   };
 
   // Per-IP throttle: too many recent failures from this IP blocks further
-  // attempts regardless of the account targeted.
+  // attempts regardless of the account targeted. Rows recorded AS
+  // ip_throttled are excluded from the count: they are a consequence of
+  // throttling, and counting them would let continued attempts keep
+  // refreshing the window so the block never lapses (self-extension).
   if (ipAddress) {
     const recentIpFailures = await prisma.loginAttempt.count({
       where: {
         ipAddress,
         success: false,
+        reason: { not: "ip_throttled" },
         createdAt: { gte: new Date(Date.now() - IP_FAILURE_WINDOW_MS) },
       },
     });
     if (recentIpFailures >= IP_FAILURE_LIMIT) {
+      await compare(password, DUMMY_HASH); // keep the timing uniform
       await recordAttempt(null, false, "ip_throttled");
       return null;
     }
@@ -81,27 +89,51 @@ export async function verifyCredentials(
     return null;
   }
 
+  // Every early return below still pays a dummy bcrypt compare, so a
+  // suspended/locked/password-less account is indistinguishable by timing
+  // from a wrong password (the error message is already uniform).
   const eligibility = evaluateLoginEligibility(user);
   if (!eligibility.ok) {
+    await compare(password, DUMMY_HASH);
     await recordAttempt(user.id, false, eligibility.reason);
     return null;
   }
 
   if (!user.passwordHash) {
+    await compare(password, DUMMY_HASH);
     await recordAttempt(user.id, false, "no_password_set");
     return null;
   }
 
   const passwordOk = await compare(password, user.passwordHash);
   if (!passwordOk) {
-    const failure = nextFailureState(user.failedLoginAttempts);
-    await prisma.user.update({
+    // Atomic increment: the counter is bumped inside a single UPDATE, so
+    // parallel failed logins can no longer snapshot the same value and
+    // lose counts on write-back (which let an attacker batch guesses
+    // inside one compare window and slip past the lockout threshold).
+    // The returned row carries this statement's own post-increment value,
+    // which is what the lockout decision is made from.
+    const incremented = await prisma.user.update({
       where: { id: user.id },
-      data: {
-        failedLoginAttempts: failure.failedLoginAttempts,
-        lockedUntil: failure.lockedUntil,
-      },
+      data: { failedLoginAttempts: { increment: 1 } },
+      select: { failedLoginAttempts: true },
     });
+    const failure = nextFailureState(incremented.failedLoginAttempts - 1);
+    if (failure.lockedUntil) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          failedLoginAttempts: failure.failedLoginAttempts,
+          lockedUntil: failure.lockedUntil,
+        },
+      });
+    } else if (user.lockedUntil !== null) {
+      // Below the threshold: clear a stale, already-expired lock stamp.
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { lockedUntil: null },
+      });
+    }
     await recordAttempt(user.id, false, "bad_password");
     if (failure.lockedUntil) {
       await prisma.auditLog.create({
@@ -134,5 +166,10 @@ export async function verifyCredentials(
     },
   });
 
-  return { id: user.id, email: user.email, fullName: user.fullName };
+  return {
+    id: user.id,
+    email: user.email,
+    fullName: user.fullName,
+    mustChangePassword: user.mustChangePassword,
+  };
 }

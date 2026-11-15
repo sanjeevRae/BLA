@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { verifyCredentials } from "@/server/services/authentication";
 import { createDatabaseSession } from "@/lib/auth/session-cookie";
+import { getClientIp } from "@/lib/auth/client-ip";
 
 const loginSchema = z.object({
   email: z.string().email().max(254),
@@ -31,10 +32,9 @@ export async function loginAction(input: {
   if (!parsed.success) return { error: true };
 
   const headerStore = await headers();
-  const forwardedFor = headerStore.get("x-forwarded-for");
-  const ipAddress = forwardedFor
-    ? (forwardedFor.split(",")[0]?.trim() ?? null)
-    : headerStore.get("x-real-ip");
+  // IP comes from the configured trusted forwarding header — see
+  // src/lib/auth/client-ip.ts for the trust assumption behind it.
+  const ipAddress = getClientIp(headerStore);
   const userAgent = headerStore.get("user-agent");
 
   const user = await verifyCredentials(parsed.data.email, parsed.data.password, {
@@ -44,5 +44,7 @@ export async function loginAction(input: {
   if (!user) return { error: true };
 
   await createDatabaseSession(user.id, { ipAddress, userAgent });
-  redirect("/go");
+  // A flagged account must set a new password before any dashboard
+  // access (docs/security-architecture.md §2/§4).
+  redirect(user.mustChangePassword ? "/set-password" : "/go");
 }

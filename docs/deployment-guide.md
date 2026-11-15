@@ -60,6 +60,7 @@ prefixed `NEXT_PUBLIC_` and never appear in browser code.
 | `DIRECT_URL` | PostgreSQL direct connection used by Prisma Migrate | No |
 | `AUTH_SECRET` | Auth.js session encryption/signing secret | No |
 | `AUTH_URL` | Canonical app URL Auth.js uses for callbacks | No |
+| `TRUSTED_IP_HEADER` | Optional. Header the client IP is read from for login throttling/audit (default `x-forwarded-for`) | No |
 | `SUPABASE_URL` | Supabase project URL (server-side data/storage access where still used) | No |
 | `SUPABASE_ANON_KEY` | Supabase anon key — only for any client-side Supabase use that remains (e.g. Realtime); RLS-protected | Only if genuinely needed client-side |
 | `SUPABASE_SERVICE_KEY` | Supabase service-role key — **server only, bypasses RLS**; treat like a database password | **Never** |
@@ -73,6 +74,17 @@ prefixed `NEXT_PUBLIC_` and never appear in browser code.
 Local development uses the same names in the repo-root `.env` (see
 `.env.example` once added by the rebuild). The old `VITE_*` variables belong
 to the retired Vite app and are not used by the Next.js build.
+
+> **Client-IP trust note:** the login throttle and the IPs recorded in
+> `LoginAttempt`/`AuditLog` are derived from a forwarding header
+> (`TRUSTED_IP_HEADER`, default `x-forwarded-for`). That header is only
+> trustworthy when the deployment sits behind a proxy/platform that
+> **overwrites** it with the real peer address — Vercel does this, which is
+> one reason it is the primary platform above. Behind a self-hosted reverse
+> proxy, configure the proxy to overwrite the header (and set
+> `TRUSTED_IP_HEADER` if it uses a different one). On any topology where
+> clients can set the header themselves, treat recorded IPs as untrusted
+> and do not rely on the per-IP throttle as a control.
 
 ## 4. Database migration procedure
 

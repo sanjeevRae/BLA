@@ -36,7 +36,20 @@ export const { handlers, auth } = NextAuth({
         email: string;
         fullName?: string;
         name?: string | null;
+        status?: string;
       };
+      // Defense in depth: getActorContext() re-checks the account status
+      // from the database on every request, but code that calls auth()
+      // directly (the idiomatic Auth.js pattern) must be safe by default
+      // too — a suspended or deactivated account resolves to an EMPTY,
+      // already-expired session here, never to a usable identity.
+      if (dbUser.status !== "ACTIVE") {
+        return {
+          ...session,
+          user: undefined,
+          expires: new Date(0).toISOString(),
+        } as unknown as typeof session;
+      }
       session.user.id = dbUser.id;
       session.user.email = dbUser.email;
       session.user.name = dbUser.fullName ?? dbUser.name ?? dbUser.email;
