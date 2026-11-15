@@ -37,6 +37,9 @@ export default async function Page() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Link href="/vendor/billing" className={subtleButtonClass}>
+            Billing
+          </Link>
           <Link href="/vendor/profile" className={subtleButtonClass}>
             Organisation profile
           </Link>

@@ -72,27 +72,42 @@ model User {
   handoverBatchesTo       HandoverBatch[]             @relation("HandoverBatchToUser")
 
   driverProfile              Driver?
-  transfersCreated           Transfer[]         @relation("TransferCreatedBy")
-  transfersApproved          Transfer[]         @relation("TransferApprovedBy")
-  transfersSupervised        Transfer[]         @relation("TransferDispatchSupervisor")
-  manifestsGenerated         TransferManifest[] @relation("ManifestGeneratedBy")
-  transferItemsReceived      TransferItem[]     @relation("TransferItemReceivedBy")
-  transferScansPerformed     TransferScan[]     @relation("TransferScanBy")
-  tripStopsRecorded          TripStop[]         @relation("TripStopRecordedBy")
+  transfersCreated           Transfer[]           @relation("TransferCreatedBy")
+  transfersApproved          Transfer[]           @relation("TransferApprovedBy")
+  transfersSupervised        Transfer[]           @relation("TransferDispatchSupervisor")
+  manifestsGenerated         TransferManifest[]   @relation("ManifestGeneratedBy")
+  transferItemsReceived      TransferItem[]       @relation("TransferItemReceivedBy")
+  transferScansPerformed     TransferScan[]       @relation("TransferScanBy")
+  tripStopsRecorded          TripStop[]           @relation("TripStopRecordedBy")
   vehicleMaintenanceRecorded VehicleMaintenance[] @relation("VehicleMaintenanceRecordedBy")
 
-  deliveryBatchesCreated   DeliveryBatch[]       @relation("DeliveryBatchCreatedBy")
-  deliveryBatchesClosed    DeliveryBatch[]       @relation("DeliveryBatchClosedBy")
-  deliveryAssignmentsMade  DeliveryAssignment[]  @relation("DeliveryAssignmentBy")
-  deliveryAttemptsRecorded DeliveryAttempt[]     @relation("DeliveryAttemptRecordedBy")
-  proofsRecorded           ProofOfDelivery[]     @relation("ProofRecordedBy")
+  deliveryBatchesCreated   DeliveryBatch[]         @relation("DeliveryBatchCreatedBy")
+  deliveryBatchesClosed    DeliveryBatch[]         @relation("DeliveryBatchClosedBy")
+  deliveryAssignmentsMade  DeliveryAssignment[]    @relation("DeliveryAssignmentBy")
+  deliveryAttemptsRecorded DeliveryAttempt[]       @relation("DeliveryAttemptRecordedBy")
+  proofsRecorded           ProofOfDelivery[]       @relation("ProofRecordedBy")
   codCollectionsMade       DeliveryCodCollection[] @relation("CodCollectedBy")
-  returnsRequested         ReturnRequest[]       @relation("ReturnRequestedBy")
-  returnsAuthorised        ReturnRequest[]       @relation("ReturnAuthorisedBy")
-  returnsReceived          ReturnRequest[]       @relation("ReturnReceivedBy")
-  returnsInspected         ReturnRequest[]       @relation("ReturnInspectedBy")
-  returnsCompleted         ReturnRequest[]       @relation("ReturnCompletedBy")
-  returnsHandedTo          ReturnRequest[]       @relation("ReturnHandedTo")
+  returnsRequested         ReturnRequest[]         @relation("ReturnRequestedBy")
+  returnsAuthorised        ReturnRequest[]         @relation("ReturnAuthorisedBy")
+  returnsReceived          ReturnRequest[]         @relation("ReturnReceivedBy")
+  returnsInspected         ReturnRequest[]         @relation("ReturnInspectedBy")
+  returnsCompleted         ReturnRequest[]         @relation("ReturnCompletedBy")
+  returnsHandedTo          ReturnRequest[]         @relation("ReturnHandedTo")
+  invoicesIssued           Invoice[]               @relation("InvoiceIssuedBy")
+  paymentsRecorded         Payment[]               @relation("PaymentRecordedBy")
+  allocationsMade          PaymentAllocation[]     @relation("AllocationBy")
+  ledgerEntriesActed       LedgerTransaction[]     @relation("LedgerActor")
+  ledgerEntriesApproved    LedgerTransaction[]     @relation("LedgerApprovedBy")
+  remittancesSubmitted     CodRemittance[]         @relation("RemittanceSubmittedBy")
+  remittancesVerified      CodRemittance[]         @relation("RemittanceVerifiedBy")
+  remittancesResolved      CodRemittance[]         @relation("RemittanceResolvedBy")
+  settlementsPrepared      VendorSettlement[]      @relation("SettlementPreparedBy")
+  settlementsApproved      VendorSettlement[]      @relation("SettlementApprovedBy")
+  refundsRequested         Refund[]                @relation("RefundRequestedBy")
+  refundsApproved          Refund[]                @relation("RefundApprovedBy")
+  refundsProcessed         Refund[]                @relation("RefundProcessedBy")
+  adjustmentsCreated       FinancialAdjustment[]   @relation("AdjustmentCreatedBy")
+  adjustmentsApproved      FinancialAdjustment[]   @relation("AdjustmentApprovedBy")
 
   @@index([phone])
   @@schema("app")
@@ -325,31 +340,32 @@ model Warehouse {
   memberships WarehouseMembership[]
   invitations UserInvitation[]
 
-  serviceAreas      ServiceArea[]
-  vendorAssignments VendorWarehouseAssignment[]
-  ordersOrigin      Order[]                     @relation("OrderOriginWarehouse")
-  shipmentsOrigin   Shipment[]                  @relation("ShipmentOriginWarehouse")
-  shipmentsDest     Shipment[]                  @relation("ShipmentDestinationWarehouse")
-  packagesCurrent   Package[]                   @relation("PackageCurrentWarehouse")
-  trackingEvents    TrackingEvent[]
-  inventoryRecords  InventoryRecord[]
-  movementsFrom     InventoryMovement[]         @relation("MovementFromWarehouse")
-  movementsTo       InventoryMovement[]         @relation("MovementToWarehouse")
-  packageCustodies  PackageCustody[]
-  stockItems        StockItem[]
-  stockMovements    StockMovement[]
-  handoverBatches   HandoverBatch[]             @relation("HandoverBatchWarehouse")
-  handoverBatchesFrom HandoverBatch[]           @relation("HandoverBatchFromWarehouse")
-  handoverBatchesTo   HandoverBatch[]           @relation("HandoverBatchToWarehouse")
+  serviceAreas        ServiceArea[]
+  codRemittances      CodRemittance[]             @relation("RemittanceWarehouse")
+  vendorAssignments   VendorWarehouseAssignment[]
+  ordersOrigin        Order[]                     @relation("OrderOriginWarehouse")
+  shipmentsOrigin     Shipment[]                  @relation("ShipmentOriginWarehouse")
+  shipmentsDest       Shipment[]                  @relation("ShipmentDestinationWarehouse")
+  packagesCurrent     Package[]                   @relation("PackageCurrentWarehouse")
+  trackingEvents      TrackingEvent[]
+  inventoryRecords    InventoryRecord[]
+  movementsFrom       InventoryMovement[]         @relation("MovementFromWarehouse")
+  movementsTo         InventoryMovement[]         @relation("MovementToWarehouse")
+  packageCustodies    PackageCustody[]
+  stockItems          StockItem[]
+  stockMovements      StockMovement[]
+  handoverBatches     HandoverBatch[]             @relation("HandoverBatchWarehouse")
+  handoverBatchesFrom HandoverBatch[]             @relation("HandoverBatchFromWarehouse")
+  handoverBatchesTo   HandoverBatch[]             @relation("HandoverBatchToWarehouse")
 
-  driversHome       Driver[]                    @relation("DriverHomeWarehouse")
-  vehiclesHome      Vehicle[]                   @relation("VehicleHomeWarehouse")
-  transfersOrigin   Transfer[]                  @relation("TransferOriginWarehouse")
-  transfersDest     Transfer[]                  @relation("TransferDestinationWarehouse")
-  transferScans     TransferScan[]              @relation("TransferScanWarehouse")
+  driversHome     Driver[]       @relation("DriverHomeWarehouse")
+  vehiclesHome    Vehicle[]      @relation("VehicleHomeWarehouse")
+  transfersOrigin Transfer[]     @relation("TransferOriginWarehouse")
+  transfersDest   Transfer[]     @relation("TransferDestinationWarehouse")
+  transferScans   TransferScan[] @relation("TransferScanWarehouse")
 
-  deliveryBatches   DeliveryBatch[]             @relation("DeliveryBatchWarehouse")
-  returnRequests    ReturnRequest[]             @relation("ReturnWarehouse")
+  deliveryBatches DeliveryBatch[] @relation("DeliveryBatchWarehouse")
+  returnRequests  ReturnRequest[] @relation("ReturnWarehouse")
 
   @@index([district])
   @@index([status])
@@ -460,11 +476,11 @@ model ServiceArea {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  servingWarehouse Warehouse     @relation(fields: [servingWarehouseId], references: [id], onDelete: Restrict)
+  servingWarehouse Warehouse       @relation(fields: [servingWarehouseId], references: [id], onDelete: Restrict)
   orders           Order[]
   shipments        Shipment[]
-  pricingDest      PricingRule[] @relation("PricingDestinationArea")
-  pricingOrigin    PricingRule[] @relation("PricingOriginArea")
+  pricingDest      PricingRule[]   @relation("PricingDestinationArea")
+  pricingOrigin    PricingRule[]   @relation("PricingOriginArea")
   deliveryBatches  DeliveryBatch[]
 
   @@unique([district, name])
@@ -549,14 +565,18 @@ model Vendor {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  verifiedBy  User?                       @relation("VendorVerifiedBy", fields: [verifiedById], references: [id], onDelete: Restrict)
-  createdBy   User                        @relation("VendorCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  users       VendorUser[]
-  addresses   VendorAddress[]
-  documents   VendorDocument[]
-  assignments VendorWarehouseAssignment[]
-  invitations UserInvitation[]
-  orders      Order[]
+  verifiedBy     User?                       @relation("VendorVerifiedBy", fields: [verifiedById], references: [id], onDelete: Restrict)
+  createdBy      User                        @relation("VendorCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  users          VendorUser[]
+  addresses      VendorAddress[]
+  documents      VendorDocument[]
+  assignments    VendorWarehouseAssignment[]
+  invitations    UserInvitation[]
+  orders         Order[]
+  financeAccount FinancialAccount?           @relation("VendorFinanceAccount")
+  invoices       Invoice[]
+  settlements    VendorSettlement[]
+  paymentsMade   Payment[]                   @relation("PaymentPayerVendor")
 
   @@index([verificationStatus])
   @@index([businessName])
@@ -682,13 +702,15 @@ model Customer {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  user       User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
-  mergedInto Customer?         @relation("CustomerMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
-  mergedFrom Customer[]        @relation("CustomerMerge")
-  createdBy  User?             @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  addresses  CustomerAddress[]
-  orders     Order[]           @relation("OrderSenderCustomer")
-  packages   Package[]         @relation("PackageRecipientCustomer")
+  user         User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  mergedInto   Customer?         @relation("CustomerMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
+  mergedFrom   Customer[]        @relation("CustomerMerge")
+  createdBy    User?             @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  addresses    CustomerAddress[]
+  orders       Order[]           @relation("OrderSenderCustomer")
+  packages     Package[]         @relation("PackageRecipientCustomer")
+  invoices     Invoice[]
+  paymentsMade Payment[]         @relation("PaymentPayerCustomer")
 
   @@index([fullName])
   @@schema("app")
@@ -768,19 +790,23 @@ model Order {
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
-  vendor                 Vendor?          @relation(fields: [vendorId], references: [id], onDelete: Restrict)
-  customer               Customer?        @relation("OrderSenderCustomer", fields: [customerId], references: [id], onDelete: Restrict)
-  createdBy              User             @relation("OrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  approvedBy             User?            @relation("OrderApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
-  originWarehouse        Warehouse?       @relation("OrderOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
-  destinationServiceArea ServiceArea?     @relation(fields: [destinationServiceAreaId], references: [id], onDelete: Restrict)
-  pickupVendorAddress    VendorAddress?   @relation("OrderPickupVendorAddress", fields: [pickupVendorAddressId], references: [id], onDelete: Restrict)
-  pickupCustomerAddress  CustomerAddress? @relation("OrderPickupCustomerAddress", fields: [pickupCustomerAddressId], references: [id], onDelete: Restrict)
+  vendor                 Vendor?             @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  customer               Customer?           @relation("OrderSenderCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy              User                @relation("OrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy             User?               @relation("OrderApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  originWarehouse        Warehouse?          @relation("OrderOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
+  destinationServiceArea ServiceArea?        @relation(fields: [destinationServiceAreaId], references: [id], onDelete: Restrict)
+  pickupVendorAddress    VendorAddress?      @relation("OrderPickupVendorAddress", fields: [pickupVendorAddressId], references: [id], onDelete: Restrict)
+  pickupCustomerAddress  CustomerAddress?    @relation("OrderPickupCustomerAddress", fields: [pickupCustomerAddressId], references: [id], onDelete: Restrict)
   items                  OrderItem[]
   shipments              Shipment[]
   packages               Package[]
   trackingEvents         TrackingEvent[]
   returnRequests         ReturnRequest[]
+  invoices               Invoice[]
+  payments               Payment[]
+  ledgerTransactions     LedgerTransaction[]
+  invoiceLines           InvoiceLine[]
 
   @@index([vendorId, createdAt])
   @@index([customerId])
@@ -836,18 +862,19 @@ model Shipment {
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
-  order                  Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  originalShipment       Shipment?       @relation("ShipmentOriginal", fields: [originalShipmentId], references: [id], onDelete: Restrict)
-  derivedShipments       Shipment[]      @relation("ShipmentOriginal")
-  originWarehouse        Warehouse       @relation("ShipmentOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
-  destinationWarehouse   Warehouse?      @relation("ShipmentDestinationWarehouse", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
-  destinationServiceArea ServiceArea?    @relation(fields: [destinationServiceAreaId], references: [id], onDelete: Restrict)
-  shippingService        ShippingService @relation(fields: [shippingServiceId], references: [id], onDelete: Restrict)
-  pricingRule            PricingRule?    @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
+  order                  Order                   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  originalShipment       Shipment?               @relation("ShipmentOriginal", fields: [originalShipmentId], references: [id], onDelete: Restrict)
+  derivedShipments       Shipment[]              @relation("ShipmentOriginal")
+  originWarehouse        Warehouse               @relation("ShipmentOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
+  destinationWarehouse   Warehouse?              @relation("ShipmentDestinationWarehouse", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
+  destinationServiceArea ServiceArea?            @relation(fields: [destinationServiceAreaId], references: [id], onDelete: Restrict)
+  shippingService        ShippingService         @relation(fields: [shippingServiceId], references: [id], onDelete: Restrict)
+  pricingRule            PricingRule?            @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
   packages               Package[]
   trackingEvents         TrackingEvent[]
   codCollections         DeliveryCodCollection[]
   returnRequests         ReturnRequest[]
+  invoiceLines           InvoiceLine[]
 
   @@index([orderId])
   @@index([originWarehouseId, status])
@@ -903,24 +930,26 @@ model Package {
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 
-  shipment          Shipment        @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
-  order             Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  recipientCustomer Customer?       @relation("PackageRecipientCustomer", fields: [recipientCustomerId], references: [id], onDelete: Restrict)
-  currentWarehouse  Warehouse?      @relation("PackageCurrentWarehouse", fields: [currentWarehouseId], references: [id], onDelete: Restrict)
-  weightMeasuredBy  User?           @relation("PackageWeightMeasuredBy", fields: [weightMeasuredById], references: [id], onDelete: Restrict)
-  items             PackageItem[]
-  labels            PackageLabel[]
-  trackingEvents    TrackingEvent[]
-  inventoryRecords  InventoryRecord[]
-  inventoryMovements InventoryMovement[]
-  custodies         PackageCustody[]
-  handoverLines     CustodyHandover[]
-  transferItems     TransferItem[]
+  shipment            Shipment               @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  order               Order                  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  recipientCustomer   Customer?              @relation("PackageRecipientCustomer", fields: [recipientCustomerId], references: [id], onDelete: Restrict)
+  currentWarehouse    Warehouse?             @relation("PackageCurrentWarehouse", fields: [currentWarehouseId], references: [id], onDelete: Restrict)
+  weightMeasuredBy    User?                  @relation("PackageWeightMeasuredBy", fields: [weightMeasuredById], references: [id], onDelete: Restrict)
+  items               PackageItem[]
+  labels              PackageLabel[]
+  trackingEvents      TrackingEvent[]
+  inventoryRecords    InventoryRecord[]
+  inventoryMovements  InventoryMovement[]
+  custodies           PackageCustody[]
+  handoverLines       CustodyHandover[]
+  transferItems       TransferItem[]
+  ledgerTransactions  LedgerTransaction[]
   deliveryAssignments DeliveryAssignment[]
-  deliveryAttempts  DeliveryAttempt[]
-  proofsOfDelivery  ProofOfDelivery[]
-  codCollection     DeliveryCodCollection?
-  returnRequests    ReturnRequest[]
+  deliveryAttempts    DeliveryAttempt[]
+  proofsOfDelivery    ProofOfDelivery[]
+  codCollection       DeliveryCodCollection?
+  returnRequests      ReturnRequest[]
+  invoiceLines        InvoiceLine[]
 
   @@index([shipmentId])
   @@index([currentWarehouseId, operationalStatus])
@@ -975,38 +1004,38 @@ model PackageLabel {
 /// the append-only trigger like AuditLog. Transfer/trip context FKs
 /// landed with the Phase 5 transport models.
 model TrackingEvent {
-  id             String   @id @default(uuid())
-  packageId      String?
-  shipmentId     String?
-  orderId        String?
-  transferId     String?
-  tripId         String?
+  id                   String   @id @default(uuid())
+  packageId            String?
+  shipmentId           String?
+  orderId              String?
+  transferId           String?
+  tripId               String?
   deliveryAssignmentId String?
-  subjectType    String
-  eventType      String
-  previousStatus String?
-  newStatus      String?
-  occurredAt     DateTime @default(now())
-  actorId        String?
-  actorRole      String?
-  warehouseId    String?
-  notes          String?
-  source         String   @default("WEB")
-  idempotencyKey String?  @unique
-  createdAt      DateTime @default(now())
+  subjectType          String
+  eventType            String
+  previousStatus       String?
+  newStatus            String?
+  occurredAt           DateTime @default(now())
+  actorId              String?
+  actorRole            String?
+  warehouseId          String?
+  notes                String?
+  source               String   @default("WEB")
+  idempotencyKey       String?  @unique
+  createdAt            DateTime @default(now())
 
-  package   Package?   @relation(fields: [packageId], references: [id], onDelete: Restrict)
-  shipment  Shipment?  @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
-  order     Order?     @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  transfer  Transfer?  @relation(fields: [transferId], references: [id], onDelete: Restrict)
-  trip      Trip?      @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  package            Package?            @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  shipment           Shipment?           @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  order              Order?              @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  transfer           Transfer?           @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  trip               Trip?               @relation(fields: [tripId], references: [id], onDelete: Restrict)
   deliveryAssignment DeliveryAssignment? @relation(fields: [deliveryAssignmentId], references: [id], onDelete: Restrict)
-  actor     User?      @relation("TrackingEventActor", fields: [actorId], references: [id], onDelete: Restrict)
-  warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  actor              User?               @relation("TrackingEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+  warehouse          Warehouse?          @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
 
-  inventoryRecords InventoryRecord[] @relation("InventoryReceivingEvent")
+  inventoryRecords   InventoryRecord[]   @relation("InventoryReceivingEvent")
   inventoryMovements InventoryMovement[]
-  packageCustodies PackageCustody[]
+  packageCustodies   PackageCustody[]
 
   @@index([packageId, occurredAt])
   @@index([shipmentId, occurredAt])
@@ -1044,12 +1073,12 @@ model InventoryRecord {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  package         Package          @relation(fields: [packageId], references: [id], onDelete: Restrict)
-  warehouse       Warehouse        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  storageLocation StorageLocation? @relation(fields: [storageLocationId], references: [id], onDelete: Restrict)
-  receivingEvent  TrackingEvent    @relation("InventoryReceivingEvent", fields: [receivingEventId], references: [id], onDelete: Restrict)
-  receivedBy      User             @relation("InventoryReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
-  releasedBy      User?            @relation("InventoryReleasedBy", fields: [releasedById], references: [id], onDelete: Restrict)
+  package         Package             @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  warehouse       Warehouse           @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  storageLocation StorageLocation?    @relation(fields: [storageLocationId], references: [id], onDelete: Restrict)
+  receivingEvent  TrackingEvent       @relation("InventoryReceivingEvent", fields: [receivingEventId], references: [id], onDelete: Restrict)
+  receivedBy      User                @relation("InventoryReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  releasedBy      User?               @relation("InventoryReleasedBy", fields: [releasedById], references: [id], onDelete: Restrict)
   movements       InventoryMovement[]
 
   @@index([warehouseId, releasedAt])
@@ -1109,12 +1138,12 @@ model PackageCustody {
   trackingEventId   String?
   createdAt         DateTime  @default(now())
 
-  package         Package          @relation(fields: [packageId], references: [id], onDelete: Restrict)
-  custodianUser   User?            @relation("CustodyUser", fields: [custodianUserId], references: [id], onDelete: Restrict)
-  warehouse       Warehouse?       @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  storageLocation StorageLocation? @relation(fields: [storageLocationId], references: [id], onDelete: Restrict)
-  handover        CustodyHandover? @relation("CustodyBeganWithHandover", fields: [handoverId], references: [id], onDelete: Restrict)
-  trackingEvent   TrackingEvent?   @relation(fields: [trackingEventId], references: [id], onDelete: Restrict)
+  package           Package           @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  custodianUser     User?             @relation("CustodyUser", fields: [custodianUserId], references: [id], onDelete: Restrict)
+  warehouse         Warehouse?        @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  storageLocation   StorageLocation?  @relation(fields: [storageLocationId], references: [id], onDelete: Restrict)
+  handover          CustodyHandover?  @relation("CustodyBeganWithHandover", fields: [handoverId], references: [id], onDelete: Restrict)
+  trackingEvent     TrackingEvent?    @relation(fields: [trackingEventId], references: [id], onDelete: Restrict)
   handoverLinesFrom CustodyHandover[] @relation("HandoverFromCustody")
   handoverLinesTo   CustodyHandover[] @relation("HandoverToCustody")
 
@@ -1150,13 +1179,13 @@ model HandoverBatch {
   confirmedAt       DateTime?
   updatedAt         DateTime  @updatedAt
 
-  warehouse     Warehouse       @relation("HandoverBatchWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
-  fromUser      User?           @relation("HandoverBatchFromUser", fields: [fromUserId], references: [id], onDelete: Restrict)
-  fromWarehouse Warehouse?      @relation("HandoverBatchFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
-  toUser        User?           @relation("HandoverBatchToUser", fields: [toUserId], references: [id], onDelete: Restrict)
-  toWarehouse   Warehouse?      @relation("HandoverBatchToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
-  initiatedBy   User            @relation("HandoverInitiatedBy", fields: [initiatedById], references: [id], onDelete: Restrict)
-  confirmedBy   User?           @relation("HandoverConfirmedBy", fields: [confirmedById], references: [id], onDelete: Restrict)
+  warehouse     Warehouse         @relation("HandoverBatchWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  fromUser      User?             @relation("HandoverBatchFromUser", fields: [fromUserId], references: [id], onDelete: Restrict)
+  fromWarehouse Warehouse?        @relation("HandoverBatchFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  toUser        User?             @relation("HandoverBatchToUser", fields: [toUserId], references: [id], onDelete: Restrict)
+  toWarehouse   Warehouse?        @relation("HandoverBatchToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+  initiatedBy   User              @relation("HandoverInitiatedBy", fields: [initiatedById], references: [id], onDelete: Restrict)
+  confirmedBy   User?             @relation("HandoverConfirmedBy", fields: [confirmedById], references: [id], onDelete: Restrict)
   lines         CustodyHandover[]
 
   @@index([warehouseId, status])
@@ -1178,10 +1207,10 @@ model CustodyHandover {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  batch          HandoverBatch  @relation(fields: [batchId], references: [id], onDelete: Restrict)
-  package        Package        @relation(fields: [packageId], references: [id], onDelete: Restrict)
-  fromCustody    PackageCustody @relation("HandoverFromCustody", fields: [fromCustodyId], references: [id], onDelete: Restrict)
-  toCustody      PackageCustody? @relation("HandoverToCustody", fields: [toCustodyId], references: [id], onDelete: Restrict)
+  batch          HandoverBatch    @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  package        Package          @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  fromCustody    PackageCustody   @relation("HandoverFromCustody", fields: [fromCustodyId], references: [id], onDelete: Restrict)
+  toCustody      PackageCustody?  @relation("HandoverToCustody", fields: [toCustodyId], references: [id], onDelete: Restrict)
   beganCustodies PackageCustody[] @relation("CustodyBeganWithHandover")
 
   @@unique([batchId, packageId])
@@ -1268,15 +1297,17 @@ model Driver {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  user          User              @relation(fields: [userId], references: [id], onDelete: Restrict)
-  homeWarehouse Warehouse         @relation("DriverHomeWarehouse", fields: [homeWarehouseId], references: [id], onDelete: Restrict)
-  currentTrip   Trip?             @relation("DriverCurrentTrip", fields: [currentTripId], references: [id], onDelete: Restrict)
-  capabilities  DriverCapability[]
-  trips         Trip[]            @relation("TripDriver")
-  transfers     Transfer[]        @relation("TransferDriver")
-  vehiclesDefault Vehicle[]       @relation("VehicleAssignedDriver")
-  deliveryBatches    DeliveryBatch[]    @relation("DeliveryBatchRider")
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  homeWarehouse       Warehouse            @relation("DriverHomeWarehouse", fields: [homeWarehouseId], references: [id], onDelete: Restrict)
+  currentTrip         Trip?                @relation("DriverCurrentTrip", fields: [currentTripId], references: [id], onDelete: Restrict)
+  capabilities        DriverCapability[]
+  trips               Trip[]               @relation("TripDriver")
+  transfers           Transfer[]           @relation("TransferDriver")
+  vehiclesDefault     Vehicle[]            @relation("VehicleAssignedDriver")
+  deliveryBatches     DeliveryBatch[]      @relation("DeliveryBatchRider")
   deliveryAssignments DeliveryAssignment[] @relation("DeliveryAssignmentDriver")
+  financeAccount      FinancialAccount?    @relation("DriverFinanceAccount")
+  codRemittances      CodRemittance[]      @relation("RemittanceDriver")
 
   @@index([homeWarehouseId, availabilityStatus])
   @@index([licenseExpiry])
@@ -1304,25 +1335,25 @@ model DriverCapability {
 /// expired insurance/registration, failed inspection, or any
 /// non-AVAILABLE status (driver-workflow.md §4).
 model Vehicle {
-  id                String    @id @default(uuid())
-  registration      String    @unique
-  type              String
-  capacityKg        Decimal?  @db.Decimal(10, 2)
-  capacityVolumeM3  Decimal?  @db.Decimal(8, 2)
-  homeWarehouseId   String?
-  status            String    @default("AVAILABLE")
-  insuranceExpiry   DateTime? @db.Date
+  id                 String    @id @default(uuid())
+  registration       String    @unique
+  type               String
+  capacityKg         Decimal?  @db.Decimal(10, 2)
+  capacityVolumeM3   Decimal?  @db.Decimal(8, 2)
+  homeWarehouseId    String?
+  status             String    @default("AVAILABLE")
+  insuranceExpiry    DateTime? @db.Date
   registrationExpiry DateTime? @db.Date
-  inspectionStatus  String    @default("VALID")
-  assignedDriverId  String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  inspectionStatus   String    @default("VALID")
+  assignedDriverId   String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  homeWarehouse  Warehouse?          @relation("VehicleHomeWarehouse", fields: [homeWarehouseId], references: [id], onDelete: Restrict)
-  assignedDriver Driver?             @relation("VehicleAssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
-  trips          Trip[]              @relation("TripVehicle")
-  transfers      Transfer[]          @relation("TransferVehicle")
-  maintenance    VehicleMaintenance[]
+  homeWarehouse       Warehouse?           @relation("VehicleHomeWarehouse", fields: [homeWarehouseId], references: [id], onDelete: Restrict)
+  assignedDriver      Driver?              @relation("VehicleAssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  trips               Trip[]               @relation("TripVehicle")
+  transfers           Transfer[]           @relation("TransferVehicle")
+  maintenance         VehicleMaintenance[]
   deliveryAssignments DeliveryAssignment[] @relation("DeliveryAssignmentVehicle")
 
   @@index([status])
@@ -1331,17 +1362,17 @@ model Vehicle {
 }
 
 model VehicleMaintenance {
-  id          String    @id @default(uuid())
-  vehicleId   String
-  kind        String
-  scheduledAt DateTime
-  completedAt DateTime?
-  costPaisa   BigInt?
-  notes       String?
-  nextDueAt   DateTime?
+  id           String    @id @default(uuid())
+  vehicleId    String
+  kind         String
+  scheduledAt  DateTime
+  completedAt  DateTime?
+  costPaisa    BigInt?
+  notes        String?
+  nextDueAt    DateTime?
   recordedById String
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   vehicle    Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
   recordedBy User    @relation("VehicleMaintenanceRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
@@ -1357,40 +1388,40 @@ model VehicleMaintenance {
 /// (accounted) — enforced by TransferService; counts are always
 /// counted from items, never denormalised.
 model Transfer {
-  id                    String    @id @default(uuid())
-  transferNumber        String    @unique
-  originWarehouseId     String
+  id                     String    @id @default(uuid())
+  transferNumber         String    @unique
+  originWarehouseId      String
   destinationWarehouseId String
-  status                String    @default("DRAFT")
-  driverId              String?
-  vehicleId             String?
-  tripId                String?   @unique
-  dispatchSupervisorId  String?
-  createdById           String
-  approvedById          String?
-  approvedAt            DateTime?
-  expectedArrivalAt     DateTime?
-  dispatchedAt          DateTime?
-  arrivedAt             DateTime?
-  reconciledAt          DateTime?
-  closedAt              DateTime?
-  instructions          String?
-  version               Int       @default(1)
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  status                 String    @default("DRAFT")
+  driverId               String?
+  vehicleId              String?
+  tripId                 String?   @unique
+  dispatchSupervisorId   String?
+  createdById            String
+  approvedById           String?
+  approvedAt             DateTime?
+  expectedArrivalAt      DateTime?
+  dispatchedAt           DateTime?
+  arrivedAt              DateTime?
+  reconciledAt           DateTime?
+  closedAt               DateTime?
+  instructions           String?
+  version                Int       @default(1)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  originWarehouse    Warehouse        @relation("TransferOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
-  destinationWarehouse Warehouse      @relation("TransferDestinationWarehouse", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
-  driver             Driver?          @relation("TransferDriver", fields: [driverId], references: [id], onDelete: Restrict)
-  vehicle            Vehicle?         @relation("TransferVehicle", fields: [vehicleId], references: [id], onDelete: Restrict)
-  trip               Trip?            @relation("TransferTrip", fields: [tripId], references: [id], onDelete: Restrict)
-  dispatchSupervisor User?            @relation("TransferDispatchSupervisor", fields: [dispatchSupervisorId], references: [id], onDelete: Restrict)
-  createdBy          User             @relation("TransferCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  approvedBy         User?            @relation("TransferApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
-  items              TransferItem[]
-  manifest           TransferManifest?
-  executedTrip       Trip?            @relation("TripTransfer")
-  trackingEvents     TrackingEvent[]
+  originWarehouse      Warehouse         @relation("TransferOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
+  destinationWarehouse Warehouse         @relation("TransferDestinationWarehouse", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
+  driver               Driver?           @relation("TransferDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  vehicle              Vehicle?          @relation("TransferVehicle", fields: [vehicleId], references: [id], onDelete: Restrict)
+  trip                 Trip?             @relation("TransferTrip", fields: [tripId], references: [id], onDelete: Restrict)
+  dispatchSupervisor   User?             @relation("TransferDispatchSupervisor", fields: [dispatchSupervisorId], references: [id], onDelete: Restrict)
+  createdBy            User              @relation("TransferCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy           User?             @relation("TransferApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  items                TransferItem[]
+  manifest             TransferManifest?
+  executedTrip         Trip?             @relation("TripTransfer")
+  trackingEvents       TrackingEvent[]
 
   @@index([originWarehouseId, status])
   @@index([destinationWarehouseId, status])
@@ -1493,13 +1524,13 @@ model Trip {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  transfer       Transfer  @relation("TripTransfer", fields: [transferId], references: [id], onDelete: Restrict)
-  onTransfer     Transfer? @relation("TransferTrip")
-  driver         Driver    @relation("TripDriver", fields: [driverId], references: [id], onDelete: Restrict)
-  vehicle        Vehicle   @relation("TripVehicle", fields: [vehicleId], references: [id], onDelete: Restrict)
-  stops          TripStop[]
-  currentForDriver Driver[] @relation("DriverCurrentTrip")
-  trackingEvents TrackingEvent[]
+  transfer         Transfer        @relation("TripTransfer", fields: [transferId], references: [id], onDelete: Restrict)
+  onTransfer       Transfer?       @relation("TransferTrip")
+  driver           Driver          @relation("TripDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  vehicle          Vehicle         @relation("TripVehicle", fields: [vehicleId], references: [id], onDelete: Restrict)
+  stops            TripStop[]
+  currentForDriver Driver[]        @relation("DriverCurrentTrip")
+  trackingEvents   TrackingEvent[]
 
   @@index([driverId, status])
   @@index([vehicleId, status])
@@ -1508,17 +1539,17 @@ model Trip {
 
 /// Manual checkpoint on a Trip (replaces legacy `checkpoints`).
 model TripStop {
-  id          String    @id @default(uuid())
-  tripId      String
-  sequence    Int
-  label       String
-  latitude    Decimal?  @db.Decimal(10, 7)
-  longitude   Decimal?  @db.Decimal(10, 7)
-  plannedAt   DateTime?
-  passedAt    DateTime?
+  id           String    @id @default(uuid())
+  tripId       String
+  sequence     Int
+  label        String
+  latitude     Decimal?  @db.Decimal(10, 7)
+  longitude    Decimal?  @db.Decimal(10, 7)
+  plannedAt    DateTime?
+  passedAt     DateTime?
   recordedById String
-  notes       String?
-  createdAt   DateTime  @default(now())
+  notes        String?
+  createdAt    DateTime  @default(now())
 
   trip       Trip @relation(fields: [tripId], references: [id], onDelete: Restrict)
   recordedBy User @relation("TripStopRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
@@ -1553,12 +1584,12 @@ model DeliveryBatch {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  rider       Driver           @relation("DeliveryBatchRider", fields: [riderId], references: [id], onDelete: Restrict)
-  warehouse   Warehouse        @relation("DeliveryBatchWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
-  serviceArea ServiceArea?     @relation(fields: [serviceAreaId], references: [id], onDelete: Restrict)
-  createdBy   User             @relation("DeliveryBatchCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  closedBy    User?            @relation("DeliveryBatchClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
-  assignments DeliveryAssignment[]
+  rider          Driver                  @relation("DeliveryBatchRider", fields: [riderId], references: [id], onDelete: Restrict)
+  warehouse      Warehouse               @relation("DeliveryBatchWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  serviceArea    ServiceArea?            @relation(fields: [serviceAreaId], references: [id], onDelete: Restrict)
+  createdBy      User                    @relation("DeliveryBatchCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  closedBy       User?                   @relation("DeliveryBatchClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  assignments    DeliveryAssignment[]
   codCollections DeliveryCodCollection[]
 
   @@index([riderId, batchDate])
@@ -1600,13 +1631,13 @@ model DeliveryAssignment {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  package        Package            @relation(fields: [packageId], references: [id], onDelete: Restrict)
-  driver         Driver             @relation("DeliveryAssignmentDriver", fields: [driverId], references: [id], onDelete: Restrict)
-  batch          DeliveryBatch?     @relation(fields: [batchId], references: [id], onDelete: Restrict)
-  vehicle        Vehicle?           @relation("DeliveryAssignmentVehicle", fields: [vehicleId], references: [id], onDelete: Restrict)
-  assignedBy     User               @relation("DeliveryAssignmentBy", fields: [assignedById], references: [id], onDelete: Restrict)
-  reassignedFrom DeliveryAssignment? @relation("AssignmentReassignment", fields: [reassignedFromId], references: [id], onDelete: Restrict)
-  reassignments  DeliveryAssignment[] @relation("AssignmentReassignment")
+  package        Package                @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  driver         Driver                 @relation("DeliveryAssignmentDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  batch          DeliveryBatch?         @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  vehicle        Vehicle?               @relation("DeliveryAssignmentVehicle", fields: [vehicleId], references: [id], onDelete: Restrict)
+  assignedBy     User                   @relation("DeliveryAssignmentBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  reassignedFrom DeliveryAssignment?    @relation("AssignmentReassignment", fields: [reassignedFromId], references: [id], onDelete: Restrict)
+  reassignments  DeliveryAssignment[]   @relation("AssignmentReassignment")
   attempts       DeliveryAttempt[]
   proofs         ProofOfDelivery[]
   codCollection  DeliveryCodCollection?
@@ -1712,11 +1743,15 @@ model DeliveryCodCollection {
   notes          String?
   createdAt      DateTime @default(now())
 
-  package    Package       @relation(fields: [packageId], references: [id], onDelete: Restrict)
-  shipment   Shipment      @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
-  assignment DeliveryAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
-  batch      DeliveryBatch? @relation(fields: [batchId], references: [id], onDelete: Restrict)
-  collectedBy User          @relation("CodCollectedBy", fields: [collectedById], references: [id], onDelete: Restrict)
+  package     Package            @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  shipment    Shipment           @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  assignment  DeliveryAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  batch       DeliveryBatch?     @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  collectedBy User               @relation("CodCollectedBy", fields: [collectedById], references: [id], onDelete: Restrict)
+
+  ledgerTransactions LedgerTransaction[]
+  remittanceLines    CodRemittanceLine[]
+  settlementLines    VendorSettlementLine[]
 
   @@index([collectedById, collectedAt])
   @@index([batchId])
@@ -1761,16 +1796,17 @@ model ReturnRequest {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  package     Package   @relation(fields: [packageId], references: [id], onDelete: Restrict)
-  shipment    Shipment  @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
-  order       Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  warehouse   Warehouse @relation("ReturnWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
-  requestedBy User      @relation("ReturnRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
-  authorisedBy User?    @relation("ReturnAuthorisedBy", fields: [authorisedById], references: [id], onDelete: Restrict)
-  receivedBy  User?     @relation("ReturnReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
-  inspectedBy User?     @relation("ReturnInspectedBy", fields: [inspectedById], references: [id], onDelete: Restrict)
-  completedBy User?     @relation("ReturnCompletedBy", fields: [completedById], references: [id], onDelete: Restrict)
-  handedTo    User?     @relation("ReturnHandedTo", fields: [handedToUserId], references: [id], onDelete: Restrict)
+  package      Package       @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  shipment     Shipment      @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  order        Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  warehouse    Warehouse     @relation("ReturnWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  requestedBy  User          @relation("ReturnRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  authorisedBy User?         @relation("ReturnAuthorisedBy", fields: [authorisedById], references: [id], onDelete: Restrict)
+  receivedBy   User?         @relation("ReturnReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  inspectedBy  User?         @relation("ReturnInspectedBy", fields: [inspectedById], references: [id], onDelete: Restrict)
+  completedBy  User?         @relation("ReturnCompletedBy", fields: [completedById], references: [id], onDelete: Restrict)
+  handedTo     User?         @relation("ReturnHandedTo", fields: [handedToUserId], references: [id], onDelete: Restrict)
+  invoiceLines InvoiceLine[]
 
   @@index([packageId, status])
   @@index([warehouseId, status])
@@ -1792,5 +1828,426 @@ model TrackingAccessAttempt {
   createdAt  DateTime @default(now())
 
   @@index([trackingId, createdAt])
+  @@schema("app")
+}
+
+// ===========================================================================
+// Phase 7 — Finance (docs/financial-workflow.md, docs/cod-reconciliation.md,
+// docs/database-schema.md §9). Money is integer paisa in BigInt. COD is a
+// liability until settled, never revenue (rule F0). The ledger is
+// append-only: LedgerTransaction rows are never updated or deleted (DB
+// triggers in the hardening migration); corrections are new linked
+// entries. Balances are always derived by summing ledger entries — no
+// stored, overwritable balance anywhere.
+// ===========================================================================
+
+/// Chart-of-accounts-lite (schema §9). Company accounts use the doc
+/// codes (CASH_ON_HAND, BANK, COD_CLEARING, SHIPPING_REVENUE, …);
+/// per-vendor payable and per-driver cash accounts carry
+/// ownerVendorId / ownerDriverId and codes suffixed with the owner id,
+/// created lazily by the finance services inside the posting
+/// transaction.
+model FinancialAccount {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  name          String
+  kind          String // ASSET / LIABILITY / REVENUE / EXPENSE
+  ownerType     String   @default("COMPANY") // COMPANY / VENDOR / DRIVER
+  ownerVendorId String?  @unique
+  ownerDriverId String?  @unique
+  currency      String   @default("NPR")
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  ownerVendor Vendor? @relation("VendorFinanceAccount", fields: [ownerVendorId], references: [id], onDelete: Restrict)
+  ownerDriver Driver? @relation("DriverFinanceAccount", fields: [ownerDriverId], references: [id], onDelete: Restrict)
+
+  ledgerTransactions LedgerTransaction[]
+
+  @@index([kind, ownerType])
+  @@schema("app")
+}
+
+/// The immutable spine (schema §9). One row per account leg; the legs
+/// of one business operation share a `journalRef` and are written in a
+/// single DB transaction with Σ DEBIT = Σ CREDIT (service-enforced,
+/// test-asserted). `reference` is the unique per-entry reference from
+/// `ledger_reference_seq`. An entry can be reversed at most once
+/// (unique index on reversalOfId) by a mirror REVERSAL entry; the
+/// original is never modified. No updatedAt — append-only.
+model LedgerTransaction {
+  id              String   @id @default(uuid())
+  reference       String   @unique
+  journalRef      String
+  accountId       String
+  direction       String // DEBIT / CREDIT
+  amountPaisa     BigInt
+  currency        String   @default("NPR")
+  type            String // LEDGER_TYPES (lib/finance/domain)
+  orderId         String?
+  packageId       String?
+  invoiceId       String?
+  paymentId       String?
+  codCollectionId String?
+  remittanceId    String?
+  settlementId    String?
+  paymentMethod   String?
+  occurredAt      DateTime
+  actorId         String
+  approvedById    String?
+  reversalOfId    String?  @unique
+  adjustmentId    String?
+  idempotencyKey  String?  @unique
+  createdAt       DateTime @default(now())
+
+  account       FinancialAccount       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  order         Order?                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  package       Package?               @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  invoice       Invoice?               @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  payment       Payment?               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  codCollection DeliveryCodCollection? @relation(fields: [codCollectionId], references: [id], onDelete: Restrict)
+  remittance    CodRemittance?         @relation(fields: [remittanceId], references: [id], onDelete: Restrict)
+  settlement    VendorSettlement?      @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  actor         User                   @relation("LedgerActor", fields: [actorId], references: [id], onDelete: Restrict)
+  approvedBy    User?                  @relation("LedgerApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  reversalOf    LedgerTransaction?     @relation("LedgerReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversedBy    LedgerTransaction?     @relation("LedgerReversal")
+  adjustment    FinancialAdjustment?   @relation(fields: [adjustmentId], references: [id], onDelete: Restrict)
+
+  @@index([accountId, createdAt])
+  @@index([journalRef])
+  @@index([orderId])
+  @@index([type, createdAt])
+  @@index([codCollectionId])
+  @@index([settlementId])
+  @@schema("app")
+}
+
+/// A bill (schema §9). Vendor periodic invoices are generated by the
+/// finance service from DELIVERED shipments' snapshotted charges
+/// (Shipment.shippingChargePaisa — never recomputed from pricing
+/// rules). Status is recomputed from allocations + settlement
+/// coverage + applied adjustments by the finance service; OVERDUE is
+/// derived at read time from dueAt. An issued invoice is immutable;
+/// corrections are credit-note adjustments, voiding posts reversing
+/// ledger entries.
+model Invoice {
+  id            String    @id @default(uuid())
+  invoiceNumber String    @unique
+  orderId       String?
+  vendorId      String?
+  customerId    String?
+  subtotalPaisa BigInt
+  discountPaisa BigInt    @default(0)
+  taxPaisa      BigInt    @default(0)
+  totalPaisa    BigInt
+  currency      String    @default("NPR")
+  status        String    @default("ISSUED")
+  issuedAt      DateTime  @default(now())
+  dueAt         DateTime?
+  issuedById    String
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  order    Order?    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  vendor   Vendor?   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  issuedBy User      @relation("InvoiceIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+
+  lines              InvoiceLine[]
+  allocations        PaymentAllocation[]
+  payments           Payment[]
+  ledgerTransactions LedgerTransaction[]
+  settlementLines    VendorSettlementLine[]
+
+  @@index([vendorId, issuedAt])
+  @@index([status, dueAt])
+  @@index([orderId])
+  @@schema("app")
+}
+
+/// One billed charge on an invoice. A shipment's forward shipping
+/// charge is billed at most once across all invoices (partial unique
+/// index on shipmentId WHERE kind = 'SHIPPING_CHARGE' in the
+/// hardening migration); a completed vendor-borne return charge
+/// likewise (returnRequestId WHERE kind = 'RETURN_CHARGE').
+model InvoiceLine {
+  id              String   @id @default(uuid())
+  invoiceId       String
+  kind            String // SHIPPING_CHARGE / RETURN_CHARGE / ADJUSTMENT
+  shipmentId      String?
+  packageId       String?
+  orderId         String?
+  returnRequestId String?
+  description     String
+  amountPaisa     BigInt
+  createdAt       DateTime @default(now())
+
+  invoice       Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  shipment      Shipment?      @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  package       Package?       @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  order         Order?         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  returnRequest ReturnRequest? @relation(fields: [returnRequestId], references: [id], onDelete: Restrict)
+
+  @@index([invoiceId])
+  @@index([shipmentId])
+  @@schema("app")
+}
+
+/// A single act of paying (schema §9), independent of what it
+/// settles. Idempotency: a unique idempotencyKey (Scenario 12) and a
+/// partial unique index on transactionRef make duplicate submissions
+/// return/collide on the original — a payment cannot be counted
+/// twice. Amount/method/payer are immutable after recording (DB
+/// trigger); only status moves, driven by finance services (refunds).
+/// No card data is ever stored — gateway payments keep only the
+/// provider reference.
+model Payment {
+  id              String    @id @default(uuid())
+  orderId         String?
+  invoiceId       String?
+  payerType       String // CUSTOMER / VENDOR / COMPANY
+  payerCustomerId String?
+  payerVendorId   String?
+  amountPaisa     BigInt
+  currency        String    @default("NPR")
+  method          String // PAYMENT_METHODS (lib/finance/domain)
+  status          String    @default("PAID")
+  transactionRef  String?
+  idempotencyKey  String?   @unique
+  gatewayProvider String?
+  paidAt          DateTime?
+  recordedById    String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  order         Order?    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  invoice       Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  payerCustomer Customer? @relation("PaymentPayerCustomer", fields: [payerCustomerId], references: [id], onDelete: Restrict)
+  payerVendor   Vendor?   @relation("PaymentPayerVendor", fields: [payerVendorId], references: [id], onDelete: Restrict)
+  recordedBy    User      @relation("PaymentRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  allocations        PaymentAllocation[]
+  ledgerTransactions LedgerTransaction[]
+  refunds            Refund[]
+  settlementsPaid    VendorSettlement[]  @relation("SettlementPayment")
+
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@index([payerVendorId, createdAt])
+  @@schema("app")
+}
+
+/// Splits one Payment across Invoices (schema §9). Service invariant:
+/// Σ allocations ≤ payment amount; an invoice's paid amount derives
+/// from its allocations (+ settlement coverage + applied adjustment
+/// credits) — never a hand-edited number.
+model PaymentAllocation {
+  id            String   @id @default(uuid())
+  paymentId     String
+  invoiceId     String
+  amountPaisa   BigInt
+  allocatedById String
+  createdAt     DateTime @default(now())
+
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  allocatedBy User    @relation("AllocationBy", fields: [allocatedById], references: [id], onDelete: Restrict)
+
+  @@unique([paymentId, invoiceId])
+  @@index([invoiceId])
+  @@schema("app")
+}
+
+/// A rider handing collected COD to the company (cod-reconciliation
+/// §1 steps 7–9; schema §9's DriverRemittance, named CodRemittance
+/// per the Phase 7 brief). `declaredAmountPaisa` is what the rider
+/// says they are handing over; `countedAmountPaisa` is what Finance
+/// actually counted; `discrepancyPaisa` = counted − declared, stored
+/// at verification time and never silently zeroed. Collections join
+/// via CodRemittanceLine — DeliveryCodCollection itself is
+/// append-only and is never mutated by finance.
+model CodRemittance {
+  id                  String    @id @default(uuid())
+  remittanceNumber    String    @unique
+  driverId            String
+  submittedById       String
+  warehouseId         String?
+  declaredAmountPaisa BigInt
+  countedAmountPaisa  BigInt?
+  discrepancyPaisa    BigInt?
+  status              String    @default("SUBMITTED")
+  method              String    @default("CASH")
+  notes               String?
+  verifiedById        String?
+  verifiedAt          DateTime?
+  resolution          String?
+  resolutionNote      String?
+  resolvedById        String?
+  resolvedAt          DateTime?
+  submittedAt         DateTime  @default(now())
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  driver      Driver     @relation("RemittanceDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  submittedBy User       @relation("RemittanceSubmittedBy", fields: [submittedById], references: [id], onDelete: Restrict)
+  warehouse   Warehouse? @relation("RemittanceWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  verifiedBy  User?      @relation("RemittanceVerifiedBy", fields: [verifiedById], references: [id], onDelete: Restrict)
+  resolvedBy  User?      @relation("RemittanceResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
+
+  lines              CodRemittanceLine[]
+  ledgerTransactions LedgerTransaction[]
+
+  @@index([driverId, status])
+  @@index([status, submittedAt])
+  @@schema("app")
+}
+
+/// Coverage of one DeliveryCodCollection by one remittance. A
+/// collection is covered by at most one live remittance
+/// (codCollectionId @unique; rejecting a remittance deletes its
+/// lines, freeing the collections — the header keeps the full
+/// declared/counted/discrepancy history). `verifiedPaisa` is set at
+/// verification: the amount of this collection confirmed into COD
+/// clearing (collections are filled in line order when a counted
+/// amount falls short — the tail stays unverified and excluded from
+/// vendor settlement, cod-reconciliation §3.5).
+model CodRemittanceLine {
+  id              String   @id @default(uuid())
+  remittanceId    String
+  codCollectionId String   @unique
+  expectedPaisa   BigInt
+  collectedPaisa  BigInt
+  verifiedPaisa   BigInt?
+  createdAt       DateTime @default(now())
+
+  remittance    CodRemittance         @relation(fields: [remittanceId], references: [id], onDelete: Restrict)
+  codCollection DeliveryCodCollection @relation(fields: [codCollectionId], references: [id], onDelete: Restrict)
+
+  @@index([remittanceId])
+  @@schema("app")
+}
+
+/// Periodic payable settlement to a vendor (schema §9;
+/// cod-reconciliation §4). netPayablePaisa = grossCodPaisa −
+/// shippingChargesPaisa − otherDeductionsPaisa, computed by the
+/// service at preparation and frozen as the approved figure at
+/// approval. Items in discrepancy are excluded at preparation and
+/// listed as pending — never netted quietly.
+model VendorSettlement {
+  id                   String    @id @default(uuid())
+  settlementNumber     String    @unique
+  vendorId             String
+  periodStart          DateTime
+  periodEnd            DateTime
+  grossCodPaisa        BigInt
+  shippingChargesPaisa BigInt
+  otherDeductionsPaisa BigInt    @default(0)
+  netPayablePaisa      BigInt
+  status               String    @default("PENDING")
+  preparedById         String
+  approvedById         String?
+  approvedAt           DateTime?
+  settledAt            DateTime?
+  paymentId            String?
+  paymentRef           String?
+  notes                String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  vendor     Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  preparedBy User     @relation("SettlementPreparedBy", fields: [preparedById], references: [id], onDelete: Restrict)
+  approvedBy User?    @relation("SettlementApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  payment    Payment? @relation("SettlementPayment", fields: [paymentId], references: [id], onDelete: Restrict)
+
+  lines              VendorSettlementLine[]
+  ledgerTransactions LedgerTransaction[]
+
+  @@index([vendorId, status])
+  @@index([status, createdAt])
+  @@schema("app")
+}
+
+/// Traceability, one row per settled obligation (schema §9). A
+/// CODCollection may appear on at most one settlement line (partial
+/// unique index in the hardening migration) — double-settlement is a
+/// DB error, not a report discrepancy.
+model VendorSettlementLine {
+  id              String   @id @default(uuid())
+  settlementId    String
+  codCollectionId String?
+  invoiceId       String?
+  kind            String // COD_CREDIT / SHIPPING_CHARGE / DEDUCTION / ADJUSTMENT
+  amountPaisa     BigInt
+  description     String?
+  createdAt       DateTime @default(now())
+
+  settlement    VendorSettlement       @relation(fields: [settlementId], references: [id], onDelete: Restrict)
+  codCollection DeliveryCodCollection? @relation(fields: [codCollectionId], references: [id], onDelete: Restrict)
+  invoice       Invoice?               @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([settlementId])
+  @@index([invoiceId])
+  @@schema("app")
+}
+
+/// Money returned to a payer (financial-workflow §6). References the
+/// original payment; amount ≤ its un-refunded remainder. Processing
+/// posts the reversing ledger journal, moves the payment toward
+/// REFUNDED / PARTIALLY_REFUNDED and reduces its allocations — the
+/// original payment's amount and history are never edited.
+model Refund {
+  id               String    @id @default(uuid())
+  paymentId        String
+  amountPaisa      BigInt
+  reason           String
+  status           String    @default("REQUESTED")
+  requestedById    String
+  approvedById     String?
+  processedById    String?
+  processedAt      DateTime?
+  ledgerJournalRef String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  requestedBy User    @relation("RefundRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy  User?   @relation("RefundApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  processedBy User?   @relation("RefundProcessedBy", fields: [processedById], references: [id], onDelete: Restrict)
+
+  @@index([paymentId, status])
+  @@schema("app")
+}
+
+/// The only legal way to change a financial outcome after the fact
+/// (financial-workflow §5; schema §9). Four-eyes: approver ≠ creator
+/// (service-enforced). Applying an adjustment creates ledger entries;
+/// it never edits the target's amounts. Phase 7 applies INVOICE
+/// credits (credit notes) and COD_COLLECTION shortfall write-offs
+/// (against the COD_DISCREPANCY suspense account); other targets are
+/// rejected at creation until their owning workflows land.
+model FinancialAdjustment {
+  id               String    @id @default(uuid())
+  targetType       String // PAYMENT / INVOICE / COD_COLLECTION / SETTLEMENT / LEDGER
+  targetId         String
+  amountPaisa      BigInt
+  reason           String
+  status           String    @default("REQUESTED")
+  createdById      String
+  approvedById     String?
+  appliedAt        DateTime?
+  ledgerJournalRef String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  createdBy  User  @relation("AdjustmentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy User? @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+
+  ledgerTransactions LedgerTransaction[]
+
+  @@index([targetType, targetId])
+  @@index([status, createdAt])
   @@schema("app")
 }

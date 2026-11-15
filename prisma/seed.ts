@@ -10,6 +10,7 @@ import {
   STANDARD_ZONES,
   defaultOperatingHours,
 } from "../src/lib/warehouses/codes";
+import { COMPANY_ACCOUNTS } from "../src/lib/finance/domain";
 
 /**
  * Development seed (idempotent):
@@ -124,6 +125,32 @@ async function main(): Promise<void> {
   await seedPhase3(superAdmin.id);
   await seedPhase5();
   await seedPhase6();
+  await seedPhase7();
+}
+
+/**
+ * Phase 7 seed: the company chart of accounts (docs/database-schema.md
+ * §9) as global reference data — upserted by code on every run, like
+ * the permission catalog. Per-vendor VENDOR_PAYABLE:<id> and
+ * per-driver DRIVER_CASH:<id> accounts are NOT seeded; the finance
+ * services create them lazily inside the posting transaction. The
+ * bare DRIVER_CASH / VENDOR_PAYABLE rows are the doc's template
+ * accounts and never carry entries.
+ */
+async function seedPhase7(): Promise<void> {
+  for (const account of COMPANY_ACCOUNTS) {
+    await prisma.financialAccount.upsert({
+      where: { code: account.code },
+      update: { name: account.name, kind: account.kind },
+      create: {
+        code: account.code,
+        name: account.name,
+        kind: account.kind,
+        ownerType: "COMPANY",
+      },
+    });
+  }
+  console.log(`Seeded ${COMPANY_ACCOUNTS.length} finance chart accounts.`);
 }
 
 /**

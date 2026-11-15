@@ -1,7 +1,7 @@
 import { requireActor } from "@/lib/auth/permissions";
-import { DashboardHome } from "@/components/dashboards/DashboardHome";
+import { FinanceHomePage } from "@/components/finance/pages";
 
 export default async function Page() {
   const actor = await requireActor();
-  return <DashboardHome actor={actor} roleLabel="Finance" />;
+  return <FinanceHomePage actor={actor} />;
 }
