@@ -26,3 +26,8 @@ dist/
 
 # Customer tracking local config
 customer-tracking/config.js
+
+# Next.js (new app, repo root)
+.next/
+out/
+*.tsbuildinfo

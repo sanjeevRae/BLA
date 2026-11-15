@@ -1,0 +1,230 @@
+// BLA Logistics Platform — Prisma schema
+// Design: docs/database-schema.md. New tables live in a dedicated `app`
+// PostgreSQL schema; the legacy `public` schema is left untouched.
+// Phase 1: identity & access models only (docs/database-schema.md §1).
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["app"]
+}
+
+/// Single login identity for every human in the system.
+/// Never hard-deleted; lifecycle via `status` (ACTIVE / SUSPENDED / DEACTIVATED).
+model User {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  /// bcrypt hash from the auth library; null until an invited user sets a password.
+  passwordHash        String?
+  fullName            String
+  phone               String?
+  /// FK to FileAsset (Phase 10 platform model); plain column until then.
+  avatarFileId        String?
+  status              String    @default("ACTIVE")
+  emailVerifiedAt     DateTime?
+  mustChangePassword  Boolean   @default(false)
+  mfaEnabled          Boolean   @default(false)
+  mfaSecretEncrypted  String?
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  roles           UserRole[]
+  memberships     WarehouseMembership[]
+  sessions        Session[]
+  loginAttempts   LoginAttempt[]
+  auditLogs       AuditLog[]
+  rolesAssigned   UserRole[]            @relation("UserRoleAssignedBy")
+  invitationsSent UserInvitation[]      @relation("InvitationSentBy")
+
+  @@index([phone])
+  @@schema("app")
+}
+
+/// Named bundle of permissions. Data, not an enum, so roles are manageable
+/// without a migration. Seeded with the ten spec roles.
+model Role {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  permissions RolePermission[]
+  userRoles   UserRole[]
+  memberships WarehouseMembership[]
+  invitations UserInvitation[]
+
+  @@schema("app")
+}
+
+/// One row per checkable capability (docs/role-permission-matrix.md §3).
+model Permission {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  module      String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles RolePermission[]
+
+  @@schema("app")
+}
+
+model RolePermission {
+  id           String @id @default(uuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@schema("app")
+}
+
+model UserRole {
+  id           String   @id @default(uuid())
+  userId       String
+  roleId       String
+  assignedById String?
+  assignedAt   DateTime @default(now())
+
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role  @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedBy User? @relation("UserRoleAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@unique([userId, roleId])
+  @@schema("app")
+}
+
+/// Auth.js database session, extended for revocation and forensics.
+/// Suspension deletes session rows (enforcement); `revokedAt` is forensic.
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+  revokedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expires])
+  @@schema("app")
+}
+
+/// The warehouse-scoping mechanism (adopted from the live legacy table).
+/// Phase 1 stores `warehouseId` as a plain column; the Warehouse model and
+/// its FK land in Phase 2 (docs/database-schema.md §2).
+model WarehouseMembership {
+  id           String    @id @default(uuid())
+  userId       String
+  warehouseId  String
+  roleId       String
+  isPrimary    Boolean   @default(false)
+  assignedById String?
+  assignedAt   DateTime  @default(now())
+  revokedAt    DateTime?
+  revokedById  String?
+  notes        String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@index([userId, revokedAt])
+  @@index([warehouseId, revokedAt])
+  @@schema("app")
+}
+
+/// Onboarding invitations. Only the token hash is stored.
+/// status: PENDING / ACCEPTED / EXPIRED / REVOKED.
+model UserInvitation {
+  id          String    @id @default(uuid())
+  email       String
+  roleId      String
+  warehouseId String?
+  vendorId    String?
+  tokenHash   String    @unique
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  status      String    @default("PENDING")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  role      Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  invitedBy User @relation("InvitationSentBy", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@index([email, status])
+  @@schema("app")
+}
+
+/// Password-reset / email-verification tokens (Auth.js pattern).
+/// The `token` column stores the token HASH; rows are consumed on use.
+model VerificationToken {
+  id         String   @id @default(uuid())
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@schema("app")
+}
+
+/// Append-only audit trail: logins, account/role changes, denied access,
+/// sensitive actions. No update/delete path (enforced by DB trigger).
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorId     String?
+  actorRole   String?
+  action      String
+  entityType  String
+  entityId    String?
+  warehouseId String?
+  before      Json?
+  after       Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@schema("app")
+}
+
+/// Login attempt record for rate limiting and failed-login monitoring
+/// (docs/security-architecture.md §2).
+model LoginAttempt {
+  id        String   @id @default(uuid())
+  email     String
+  userId    String?
+  success   Boolean
+  reason    String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email, createdAt])
+  @@index([ipAddress, createdAt])
+  @@schema("app")
+}

@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+/*
+ * BLA design tokens, ported 1:1 from the legacy admin console
+ * (docs/system-architecture.md §7): flat cards with 1px `line` borders,
+ * small radii, system font stack, light theme only.
+ * Tailwind v4 detects content automatically across .ts/.tsx/.jsx files —
+ * the legacy content-glob bug (which excluded .tsx) cannot recur.
+ */
+@theme {
+  --color-page: #f5f7fa;
+  --color-surface: #ffffff;
+  --color-cream: #f1f5f9;
+  --color-ink: #0f172a;
+  --color-slate2: #64748b;
+  --color-faint: #94a3b8;
+  --color-brand: #2563eb;
+  --color-accentbg: #eff6ff;
+  --color-green: #16a34a;
+  --color-greenbg: #e8f7ee;
+  --color-orange: #ea580c;
+  --color-orangebg: #fff1e6;
+  --color-purple: #7c3aed;
+  --color-purplebg: #f1e9fd;
+  --color-red: #dc2626;
+  --color-amber: #f59e0b;
+  --color-line: #e6ebf0;
+
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+body {
+  background: var(--color-page);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+/* Tabular numerals for money and counts (legacy `.tnum`). */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
