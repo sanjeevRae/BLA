@@ -1,179 +1,286 @@
 # BLA — Deployment Guide
 
+*Final state, Phase 10 (2026-11-16). This guide supersedes the
+Phase 0 draft: the rebuild is complete, the legacy code is removed
+from the repository, and what remains is the production runbook.*
+
 ## 1. What is being deployed
 
-One application: the Next.js (App Router, TypeScript) rebuild in this
-repository. It replaces **four** current deployables:
+One application: the Next.js (App Router, TypeScript) app in this
+repository — admin dashboard, vendor portal, rider and customer
+surfaces, public tracking, and the API, in a single deployable. It
+replaced the FastAPI backend, the Vite admin dashboard, and the
+static customer/driver/vendor pages (all removed in Phase 10
+slice 1; history preserved under the `pre-rebuild-checkpoint` tag).
 
-| Today | Replaced by |
-|---|---|
-| FastAPI backend on **Render free tier** (`bla-api`, spins down after 15 min idle) | Next.js Route Handlers + Server Actions in the same app |
-| Admin dashboard SPA on **Netlify/Vercel** (static `dist`) | The Next.js app (same design system, server-rendered) |
-| `customer-tracking/`, `driver-app/`, `vendor-portal/` static pages | Routes inside the Next.js app (`/tracking`, rider and vendor dashboards) |
+The database is the existing **Supabase PostgreSQL** project. The
+new schema lives in the dedicated **`app` schema**; the legacy
+`public` schema (33 tables) is **untouched** by the rebuild and
+remains the rollback data source until decommissioning (§6).
 
-The database stays **Supabase PostgreSQL** — the same live project that holds
-today's master data (4 warehouses, users, drivers, vehicles). The new Prisma
-schema is added alongside the old tables; old tables are retired only after
-data migration is verified (see §4 and `docs/backup-and-recovery.md`).
+## 2. Hosting
 
-## 2. Hosting recommendation
+**Primary: Vercel.** Zero-config Next.js builds, per-PR previews,
+instant rollback to a previous deployment. The database stays on
+Supabase; Vercel runs only the application tier, so `DATABASE_URL`
+must be the Supabase **connection pooler** URL (serverless functions
+open many short-lived connections). Vercel's free tier suffices for
+staging; production will likely need Pro — a paid upgrade requires
+Meena's approval first.
 
-### Primary: Vercel
-
-- The app is Next.js App Router — Vercel is the reference platform for it:
-  zero-config builds, Server Actions/Route Handlers run as first-class
-  server functions, preview deployments per pull request for the per-phase
-  review gate, and instant rollback to a previous deployment.
-- The existing admin dashboard already ships Vercel configuration
-  (`vercel.json`), so the account/workflow is familiar.
-- The database remains on Supabase; Vercel only runs the application tier.
-  Use the Supabase **connection pooler** URL for `DATABASE_URL` (serverless
-  functions open many short-lived connections; the direct URL is reserved
-  for migrations — see §4).
-- Cost note: Vercel's free tier is enough for development and staging.
-  Production traffic for a working logistics operation will likely need the
-  Pro tier — a paid service, so it requires Meena's approval before upgrade
-  (spec Part 30, rule 20).
-
-### Alternative: self-hosted Node
-
-`next build && next start` behind a reverse proxy (e.g. Caddy/Nginx) on any
-VPS, or Docker using the standalone output mode. Choose this if hosting cost
-or data-residency preferences outweigh Vercel's convenience. Everything in
-this guide except the Vercel-specific notes applies unchanged; you own
-process supervision, TLS renewal and log retention yourself.
-
-**Not used:** Render. The current free-tier backend sleeps after 15 minutes
-of inactivity, which is unacceptable for an operations system used all day,
-and the split frontend/backend hosting disappears with the rebuild anyway.
+**Alternative: self-hosted Node** — `next build && next start`
+behind a reverse proxy (Caddy/Nginx) or Docker standalone output.
+Everything below applies unchanged except Vercel-specific notes;
+you own process supervision, TLS and log retention.
 
 ## 3. Environment variables
 
-Names only — values are set in the hosting platform's dashboard (Vercel →
-Project → Settings → Environment Variables) and in a local `.env` that is
-**gitignored and never committed**. Server-side secrets must never be
-prefixed `NEXT_PUBLIC_` and never appear in browser code.
+Authoritative list: `.env.example` in the repo root. Values are set
+in the hosting platform's dashboard and in a gitignored local
+`.env` — **never committed**. The running application reads exactly
+these:
 
-| Variable | Purpose | Exposed to browser? |
+| Variable | Required | Purpose |
 |---|---|---|
-| `DATABASE_URL` | PostgreSQL connection (Supabase **pooler**) used by Prisma at runtime | No |
-| `DIRECT_URL` | PostgreSQL direct connection used by Prisma Migrate | No |
-| `AUTH_SECRET` | Auth.js session encryption/signing secret | No |
-| `AUTH_URL` | Canonical app URL Auth.js uses for callbacks | No |
-| `TRUSTED_IP_HEADER` | Optional. Header the client IP is read from for login throttling/audit (default `x-forwarded-for`) | No |
-| `SUPABASE_URL` | Supabase project URL (server-side data/storage access where still used) | No |
-| `SUPABASE_ANON_KEY` | Supabase anon key — only for any client-side Supabase use that remains (e.g. Realtime); RLS-protected | Only if genuinely needed client-side |
-| `SUPABASE_SERVICE_KEY` | Supabase service-role key — **server only, bypasses RLS**; treat like a database password | **Never** |
-| `CLOUDINARY_CLOUD_NAME` | Cloudinary account for delivery-proof/document uploads | No |
-| `CLOUDINARY_API_KEY` | Cloudinary upload signing | No |
-| `CLOUDINARY_API_SECRET` | Cloudinary upload signing secret | No |
-| `MAPTILER_API_KEY` | Maps/geocoding in dashboards | Restricted by domain in MapTiler dashboard if used client-side |
-| `OPENROUTESERVICE_API_KEY` | Optional route calculation (fallback) | No |
-| `EMAILJS_*` / `TEXTLOCAL_*` | Optional email/SMS notification providers (in-app notifications work without them) | No |
+| `DATABASE_URL` | ✅ | PostgreSQL connection for Prisma at runtime — the Supabase **pooler** URL in production |
+| `AUTH_SECRET` | ✅ | Auth.js session encryption/signing secret (`openssl rand -base64 32`) |
+| `AUTH_URL` | ✅ | Canonical app URL (callbacks; also decides the Secure cookie prefix) |
+| `MFA_SECRET_ENCRYPTION_KEY` | ✅ | AES-256 key encrypting privileged users' TOTP secrets at rest (base64, 32 bytes) |
+| `TRUSTED_IP_HEADER` | optional | Header the client IP is read from (default `x-forwarded-for`) — see the trust note below |
 
-Local development uses the same names in the repo-root `.env` (see
-`.env.example` once added by the rebuild). The old `VITE_*` variables belong
-to the retired Vite app and are not used by the Next.js build.
+**The database password step (Meena input #1).** The pooler and
+direct connection strings both embed the project's **database
+password**, which is set in the Supabase dashboard (Project →
+Settings → Database → Database password). Muse has never held this
+password — all live schema work during the rebuild went through
+the Management API. At deployment time Meena either sets
+`DATABASE_URL` in the hosting dashboard himself, or supplies the
+password once so it can be set. The same password is used for the
+migration connection in §4 (direct/session-mode string, not the
+transaction pooler — Prisma Migrate needs a session).
 
-> **Client-IP trust note:** the login throttle and the IPs recorded in
-> `LoginAttempt`/`AuditLog` are derived from a forwarding header
-> (`TRUSTED_IP_HEADER`, default `x-forwarded-for`). That header is only
-> trustworthy when the deployment sits behind a proxy/platform that
-> **overwrites** it with the real peer address — Vercel does this, which is
-> one reason it is the primary platform above. Behind a self-hosted reverse
-> proxy, configure the proxy to overwrite the header (and set
-> `TRUSTED_IP_HEADER` if it uses a different one). On any topology where
-> clients can set the header themselves, treat recorded IPs as untrusted
-> and do not rely on the per-IP throttle as a control.
+**MFA key warning.** `MFA_SECRET_ENCRYPTION_KEY` decrypts every
+enrolled TOTP secret. Losing it — or rotating it casually —
+invalidates all SUPER_ADMIN/ADMIN enrolments and forces
+re-enrolment for every privileged user. Generate it once, store it
+with the same care as the database password, and treat rotation as
+a planned operation (all privileged users re-enrol), never an
+incident improvisation.
 
-## 4. Database migration procedure
+**Client-IP trust note.** Login throttling, audit IPs and the
+public-tracking per-IP limit derive the client IP from
+`TRUSTED_IP_HEADER` (default `x-forwarded-for`). That header is
+only trustworthy when the deployment sits behind a proxy/platform
+that **overwrites** it with the real peer address — Vercel does
+this. On any topology where clients can set the header themselves,
+the per-IP limits are best-effort and recorded IPs are untrusted.
 
-Every schema change to the live Supabase database follows these steps, in
-order. No step is skipped, including "small" changes.
+Optional integrations (the app runs fully without them):
+`SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_KEY`
+(server-side Supabase access where still used), Cloudinary
+(uploads), MapTiler (maps), OpenRouteService (routing fallback),
+EmailJS/TextLocal (notification providers — in-app notifications
+work without them; SMS/email rows record `NOT_SENT_NO_PROVIDER`
+until a provider is connected, see docs/known-limitations.md).
 
-1. **Backup** — take a full `pg_dump` of the live database and verify the
-   dump file is non-empty and restorable (see
-   `docs/backup-and-recovery.md`). No verified backup → no migration.
-2. **Review** — the migration SQL (generated by Prisma Migrate) is committed
-   to the repo and reviewed like code. Destructive changes (drops, type
-   narrowing, NOT NULL on populated columns) require an explicit note in the
-   commit and a data-preservation plan.
-3. **Apply** — one of two routes (see the access note below):
-   - `prisma migrate deploy` using `DIRECT_URL`, or
-   - paste the reviewed migration SQL into the Supabase SQL Editor and run
-     it there.
-4. **Verify** — confirm the new/changed tables exist with the expected
-   columns and constraints; run the application's health checks and the
-   integration test suite against the migrated database; confirm row counts
-   of pre-existing tables are unchanged where the migration should not have
-   touched data.
-5. **Record** — commit the migration files (if not already), tag the phase
-   in git, and note the migration in the phase report.
+## 4. Database: migrations, seed rules, master data
 
-### Access note — the live-schema step
+### 4.1 Schema migrations
 
-The Supabase REST keys (anon/service) **cannot create tables** — DDL is not
-exposed through PostgREST (verified during the Phase 0 audit: the only RPCs
-are role helpers and GPS cleanup). Applying a schema to the live database
-therefore needs **either**:
+Every schema change follows these steps, in order:
 
-- the Supabase **connection string** (dashboard → Settings → Database →
-  Connection string) supplied to Muse so `DIRECT_URL` can be set, **or**
-- Meena pasting the reviewed migration SQL into the Supabase **SQL Editor**
-  himself — Muse never needs the database password in this route.
+1. **Backup** — full `pg_dump` of the live database, verified
+   restorable (docs/backup-and-recovery.md). No verified backup →
+   no migration.
+2. **Review** — migration SQL is generated by Prisma Migrate,
+   committed to the repo, and reviewed like code.
+3. **Apply** — `npx prisma migrate deploy` with `DATABASE_URL` set
+   to the **direct / session-mode** connection string for the live
+   project. (During the rebuild, when no database password was
+   available, the same reviewed SQL was applied through the
+   Supabase Management API with `SET search_path TO app, public;`
+   prepended — Prisma's migration SQL is not schema-qualified. That
+   route remains the fallback.)
+4. **Verify** — `npx prisma migrate status` is clean; tables,
+   columns and constraints match the schema; pre-existing row
+   counts are unchanged where the migration touches no data.
+5. **Record** — the phase report notes the migration.
 
-Development and testing never wait on this: the schema is built and tested
-against a local PostgreSQL, and the live step happens once per phase that
-changes the schema, backup first.
+### 4.2 Seed vs live data — the rules
+
+- `prisma/seed.ts` is a **development** seed. Against a non-local
+  database it seeds reference data only (catalog, warehouses,
+  services, areas, chart of accounts, system settings) and
+  **refuses** to create its test accounts (the guard keys on
+  localhost + `bla_dev`/`bla_test`). Never run it against live to
+  "fix" data.
+- Live data changes happen only through (a) a reviewed Prisma
+  migration, (b) the application itself, or (c) the master-data
+  migration script in §4.3. No hand-edits in the SQL Editor outside
+  a reviewed migration.
+- The legacy `public` schema is **read-only** for the rebuild. It
+  is retired only at decommissioning (§6).
+
+### 4.3 Master-data migration runbook
+
+`scripts/migrate-live-master-data.ts` moves the live legacy master
+data into the `app` schema (warehouses + addresses + zones + hours,
+vehicles, service catalog + areas, the customer; and in users mode:
+accounts, memberships, drivers, tariff). It is idempotent and
+dry-run by default. Full semantics are in the script's header; the
+operator sequence is:
+
+```bash
+# 1. Non-user parts — dry-run, then apply. Without a database
+#    password, render SQL instead and apply it via the Supabase
+#    SQL Editor / Management API:
+npx tsx scripts/migrate-live-master-data.ts                 # dry-run
+npx tsx scripts/migrate-live-master-data.ts --apply         # Prisma route
+npx tsx scripts/migrate-live-master-data.ts --sql-out /tmp/bla-master-data.sql
+
+# 2. Users mode — ONLY with Meena's designation of the first
+#    Super Admin. Legacy password hashes are not exportable: the
+#    script creates password-less shell accounts + invitations.
+npx tsx scripts/migrate-live-master-data.ts --with-users \
+  --super-admin-email <designated address>                  # dry-run
+npx tsx scripts/migrate-live-master-data.ts --with-users \
+  --super-admin-email <designated address> --apply --print-tokens
+```
+
+Rules that are not negotiable (enforced by the script): users mode
+refuses to run without `--super-admin-email`; the address must be
+one of the legacy accounts; established accounts (password set or
+roles granted) are never touched; invitation tokens are printed
+only with `--print-tokens` at creation time and never written to
+files by the script. Migrated drivers carry the sentinel licence
+expiry 1970-01-01 (legacy stored none) and are blocked from
+assignment until the real dates are entered. Invitations expire
+after 7 days — run users mode at go-live, not weeks before.
+
+**Verification queries** (run after applying; expected values for
+the current live data in parentheses): counts of `app."Warehouse"`
+(4), `app."WarehouseZone"` (28), `app."WarehouseOperatingHours"`
+(28), `app."Vehicle"` (4), `app."ShippingService"` (2),
+`app."ServiceArea"` (4), `app."Customer"` (1); after users mode
+additionally `app."User"` (9 shells, all `passwordHash IS NULL`),
+`app."UserInvitation"` (9 PENDING), `app."WarehouseMembership"`
+(5), `app."Driver"` (4), `app."PricingRule"` (1).
+
+### 4.4 SystemSetting keys
+
+Runtime policy lives in the `app."SystemSetting"` table (seeded
+create-only; readers fall back to the same defaults when a row is
+absent):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `session.idle_timeout.staff_hours` | 24 | Idle timeout for staff sessions |
+| `session.idle_timeout.privileged_hours` | 12 | Idle timeout for SUPER_ADMIN / ADMIN / FINANCE sessions |
+| `auth.mfa_required_for_privileged` | true | SUPER_ADMIN/ADMIN must enrol in TOTP MFA and pass a challenge at every login |
+
+Tighten a value by updating the row; a re-seed never loosens it
+back. Idle-expired sessions are deleted, not merely flagged.
+
+### 4.5 COD outstanding — the semantics (read this before the reports)
+
+The Phase 9 reports' **COD outstanding** figure is computed from
+the **collection rows**: `outstanding = Σ collected − Σ verified`
+(collections awaiting remittance + the unverified tails of open
+remittances). It is deliberately **not** the `DRIVER_CASH` ledger
+balance: a rider's ledger account moves only when a remittance is
+**submitted** (the `COD_COLLECTED` journal posts at submission, per
+cod-reconciliation.md §2), while the cash obligation exists from
+the moment of collection. A report that read the ledger would
+understate outstanding COD by everything collected but not yet
+remitted. Both numbers are correct; they answer different
+questions, and `getRiderCodPosition` exposes them side by side
+(`ledgerOwedPaisa` vs the collection-derived totals).
 
 ## 5. Rollback plan
 
 - **Code:** the pre-rebuild state is frozen under the git tag
-  **`pre-rebuild-checkpoint`** (pushed before any rebuild work). Every phase
-  ends with its own commit and tag, so any phase can be rolled back to with
-  `git checkout <tag>` / redeploy of that commit. On Vercel, the previous
-  production deployment can be re-promoted instantly from the dashboard.
+  **`pre-rebuild-checkpoint`** (pushed before any rebuild work, and
+  verified present before the legacy code was deleted). Every phase
+  of the rebuild is a commit on `main`. On Vercel, re-promote the
+  previous production deployment; elsewhere, check out the tag and
+  redeploy.
 - **Database:** every migration is preceded by a verified `pg_dump`
-  (see `docs/backup-and-recovery.md`). Rolling back a bad migration means
-  restoring that dump — which is why migrations are applied in small,
-  per-phase steps and verified immediately, keeping the blast radius to one
-  phase.
-- **Decision rule:** if the new app fails its post-deploy checks during
-  cutover, traffic returns to the old system (which stays live until §6
-  completes) and the failure is fixed forward — the old system is never
-  decommissioned on a hope.
+  (§4.1). The new schema lives entirely in `app`; the legacy
+  `public` schema was never modified, so a data rollback is
+  "point the old system at `public` again" — it is intact.
+- **Decision rule:** if post-deploy checks fail during cutover,
+  traffic returns to the old system (which stays live until §6
+  completes) and the failure is fixed forward.
 
-## 6. Cutover plan
+## 6. Cutover and decommissioning
 
-1. **Build & verify in staging** — the Next.js app is deployed to a preview/
-   staging URL against a copy of the database (restored from backup). All
-   Phase 1–9 gates from `docs/testing-strategy.md` pass there.
-2. **Phase 10 checks** — full scenario suite (Part 23), full e2e suite,
-   production build, security review. Only a green Phase 10 authorizes
-   cutover.
-3. **Data migration** — live master data (warehouses, users, drivers,
-   vehicles, vendor/customer records) is migrated into the new schema using
-   the rehearsed procedure from staging, with a fresh verified backup taken
-   immediately before.
-4. **Deploy switch** — the production domain/DNS is pointed at the Next.js
-   deployment. The public tracking URL keeps working: `/tracking` in the new
-   app serves the same tracking IDs.
-5. **Old backend stays live, read-only standby** — the Render FastAPI
-   service and the old static apps remain deployed but unused for a
-   short observation window, so rollback (§5) is a DNS change, not a
-   rebuild.
-6. **Decommission** — after the observation window passes with no rollback,
-   the Render service is switched off, the old static deployments are
-   retired, and the `backend/`, `customer-tracking/`, `driver-app/`,
-   `vendor-portal/` and old `admin-dashboard/` folders are removed from the
-   repository in the Phase 10 cleanup commit (history remains in git and
-   under the `pre-rebuild-checkpoint` tag).
+1. Deploy the app to production (Vercel) with the §3 environment.
+2. Run §4.1 for the final migration set; verify `migrate status`.
+3. Run the master-data migration (§4.3): non-user parts, verify
+   counts; then users mode with Meena's Super Admin designation.
+4. Smoke checks: login page loads; the designated Super Admin
+   accepts their invitation, sets a password, enrols in MFA, and
+   logs in; a warehouse admin logs in and sees only their
+   warehouse; public tracking answers for a known test package;
+   the overview dashboard renders figures from live data.
+5. Point the production domain/DNS at the new deployment.
+6. **Observation window:** the legacy Render backend and static
+   apps stay deployed but unused; rollback (§5) is a DNS change.
+7. **Decommission** (after the window passes clean): switch off the
+   Render service, retire the static deployments, and — only on
+   Meena's explicit word — drop or archive the legacy `public`
+   schema. The repository cleanup already happened in Phase 10
+   slice 1.
 
 ## 7. Routine deploys after cutover
 
 - Merge to `main` → Vercel builds and deploys automatically.
-- Schema changes ride along only via §4 — never by hand-editing the live
-  database outside a reviewed migration.
-- Every production deploy is followed by a smoke check: login page loads,
-  one admin login succeeds, tracking lookup for a known test package
-  returns, and the overview dashboard figures render from live data.
+- Schema changes ride along only via §4.1 — never by hand-editing
+  the live database outside a reviewed migration.
+- Every production deploy is followed by the §6 step-4 smoke
+  checks.
+
+## 8. Scheduled jobs
+
+The legacy GitHub Actions crons were deleted with the old backend.
+Their replacements:
+
+- **Daily operations summary** — `scripts/daily-ops-summary.ts`
+  composes the Phase 9 daily report into an in-app notification
+  for every ADMIN / SUPER_ADMIN (category `DAILY_OPS_SUMMARY`,
+  dedupe key `ops-daily:<date>:<userId>` — re-runs are no-ops).
+  Schedule it once daily after close of operations, e.g.
+  `15 18 * * *  cd /srv/bla && npx tsx --tsconfig scripts/tsconfig.json scripts/daily-ops-summary.ts`.
+  (The `--tsconfig scripts/tsconfig.json` flag is required: it maps
+  the Next.js virtual `server-only` module to a stub so the service
+  layer can run outside the Next bundler.) `--dry-run` prints the
+  composed summary without writing.
+- **GPS / trip-checkpoint retention — accepted disposition.** The
+  legacy `gps_tracking` table (high-frequency pings) and its
+  cleanup cron have no counterpart in the new platform: the app
+  records **TripStop** checkpoint rows (discrete operational
+  events, not a ping stream), whose volume is bounded by trip
+  activity and which form part of the trip audit record. No
+  retention job is implemented; TripStops are retained with their
+  trips. *Revisit if* checkpoint volume ever becomes a storage
+  concern — the job would archive TripStops of COMPLETED trips
+  older than a policy threshold, and the threshold is a policy
+  decision for Meena at that time. See docs/known-limitations.md.
+
+## 9. Go-live checklist
+
+- [ ] Verified `pg_dump` of the live database taken (§4.1 step 1)
+- [ ] `npx prisma migrate status` clean against live
+- [ ] Master-data migration applied; §4.3 verification counts match
+- [ ] **Meena input #1 — database password:** `DATABASE_URL`
+      (pooler) + migration connection set in the hosting dashboard
+- [ ] **Meena input #2 — first Super Admin designated:** users
+      mode run with that `--super-admin-email`; invitation accepted,
+      password set, MFA enrolled, login verified
+- [ ] `AUTH_SECRET`, `AUTH_URL`, `MFA_SECRET_ENCRYPTION_KEY` set
+      in the hosting dashboard (MFA key stored safely — §3)
+- [ ] Deployment sits behind a proxy that overwrites the
+      client-IP header (§3 trust note)
+- [ ] Smoke checks (§6 step 4) pass on the production URL
+- [ ] Daily ops summary scheduled (§8)
+- [ ] Observation window + decommissioning dates agreed (§6)

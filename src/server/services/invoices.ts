@@ -90,7 +90,14 @@ export async function invoicePaidComponents(
   invoiceId: string,
 ): Promise<InvoicePaidComponents> {
   const [allocations, settlementLines, adjustments] = await Promise.all([
-    db.paymentAllocation.aggregate({ where: { invoiceId }, _sum: { amountPaisa: true } }),
+    // Phase 10 slice 2 (F12e): allocations are never shrunk by
+    // refunds any more — the refunded portion is tracked on the row
+    // and netted here, so paid derivation stays exact while the
+    // original allocation history survives.
+    db.paymentAllocation.aggregate({
+      where: { invoiceId },
+      _sum: { amountPaisa: true, refundedPaisa: true },
+    }),
     db.vendorSettlementLine.aggregate({
       where: { invoiceId, kind: "SHIPPING_CHARGE", settlement: { status: "SETTLED" } },
       _sum: { amountPaisa: true },
@@ -100,7 +107,9 @@ export async function invoicePaidComponents(
       _sum: { amountPaisa: true },
     }),
   ]);
-  const allocationsPaisa = allocations._sum.amountPaisa ?? BigInt(0);
+  const allocationsPaisa =
+    (allocations._sum.amountPaisa ?? BigInt(0)) -
+    (allocations._sum.refundedPaisa ?? BigInt(0));
   const settlementCoveragePaisa = settlementLines._sum.amountPaisa ?? BigInt(0);
   const adjustmentCreditsPaisa = adjustments._sum.amountPaisa ?? BigInt(0);
   return {
@@ -625,6 +634,34 @@ export async function recordPayment(actor: ActorContext, input: unknown): Promis
         invoices.push(invoice);
       }
 
+      if (data.idempotencyKey) {
+        // F8 (Phase 10 slice 2): re-check the key AFTER the invoice
+        // row locks are held. A concurrent twin transaction blocked
+        // on those locks ran its first check before the winner
+        // committed; serialized here, the winner's payment is now
+        // visible and the replay returns it instead of dying on the
+        // (now zero) outstanding-balance check.
+        const winner = await tx.payment.findUnique({
+          where: { idempotencyKey: data.idempotencyKey },
+          include: { allocations: true },
+        });
+        if (winner) {
+          return {
+            id: winner.id,
+            amountPaisa: winner.amountPaisa.toString(),
+            method: winner.method,
+            status: winner.status,
+            payerType: winner.payerType,
+            transactionRef: winner.transactionRef,
+            paidAt: winner.paidAt?.toISOString() ?? null,
+            allocations: winner.allocations.map((a) => ({
+              invoiceId: a.invoiceId,
+              amountPaisa: a.amountPaisa.toString(),
+            })),
+          };
+        }
+      }
+
       const vendorIds = new Set(invoices.map((i) => i.vendorId).filter(Boolean));
       const customerIds = new Set(invoices.map((i) => i.customerId).filter(Boolean));
       if (vendorIds.size + customerIds.size !== 1) {
@@ -748,6 +785,33 @@ export async function recordPayment(actor: ActorContext, input: unknown): Promis
       throw new ConflictError("A payment with this transaction reference already exists");
     }
     if (isUniqueViolationOn(error, "idempotencyKey")) {
+      // Phase 10 slice 2 (F8-finance): the sequential replay at the
+      // top of the transaction returns the original payment, but
+      // two CONCURRENT submissions with the same key both pass that
+      // check and the loser dies here on the unique index. A retry
+      // with the same key is the same payment — return the winner's
+      // record instead of an error (Scenario 12 semantics).
+      if (data.idempotencyKey) {
+        const existing = await prisma.payment.findUnique({
+          where: { idempotencyKey: data.idempotencyKey },
+          include: { allocations: true },
+        });
+        if (existing) {
+          return {
+            id: existing.id,
+            amountPaisa: existing.amountPaisa.toString(),
+            method: existing.method,
+            status: existing.status,
+            payerType: existing.payerType,
+            transactionRef: existing.transactionRef,
+            paidAt: existing.paidAt?.toISOString() ?? null,
+            allocations: existing.allocations.map((a) => ({
+              invoiceId: a.invoiceId,
+              amountPaisa: a.amountPaisa.toString(),
+            })),
+          };
+        }
+      }
       throw new ConflictError("A payment with this idempotency key already exists");
     }
     throw error;

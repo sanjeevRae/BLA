@@ -235,8 +235,13 @@ export async function processRefund(actor: ActorContext, refundId: string) {
       ],
     });
 
-    // Reduce allocations newest-first; invoices re-derive from what
-    // remains allocated.
+    // Phase 10 slice 2 (F12e): mark the refunded portion on the
+    // allocations newest-first instead of shrinking/deleting them.
+    // The original allocation rows are the record of what the
+    // payment covered; deleting them rewrote that history and made
+    // the pre-refund split unreconstructible. invoicePaidComponents
+    // nets refundedPaisa out, so invoice states re-derive exactly
+    // as before.
     let remainingToReduce = refund.amountPaisa;
     const allocations = await tx.paymentAllocation.findMany({
       where: { paymentId: payment.id },
@@ -245,17 +250,15 @@ export async function processRefund(actor: ActorContext, refundId: string) {
     const affectedInvoices = new Set<string>();
     for (const allocation of allocations) {
       if (remainingToReduce <= BigInt(0)) break;
+      const refundable = allocation.amountPaisa - allocation.refundedPaisa;
+      if (refundable <= BigInt(0)) continue;
       affectedInvoices.add(allocation.invoiceId);
-      if (allocation.amountPaisa <= remainingToReduce) {
-        remainingToReduce -= allocation.amountPaisa;
-        await tx.paymentAllocation.delete({ where: { id: allocation.id } });
-      } else {
-        await tx.paymentAllocation.update({
-          where: { id: allocation.id },
-          data: { amountPaisa: allocation.amountPaisa - remainingToReduce },
-        });
-        remainingToReduce = BigInt(0);
-      }
+      const applied = refundable <= remainingToReduce ? refundable : remainingToReduce;
+      remainingToReduce -= applied;
+      await tx.paymentAllocation.update({
+        where: { id: allocation.id },
+        data: { refundedPaisa: allocation.refundedPaisa + applied },
+      });
     }
 
     const totalRefunded = alreadyRefunded + refund.amountPaisa;

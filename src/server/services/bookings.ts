@@ -17,7 +17,10 @@ import {
   EDITABLE_STATUSES,
 } from "@/lib/bookings/lifecycle";
 import { generateTrackingId } from "@/lib/bookings/tracking";
-import { splitPaisa } from "@/lib/bookings/pricing-math";
+import {
+  shippingChargePaisa as computeShippingChargePaisa,
+  splitPaisa,
+} from "@/lib/bookings/pricing-math";
 import {
   auditAccessDenied,
   isUniqueViolationOn,
@@ -31,6 +34,7 @@ import { resolvePricing, parcelWeights } from "@/server/services/pricing";
 import {
   initialisePackage,
   transitionPackage,
+  transitionPackageInTx,
   toPackageView,
   packageInclude,
   type PackageView,
@@ -387,36 +391,62 @@ async function createBookingOnce(
     });
 
     // --- Pricing snapshot ------------------------------------------------
+    // Phase 10 slice 2 (P3-11): the weight BAND must be selected on
+    // the same billable weight the charge is computed from. The old
+    // code resolved the band on the DECLARED total, then computed
+    // billable weights with that rule's volumetric divisor — when
+    // volumetric weight pushed the parcel into a different band, the
+    // booking was priced by a rule whose band it was not in. Resolve
+    // to a fixed point instead: billable under the current rule →
+    // re-resolve the band on that billable → repeat while the rule
+    // changes (bounded; bands and divisors are configuration, and
+    // two rounds settle any realistic tariff).
     const declaredTotal = data.items.reduce(
       (sum, i) => sum.plus(dec(i.weightKg).mul(i.quantity)),
       new Prisma.Decimal(0),
     );
-    const pricing = await resolvePricing(tx, {
+    const computePlans = (volumetricDivisor: number) => {
+      let total = new Prisma.Decimal(0);
+      const plans = data.items.map((item) => {
+        const weights = parcelWeights({
+          declaredWeightKg: dec(item.weightKg),
+          lengthCm: item.lengthCm ? dec(item.lengthCm) : null,
+          widthCm: item.widthCm ? dec(item.widthCm) : null,
+          heightCm: item.heightCm ? dec(item.heightCm) : null,
+          volumetricDivisor,
+        });
+        total = total.plus(weights.billableKg.mul(item.quantity));
+        return { item, weights };
+      });
+      return { plans, total };
+    };
+    let pricing = await resolvePricing(tx, {
       shippingServiceId: service.id,
       originServiceAreaId: originArea?.id ?? null,
       destinationServiceAreaId: destArea?.id ?? null,
       totalBillableWeightKg: declaredTotal,
     });
-    let totalBillable = new Prisma.Decimal(0);
-    const parcelPlans = data.items.map((item) => {
-      const weights = parcelWeights({
-        declaredWeightKg: dec(item.weightKg),
-        lengthCm: item.lengthCm ? dec(item.lengthCm) : null,
-        widthCm: item.widthCm ? dec(item.widthCm) : null,
-        heightCm: item.heightCm ? dec(item.heightCm) : null,
-        volumetricDivisor: pricing.rule.volumetricDivisor,
+    let { plans: parcelPlans, total: totalBillable } = computePlans(
+      pricing.rule.volumetricDivisor,
+    );
+    for (let round = 0; round < 3; round++) {
+      const next = await resolvePricing(tx, {
+        shippingServiceId: service.id,
+        originServiceAreaId: originArea?.id ?? null,
+        destinationServiceAreaId: destArea?.id ?? null,
+        totalBillableWeightKg: totalBillable,
       });
-      totalBillable = totalBillable.plus(weights.billableKg.mul(item.quantity));
-      return { item, weights };
-    });
-    const shippingChargePaisa =
-      pricing.rule.baseRatePaisa +
-      BigInt(
-        new Prisma.Decimal(pricing.rule.perKgRatePaisa.toString())
-          .mul(totalBillable)
-          .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP)
-          .toString(),
-      );
+      if (next.rule.id === pricing.rule.id) break;
+      pricing = next;
+      ({ plans: parcelPlans, total: totalBillable } = computePlans(
+        pricing.rule.volumetricDivisor,
+      ));
+    }
+    const shippingChargePaisa = computeShippingChargePaisa(
+      pricing.rule.baseRatePaisa,
+      pricing.rule.perKgRatePaisa,
+      totalBillable,
+    );
 
     // --- Business numbers --------------------------------------------------
     const [orderSeq] = await tx.$queryRaw<{ nextval: bigint }[]>`
@@ -794,39 +824,62 @@ export async function rejectBooking(
   reason: string,
 ): Promise<BookingView> {
   await requirePermAudited(actor, "booking.approve", "Order");
-  const order = await prisma.order.findUnique({ where: { id: orderId }, include: orderInclude });
-  if (!order) throw new NotFoundError("Booking not found");
-  if (order.approvalStatus !== "PENDING") {
-    throw new ConflictError(`Booking is ${order.approvalStatus}, not PENDING`);
-  }
-  for (const shipment of order.shipments) {
-    for (const pkg of shipment.packages) {
-      if (pkg.operationalStatus === "BOOKED") {
-        await transitionPackage(actor, pkg.id, "CANCELLED", {
-          notes: `Booking rejected: ${reason}`,
-        });
+  const existing = await prisma.order.findUnique({ where: { id: orderId }, select: { id: true } });
+  if (!existing) throw new NotFoundError("Booking not found");
+  // Phase 10 slice 2 (P3-6): the rejection is ONE transaction — the
+  // PENDING re-check, every package cancellation, the order update
+  // and the audits commit or roll back together. The previous shape
+  // transitioned packages one call at a time, so a failure mid-loop
+  // left packages CANCELLED under a still-PENDING order.
+  await prisma.$transaction(async (tx) => {
+    const order = await tx.order.findUnique({ where: { id: orderId }, include: orderInclude });
+    if (!order) throw new NotFoundError("Booking not found");
+    if (order.approvalStatus !== "PENDING") {
+      throw new ConflictError(`Booking is ${order.approvalStatus}, not PENDING`);
+    }
+    for (const shipment of order.shipments) {
+      for (const pkg of shipment.packages) {
+        if (pkg.operationalStatus === "BOOKED") {
+          await transitionPackageInTx(tx, actor, pkg.id, "CANCELLED", {
+            notes: `Booking rejected: ${reason}`,
+          });
+          // Mirror the package.cancel audit transitionPackage writes
+          // for a standalone cancellation (inside the tx here, so it
+          // commits with the rejection it belongs to).
+          await tx.auditLog.create({
+            data: {
+              actorId: actor.userId,
+              actorRole: actor.primaryRole,
+              action: "package.cancel",
+              entityType: "Package",
+              entityId: pkg.id,
+              before: { operationalStatus: pkg.operationalStatus },
+              after: { operationalStatus: "CANCELLED" },
+            },
+          });
+        }
       }
     }
-  }
-  await prisma.order.update({
-    where: { id: orderId },
-    data: {
-      approvalStatus: "REJECTED",
-      approvalNote: reason,
-      status: "CANCELLED",
-      cancelReason: reason,
-      cancelledAt: new Date(),
-    },
-  });
-  await prisma.auditLog.create({
-    data: {
-      actorId: actor.userId,
-      actorRole: actor.primaryRole,
-      action: "booking.reject",
-      entityType: "Order",
-      entityId: orderId,
-      after: { approvalStatus: "REJECTED", reason },
-    },
+    await tx.order.update({
+      where: { id: orderId },
+      data: {
+        approvalStatus: "REJECTED",
+        approvalNote: reason,
+        status: "CANCELLED",
+        cancelReason: reason,
+        cancelledAt: new Date(),
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorId: actor.userId,
+        actorRole: actor.primaryRole,
+        action: "booking.reject",
+        entityType: "Order",
+        entityId: orderId,
+        after: { approvalStatus: "REJECTED", reason },
+      },
+    });
   });
   const full = await prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
   return toBookingView(full);

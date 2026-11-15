@@ -148,7 +148,20 @@ async function assertDriverScope(
 
 const dateString = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Dates use YYYY-MM-DD");
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Dates use YYYY-MM-DD")
+  // Phase 10 slice 2 (P5-8): the regex alone accepts impossible
+  // dates (2026-02-30), which `new Date(...)` silently rolled over
+  // or turned into a raw 500 downstream. Require a real calendar
+  // date.
+  .refine((value) => {
+    const [y, m, d] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(y!, m! - 1, d!));
+    return (
+      date.getUTCFullYear() === y &&
+      date.getUTCMonth() === m! - 1 &&
+      date.getUTCDate() === d
+    );
+  }, "Dates must be real calendar dates");
 
 export const createDriverSchema = z.object({
   userId: z.string().uuid(),
@@ -171,10 +184,30 @@ export async function createDriverProfile(
   await loadWarehouseOr404(data.homeWarehouseId);
   await assertWarehouseScope(actor, data.homeWarehouseId, "Driver");
 
-  const user = await prisma.user.findUnique({ where: { id: data.userId } });
+  const user = await prisma.user.findUnique({
+    where: { id: data.userId },
+    include: { roles: { include: { role: { select: { code: true } } } } },
+  });
   if (!user) throw new NotFoundError("User not found");
   if (user.status !== "ACTIVE") {
     throw new DomainValidationError("Driver profiles can only be created for active users");
+  }
+  // Phase 10 slice 2 (P5-8): a Driver profile on an account without
+  // a driver role is dead weight that later confuses assignment —
+  // the candidate picker (listDriverCandidates) already only offers
+  // LINEHAUL_DRIVER / RIDER accounts; enforce the same rule here so
+  // direct API calls cannot bypass it.
+  if (
+    !user.roles.some((r) => ["LINEHAUL_DRIVER", "RIDER"].includes(r.role.code))
+  ) {
+    throw new DomainValidationError(
+      "Driver profiles can only be created for users holding the LINEHAUL_DRIVER or RIDER role",
+    );
+  }
+  // P5-8: an already-expired licence is a data-entry error at
+  // creation time, not something to discover at assignment time.
+  if (isExpiredDate(new Date(`${data.licenseExpiry}T00:00:00.000Z`))) {
+    throw new DomainValidationError("Driving licence expiry is in the past");
   }
   const existing = await prisma.driver.findUnique({ where: { userId: data.userId } });
   if (existing) {
@@ -237,6 +270,13 @@ export async function updateDriverProfile(
   await requirePermAudited(actor, "driver.manage", "Driver");
   const driver = await loadDriverOr404(data.driverId);
   await assertDriverScope(actor, driver, driver.id);
+  // P5-8: same expired-licence guard as creation.
+  if (
+    data.licenseExpiry &&
+    isExpiredDate(new Date(`${data.licenseExpiry}T00:00:00.000Z`))
+  ) {
+    throw new DomainValidationError("Driving licence expiry is in the past");
+  }
   if (data.homeWarehouseId && data.homeWarehouseId !== driver.homeWarehouseId) {
     await loadWarehouseOr404(data.homeWarehouseId);
     await assertWarehouseScope(actor, data.homeWarehouseId, "Driver", driver.id);
@@ -430,17 +470,36 @@ export async function getDriver(
   return toDriverView(driver);
 }
 
+/** Slim picker row for the crew-assignment UI (Phase 10 slice 2,
+ *  P5-7): identity + home warehouse only. The full DriverView
+ *  carries email, phone, emergency contacts and the licence number —
+ *  none of which a dispatcher needs to pick a driver, and all of
+ *  which the old listAssignableDrivers leaked for EVERY line-haul
+ *  driver in the company regardless of the actor's scope. */
+export interface AssignableDriverView {
+  id: string;
+  fullName: string;
+  homeWarehouseId: string;
+  homeWarehouseCode: string;
+}
+
 /** Drivers eligible for line-haul assignment right now, with the
  *  specific blockers for those who are not (driver-workflow.md §3/§8:
  *  the dispatcher sees WHY a driver cannot be assigned). Used by the
  *  transfer crew-assignment picker; the authoritative check runs
- *  again inside assignTransferCrew. */
+ *  again inside assignTransferCrew.
+ *
+ *  P5-7: warehouse-scoped actors see only drivers homed at their
+ *  warehouses; unscoped actors (dispatcher/admin) see all. */
 export async function listAssignableDrivers(
   actor: ActorContext,
-): Promise<{ driver: DriverView; blockers: string[] }[]> {
+): Promise<{ driver: AssignableDriverView; blockers: string[] }[]> {
   await requirePermAudited(actor, "driver.assign", "Driver");
   const rows = await prisma.driver.findMany({
-    where: { capabilities: { some: { capability: "LINEHAUL" } } },
+    where: {
+      capabilities: { some: { capability: "LINEHAUL" } },
+      ...(isUnscoped(actor) ? {} : { homeWarehouseId: { in: actor.warehouseIds } }),
+    },
     include: driverInclude,
     orderBy: { createdAt: "asc" },
   });
@@ -465,7 +524,15 @@ export async function listAssignableDrivers(
     }
     if (isExpiredDate(row.licenseExpiry)) blockers.push("Driving licence has expired");
     if (busy.has(row.id)) blockers.push("Already assigned to an active trip");
-    return { driver: toDriverView(row), blockers };
+    return {
+      driver: {
+        id: row.id,
+        fullName: row.user.fullName,
+        homeWarehouseId: row.homeWarehouseId,
+        homeWarehouseCode: row.homeWarehouse.code,
+      },
+      blockers,
+    };
   });
 }
 

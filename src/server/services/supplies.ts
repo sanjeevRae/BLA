@@ -213,12 +213,17 @@ export async function updateStockItem(
   return toItemView(updated);
 }
 
+/** Phase 10 slice 2 (P4-8): one bound for every stock quantity in
+ *  the module — the create schema already capped initial quantity
+ *  and reorder level at 1,000,000; movements were unbounded. */
+export const MAX_STOCK_QUANTITY = 1_000_000;
+
 export const recordStockMovementSchema = z.object({
   stockItemId: z.string().uuid(),
   type: z.enum(STOCK_MOVEMENT_TYPES),
   /** Positive magnitude for PURCHASE/ISSUE/RETURN/DAMAGE_WRITE_OFF;
    *  a signed non-zero delta for ADJUSTMENT. */
-  quantity: z.number().int(),
+  quantity: z.number().int().min(-MAX_STOCK_QUANTITY).max(MAX_STOCK_QUANTITY),
   reason: z.string().max(500).optional().nullable(),
   reference: z.string().max(120).optional().nullable(),
 });
@@ -237,6 +242,18 @@ export async function recordStockMovement(
   await assertWarehouseScope(actor, item.warehouseId, "StockItem", item.id);
   if (!item.isActive) {
     throw new DomainValidationError("Stock item is inactive");
+  }
+
+  // P4-8: adjustments and damage write-offs change the books
+  // without a physical counterpart document — the reason IS the
+  // audit trail, so it is mandatory and non-empty for both.
+  if (
+    (data.type === "ADJUSTMENT" || data.type === "DAMAGE_WRITE_OFF") &&
+    !data.reason?.trim()
+  ) {
+    throw new DomainValidationError(
+      `A reason is required for ${data.type === "ADJUSTMENT" ? "an adjustment" : "a damage write-off"}`,
+    );
   }
 
   let delta: number;
@@ -267,6 +284,14 @@ export async function recordStockMovement(
     if (after < 0) {
       throw new DomainValidationError(
         `Insufficient stock: ${before} on hand, cannot apply a change of ${delta}`,
+      );
+    }
+    // P4-8: the on-hand total is capped at the same bound as every
+    // other quantity in the module, so repeated purchases cannot
+    // grow it without limit.
+    if (after > MAX_STOCK_QUANTITY) {
+      throw new DomainValidationError(
+        `Stock on hand cannot exceed ${MAX_STOCK_QUANTITY} units`,
       );
     }
     const movement = await tx.stockMovement.create({

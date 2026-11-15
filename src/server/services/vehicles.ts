@@ -139,6 +139,18 @@ async function loadVehicleOr404(vehicleId: string): Promise<VehicleRow> {
 const dateString = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Dates use YYYY-MM-DD")
+  // Phase 10 slice 2 (P5-8): same impossible-date guard as the
+  // driver schemas — 2026-02-30 must fail validation, not become
+  // an Invalid Date that 500s at insert time.
+  .refine((value) => {
+    const [y, m, d] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(y!, m! - 1, d!));
+    return (
+      date.getUTCFullYear() === y &&
+      date.getUTCMonth() === m! - 1 &&
+      date.getUTCDate() === d
+    );
+  }, "Dates must be real calendar dates")
   .optional()
   .nullable();
 

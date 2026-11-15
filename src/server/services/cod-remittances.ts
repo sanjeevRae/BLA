@@ -10,6 +10,7 @@ import { REMITTANCE_METHODS } from "@/lib/finance/domain";
 import {
   auditAccessDenied,
   isUniqueViolation,
+  isUniqueViolationOn,
   pageArgs,
   pageMeta,
   parse,
@@ -65,6 +66,9 @@ export const submitRemittanceSchema = z.object({
   declaredAmountPaisa: moneyString,
   method: z.enum(REMITTANCE_METHODS).default("CASH"),
   warehouseId: z.string().uuid().optional(),
+  // Phase 10 slice 2 (F12b): a retried submission carrying the
+  // same key returns the original remittance (mirrors Payment).
+  idempotencyKey: z.string().trim().min(8).max(120).optional(),
   notes: z.string().trim().max(500).optional(),
 });
 
@@ -272,6 +276,21 @@ export async function submitRemittance(actor: ActorContext, input: unknown) {
 
   try {
     const remittance = await prisma.$transaction(async (tx) => {
+      // F12b: sequential replay — the same key returns the original
+      // remittance untouched (the concurrent case is caught by the
+      // unique index and resolved in the catch below).
+      if (data.idempotencyKey) {
+        const existing = await tx.codRemittance.findUnique({
+          where: { idempotencyKey: data.idempotencyKey },
+          include: { driver: { include: { user: { select: { fullName: true } } } }, lines: true },
+        });
+        if (existing) {
+          if (existing.driverId !== driverId) {
+            throw new ConflictError("This idempotency key was already used by another rider");
+          }
+          return existing;
+        }
+      }
       const driver = await tx.driver.findUnique({
         where: { id: driverId },
         select: { id: true, userId: true, homeWarehouseId: true },
@@ -289,7 +308,10 @@ export async function submitRemittance(actor: ActorContext, input: unknown) {
         if (rows.length === 0) throw new NotFoundError(`COD collection ${id} not found`);
         const collection = await tx.deliveryCodCollection.findUnique({
           where: { id },
-          include: { shipment: { select: { order: { select: { vendorId: true } } } } },
+          include: {
+            shipment: { select: { order: { select: { vendorId: true } } } },
+            batch: { select: { warehouseId: true } },
+          },
         });
         if (!collection) throw new NotFoundError(`COD collection ${id} not found`);
         if (collection.collectedById !== driver.userId) {
@@ -309,6 +331,36 @@ export async function submitRemittance(actor: ActorContext, input: unknown) {
         collections.push(collection);
       }
 
+      // Phase 10 slice 2 (F12a): an explicit warehouseId was
+      // previously trusted blindly — a nonexistent id died on the
+      // FK as a raw 500, and a foreign warehouse silently took the
+      // attribution (the remittance warehouse feeds discrepancy
+      // incidents and reports). The handover warehouse must exist,
+      // be ACTIVE, and be a place this cash plausibly changed
+      // hands: the rider's home warehouse or the warehouse of one
+      // of the remitted collections' delivery batches.
+      let warehouseId = driver.homeWarehouseId;
+      if (data.warehouseId) {
+        const warehouse = await tx.warehouse.findUnique({
+          where: { id: data.warehouseId },
+          select: { id: true, status: true },
+        });
+        if (!warehouse) throw new NotFoundError("Warehouse not found");
+        if (warehouse.status !== "ACTIVE") {
+          throw new DomainValidationError("Warehouse is not active — remittances cannot be handed over there");
+        }
+        const plausible = new Set<string>([driver.homeWarehouseId]);
+        for (const collection of collections) {
+          if (collection.batch?.warehouseId) plausible.add(collection.batch.warehouseId);
+        }
+        if (!plausible.has(data.warehouseId)) {
+          throw new DomainValidationError(
+            "Remittances can only be handed over at the rider's home warehouse or a warehouse on the collections' delivery batches",
+          );
+        }
+        warehouseId = data.warehouseId;
+      }
+
       const seq = await nextFinanceSequence(tx, "remittance_number_seq");
       const remittanceNumber = `RMT-${seq.toString()}`;
       const created = await tx.codRemittance.create({
@@ -316,9 +368,10 @@ export async function submitRemittance(actor: ActorContext, input: unknown) {
           remittanceNumber,
           driverId,
           submittedById: actor.userId,
-          warehouseId: data.warehouseId ?? driver.homeWarehouseId,
+          warehouseId,
           declaredAmountPaisa: data.declaredAmountPaisa,
           method: data.method,
+          idempotencyKey: data.idempotencyKey ?? null,
           notes: data.notes ?? null,
           lines: {
             create: collections.map((c) => ({
@@ -409,6 +462,17 @@ export async function submitRemittance(actor: ActorContext, input: unknown) {
     });
     return toRemittanceView(remittance);
   } catch (error) {
+    // F12b: the concurrent-submission loser hits the idempotency
+    // unique index — return the winner's remittance, exactly like
+    // the sequential replay above.
+    if (data.idempotencyKey && isUniqueViolationOn(error, "idempotencyKey")) {
+      const existing = await prisma.codRemittance.findUnique({
+        where: { idempotencyKey: data.idempotencyKey },
+        include: { driver: { include: { user: { select: { fullName: true } } } }, lines: true },
+      });
+      if (existing && existing.driverId === driverId) return toRemittanceView(existing);
+      throw new ConflictError("This idempotency key was already used by another rider");
+    }
     if (isUniqueViolation(error)) {
       throw new ConflictError("A COD collection is already on a remittance and cannot be remitted twice");
     }
@@ -606,6 +670,9 @@ export async function resolveRemittance(actor: ActorContext, remittanceId: strin
         await reverseLiveJournalLegs(tx, {
           journalRef: `COD-${line.codCollectionId}`,
           actorId: actor.userId,
+          // F9 (slice 2): the resolution note is the reversal's
+          // reason — stored on the reversal legs.
+          reason: `Remittance ${remittance.remittanceNumber} rejected: ${data.note}`,
         });
         const collection = await tx.deliveryCodCollection.findUnique({
           where: { id: line.codCollectionId },
@@ -699,6 +766,39 @@ export async function resolveRemittance(actor: ActorContext, remittanceId: strin
       }
     }
 
+    // Phase 10 slice 2 (F12d): the surplus case — finance counted
+    // MORE cash than the collections record (remaining > 0 after
+    // attribution). The old code silently dropped it: the cash was
+    // in the company's hands with no ledger attribution. Park it
+    // in the COD_DISCREPANCY suspense account against clearing —
+    // the mirror image of the shortfall treatment — until finance
+    // investigates whose money it is.
+    const surplus = remaining > BigInt(0) ? remaining : BigInt(0);
+    if (surplus > BigInt(0)) {
+      const clearing = await companyAccount(tx, "COD_CLEARING");
+      const suspense = await companyAccount(tx, "COD_DISCREPANCY");
+      await postJournal(tx, {
+        journalRef: `${remittance.remittanceNumber}:SURPLUS`,
+        actorId: actor.userId,
+        legs: [
+          {
+            accountCode: clearing.code,
+            direction: "DEBIT",
+            amountPaisa: surplus,
+            type: "COD_REMITTED",
+            remittanceId: remittance.id,
+          },
+          {
+            accountCode: suspense.code,
+            direction: "CREDIT",
+            amountPaisa: surplus,
+            type: "COD_REMITTED",
+            remittanceId: remittance.id,
+          },
+        ],
+      });
+    }
+
     const closed = await tx.codRemittance.update({
       where: { id: remittanceId },
       data: {
@@ -714,6 +814,7 @@ export async function resolveRemittance(actor: ActorContext, remittanceId: strin
       after: {
         countedAmountPaisa: counted.toString(),
         shortfallPaisa: shortfall.toString(),
+        surplusPaisa: surplus.toString(),
         note: data.note,
       },
     });

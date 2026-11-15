@@ -221,6 +221,14 @@ export async function reverseJournal(
   tx: Tx,
   input: { journalRef: string; actorId: string; reason: string },
 ) {
+  // Phase 10 slice 2 (F9): lock the journal's rows before the
+  // already-reversed check. Without the lock, two concurrent
+  // reversals both pass the check and the loser dies on the
+  // reversalOfId unique index with a raw P2002 instead of the
+  // clean "already been reversed" error. With the rows locked, the
+  // loser waits, then sees the winner's reversal rows.
+  await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "app"."LedgerTransaction" WHERE "journalRef" = ${input.journalRef} FOR UPDATE`;
   const originals = await tx.ledgerTransaction.findMany({
     where: { journalRef: input.journalRef },
     orderBy: { createdAt: "asc" },
@@ -255,6 +263,9 @@ export async function reverseJournal(
           remittanceId: entry.remittanceId,
           settlementId: entry.settlementId,
           paymentMethod: entry.paymentMethod,
+          // F9: the reason is stored on every reversal leg — it was
+          // previously accepted and silently dropped.
+          notes: input.reason,
           occurredAt: new Date(),
           actorId: input.actorId,
           reversalOfId: entry.id,
@@ -278,8 +289,13 @@ export async function reverseJournal(
  */
 export async function reverseLiveJournalLegs(
   tx: Tx,
-  input: { journalRef: string; actorId: string },
+  input: { journalRef: string; actorId: string; reason?: string },
 ) {
+  // F9 (slice 2): same row lock as reverseJournal — concurrent
+  // reject/reverse calls on one journal serialize here instead of
+  // racing the reversalOfId unique index.
+  await tx.$queryRaw<{ id: string }[]>`
+    SELECT "id" FROM "app"."LedgerTransaction" WHERE "journalRef" = ${input.journalRef} FOR UPDATE`;
   const originals = await tx.ledgerTransaction.findMany({
     where: { journalRef: input.journalRef, reversalOfId: null, reversedBy: null },
     orderBy: { createdAt: "asc" },
@@ -306,6 +322,7 @@ export async function reverseLiveJournalLegs(
           remittanceId: entry.remittanceId,
           settlementId: entry.settlementId,
           paymentMethod: entry.paymentMethod,
+          notes: input.reason ?? null,
           occurredAt: new Date(),
           actorId: input.actorId,
           reversalOfId: entry.id,

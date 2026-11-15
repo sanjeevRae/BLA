@@ -1968,6 +1968,10 @@ model LedgerTransaction {
   remittanceId    String?
   settlementId    String?
   paymentMethod   String?
+  /// Phase 10 slice 2 (F9): free-text reason recorded on the entry —
+  /// journal reversals store WHY the original journal was reversed
+  /// (previously the reason was accepted by reverseJournal and lost).
+  notes           String?
   occurredAt      DateTime
   actorId         String
   approvedById    String?
@@ -2124,6 +2128,12 @@ model PaymentAllocation {
   paymentId     String
   invoiceId     String
   amountPaisa   BigInt
+  /// Phase 10 slice 2 (F12e): the portion of this allocation undone
+  /// by processed refunds. The original allocation is never shrunk
+  /// or deleted — paid derivation subtracts refundedPaisa, so the
+  /// allocation history stays reconstructible. DB CHECK keeps
+  /// 0 <= refundedPaisa <= amountPaisa.
+  refundedPaisa BigInt   @default(0)
   allocatedById String
   createdAt     DateTime @default(now())
 
@@ -2155,6 +2165,10 @@ model CodRemittance {
   discrepancyPaisa    BigInt?
   status              String    @default("SUBMITTED")
   method              String    @default("CASH")
+  /// Phase 10 slice 2 (F12b): client-supplied submission key — a
+  /// retried submission with the same key returns the original
+  /// remittance instead of double-submitting (mirrors Payment).
+  idempotencyKey      String?   @unique
   notes               String?
   verifiedById        String?
   verifiedAt          DateTime?

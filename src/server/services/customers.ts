@@ -10,6 +10,7 @@ import { CUSTOMER_ADDRESS_KINDS } from "@/lib/bookings/domain";
 import { normalizePhone } from "@/lib/bookings/phone";
 import {
   auditAccessDenied,
+  isUniqueViolationOn,
   pageArgs,
   pageMeta,
   parse,
@@ -211,16 +212,32 @@ export async function updateCustomer(
   const data = parse(updateCustomerSchema, input);
   const customer = await prisma.customer.findUnique({ where: { id: customerId } });
   if (!customer) throw new NotFoundError("Customer not found");
-  const updated = await prisma.customer.update({
-    where: { id: customerId },
-    data: {
-      ...(data.fullName !== undefined ? { fullName: data.fullName } : {}),
-      ...(data.phone !== undefined
-        ? { phone: data.phone, normalizedPhone: normalizePhone(data.phone) }
-        : {}),
-      ...(data.email !== undefined ? { email: data.email } : {}),
-    },
-  });
+  // Phase 10 slice 2 (P3-10): a phone/email that already belongs to
+  // another customer is a conflict the caller can act on (merge the
+  // records), not a raw 500 from the unique index.
+  let updated: CustomerRow;
+  try {
+    updated = await prisma.customer.update({
+      where: { id: customerId },
+      data: {
+        ...(data.fullName !== undefined ? { fullName: data.fullName } : {}),
+        ...(data.phone !== undefined
+          ? { phone: data.phone, normalizedPhone: normalizePhone(data.phone) }
+          : {}),
+        ...(data.email !== undefined ? { email: data.email } : {}),
+      },
+    });
+  } catch (error) {
+    if (isUniqueViolationOn(error, "normalizedPhone")) {
+      throw new ConflictError(
+        "Another customer already uses this phone number — merge the two records instead",
+      );
+    }
+    if (isUniqueViolationOn(error, "email")) {
+      throw new ConflictError("Another customer already uses this email address");
+    }
+    throw error;
+  }
   await prisma.auditLog.create({
     data: {
       actorId: actor.userId,

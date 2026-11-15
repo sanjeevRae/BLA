@@ -286,6 +286,32 @@ export async function receivePackage(
   // The arrival is recorded as an exception — never silently stocked.
   const expectedOriginId = pkg.shipment.originWarehouseId;
   if (data.warehouseId !== expectedOriginId) {
+    // Phase 10 slice 2 (P4-4): a repeat scan of an already-flagged
+    // misroute at the SAME warehouse is the same observation, not a
+    // new one — return the misrouted result without stacking another
+    // EXCEPTION_RAISED event and audit row (mirrors the transfer
+    // receiving dedupe, Phase 5 review P5-4). A scan at a DIFFERENT
+    // wrong warehouse is a new observation and is recorded.
+    const alreadyFlaggedHere =
+      pkg.exceptionStatus === "MISROUTED" &&
+      (await prisma.trackingEvent.findFirst({
+        where: {
+          packageId: pkg.id,
+          eventType: "EXCEPTION_RAISED",
+          warehouseId: data.warehouseId,
+        },
+        select: { id: true },
+      })) != null;
+    if (alreadyFlaggedHere) {
+      return {
+        package: toOpsPackageSummary(pkg),
+        inventoryRecordId: null,
+        alreadyReceived: false,
+        misrouted: true,
+        capacityWarning: null,
+        capacityOverrideUsed: false,
+      };
+    }
     await prisma.$transaction(async (tx) => {
       await tx.package.update({
         where: { id: pkg.id },
@@ -351,6 +377,26 @@ export async function receivePackage(
   let outcome: { recordId: string; summary: OpsPackageSummary; duplicate: boolean };
   try {
     outcome = await prisma.$transaction(async (tx) => {
+      // Phase 10 slice 2 (P4-6): the capacity gate above ran BEFORE
+      // this transaction (check-then-act): two concurrent intakes
+      // could both read occupancy = capacity − 1 and both stock,
+      // overshooting the warehouse. Lock the warehouse row and
+      // recount inside the transaction so intakes at one warehouse
+      // serialize on the gate. The pre-check stays — it produces the
+      // warning level and the override decision; this is the
+      // authoritative re-check when no override was granted.
+      await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "app"."Warehouse" WHERE "id" = ${data.warehouseId} FOR UPDATE`;
+      if (capacity.configured && !capacityOverrideUsed) {
+        const occupancyNow = await tx.inventoryRecord.count({
+          where: { warehouseId: data.warehouseId, releasedAt: null },
+        });
+        if (occupancyNow >= capacity.capacity) {
+          throw new DomainValidationError(
+            `Warehouse is at full package capacity (${occupancyNow}/${capacity.capacity}) — receiving is blocked`,
+          );
+        }
+      }
       const transitioned = await transitionPackageInTx(
         tx,
         actor,
@@ -897,6 +943,14 @@ export async function moveInternal(
   }
   if (target.id === record.storageLocationId) {
     throw new DomainValidationError("Package is already at that location");
+  }
+  // Phase 10 slice 2 (P4-7): mirror putAwayPackage's guard — the
+  // damaged zone is quarantine entry only through inspection, never
+  // through a stock move.
+  if (target.zone.kind === "DAMAGED" && pkg.exceptionStatus !== "DAMAGED") {
+    throw new DomainValidationError(
+      "The damaged zone is quarantine only — record damage through inspection instead",
+    );
   }
   if (pkg.exceptionStatus === "DAMAGED" && target.zone.kind !== "DAMAGED") {
     throw new DomainValidationError(

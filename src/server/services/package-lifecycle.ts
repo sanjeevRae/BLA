@@ -322,6 +322,12 @@ export async function transitionPackage(
     if (prior && prior.packageId === packageId) {
       return toPackageView(pkg);
     }
+    // Phase 10 slice 2 (P3-7a): the key already belongs to a
+    // DIFFERENT package — refuse cleanly instead of falling through
+    // to the event insert, which surfaced as a raw P2002.
+    if (prior) {
+      throw new ConflictError("This idempotency key was already used for a different package");
+    }
   }
 
   const transition = findTransition(pkg.operationalStatus, toStatus);
@@ -476,6 +482,12 @@ export async function transitionPackageInTx(
     if (prior && prior.packageId === packageId) {
       return { pkg: toPackageView(pkg), eventId: prior.id, transitioned: false };
     }
+    // Phase 10 slice 2 (P3-7a): same cross-package guard as
+    // transitionPackage — a key owned by another package is a
+    // conflict, never a raw unique-violation from the event insert.
+    if (prior) {
+      throw new ConflictError("This idempotency key was already used for a different package");
+    }
   }
 
   const transition = findTransition(pkg.operationalStatus, toStatus);
@@ -483,11 +495,41 @@ export async function transitionPackageInTx(
     const allowed = allowedTransitionsFrom(pkg.operationalStatus)
       .map((t) => t.to)
       .join(", ");
+    // Phase 10 slice 2 (P4-5): mirror transitionPackage's rejection
+    // audit. The row is written through the ROOT client, not `tx` —
+    // the caller's transaction is about to roll back, and a rejected
+    // transition must still leave its audit trace. An audit failure
+    // never masks the rejection itself.
+    try {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.userId,
+          actorRole: actor.primaryRole,
+          action: "package.transition_rejected",
+          entityType: "Package",
+          entityId: packageId,
+          before: { operationalStatus: pkg.operationalStatus },
+          after: { attemptedStatus: toStatus },
+        },
+      });
+    } catch {
+      // Audit is best-effort here; the ConflictError below stands.
+    }
     throw new ConflictError(
       `A package in ${pkg.operationalStatus} cannot move to ${toStatus}. Allowed next states: ${allowed || "none (terminal)"}`,
     );
   }
   if (!actor.permissions.has(transition.permission)) {
+    // P4-5: same treatment for the permission rejection
+    // (auditAccessDenied already writes through the root client).
+    try {
+      await auditAccessDenied(actor, "Package", {
+        entityId: packageId,
+        reason: `missing_permission:${transition.permission}`,
+      });
+    } catch {
+      // Audit is best-effort here; the AuthorizationError stands.
+    }
     throw new AuthorizationError(`Missing required permission: ${transition.permission}`);
   }
 

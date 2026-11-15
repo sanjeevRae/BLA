@@ -119,7 +119,21 @@ export async function getActorContext(): Promise<ActorContext | null> {
       },
       orderBy: { createdAt: "asc" },
     }),
-    prisma.customer.findUnique({ where: { userId: user.id } }),
+    // Phase 10 slice 2 (P3-5): a customer record that was merged
+    // into a winner keeps its userId link on the LOSER row, so a
+    // plain findUnique would resolve the merged-away record and the
+    // customer would lose portal access to the merged history.
+    // Follow the merge chain to the surviving record (defensive
+    // loop bound — merge chains are short and cycles are impossible
+    // through the merge service, which only points losers at
+    // unmerged winners).
+    (async () => {
+      let profile = await prisma.customer.findUnique({ where: { userId: user.id } });
+      for (let hop = 0; profile?.isMerged && profile.mergedIntoId && hop < 10; hop++) {
+        profile = await prisma.customer.findUnique({ where: { id: profile.mergedIntoId } });
+      }
+      return profile?.isMerged ? null : profile;
+    })(),
     // Phase 5: the operational Driver profile (1:1 with the user).
     // Resolved regardless of employment status — the services decide
     // what a suspended/inactive driver may still see (their history),

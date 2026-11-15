@@ -226,6 +226,10 @@ export const NOTIFICATION_CATEGORIES = [
   "RETURN_AUTHORISED",
   "COD_DISCREPANCY",
   "GENERAL",
+  // Phase 10 slice 2: the notification-based daily operations summary
+  // (scripts/daily-ops-summary.ts) that replaces the retired legacy
+  // daily-report cron workflow.
+  "DAILY_OPS_SUMMARY",
 ] as const;
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
 
