@@ -19,6 +19,18 @@ export default async function Page() {
           >
             Warehouses →
           </Link>
+          <Link
+            href="/admin/vehicles"
+            className="rounded-md border border-line bg-page px-3 py-2 text-[13px] font-semibold text-ink"
+          >
+            Vehicles →
+          </Link>
+          <Link
+            href="/admin/drivers"
+            className="rounded-md border border-line bg-page px-3 py-2 text-[13px] font-semibold text-ink"
+          >
+            Drivers →
+          </Link>
         </div>
       </div>
     </div>

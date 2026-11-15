@@ -2,6 +2,7 @@ import { requireActor } from "@/lib/auth/permissions";
 import { DashboardHome } from "@/components/dashboards/DashboardHome";
 import { WarehouseBookingsPanel } from "@/components/bookings/pages";
 import { WarehouseOpsHomePanel } from "@/components/warehouse-ops/pages";
+import { TransfersHomePanel } from "@/components/transfers/pages";
 
 /**
  * Warehouse Staff home: identity summary plus the bookings/packages
@@ -14,6 +15,7 @@ export default async function Page() {
     <div className="grid gap-5">
       <DashboardHome actor={actor} roleLabel="Warehouse Staff" />
       <WarehouseOpsHomePanel actor={actor} basePath="/staff" />
+      <TransfersHomePanel actor={actor} basePath="/staff" />
       <WarehouseBookingsPanel actor={actor} basePath="/staff" />
     </div>
   );

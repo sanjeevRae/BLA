@@ -47,7 +47,8 @@ export interface ActorContext {
    *  ACCOUNTS_STAFF) inside `vendorId`'s organisation — refines which
    *  vendor modules respond (matrix §5.4). Null for non-vendor actors. */
   vendorRole: string | null;
-  /** Resolved when the Driver profile lands (Phase 6) — null until then. */
+  /** Resolved from the actor's Driver profile (Phase 5, 1:1 with the
+   *  user) — the assignment identity for riders and line-haul drivers. */
   driverId: string | null;
   /** Resolved when the Customer profile lands (Phase 3) — null until then. */
   customerId: string | null;

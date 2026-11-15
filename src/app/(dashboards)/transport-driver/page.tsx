@@ -1,7 +1,7 @@
 import { requireActor } from "@/lib/auth/permissions";
-import { DashboardHome } from "@/components/dashboards/DashboardHome";
+import { DriverDashboardPage } from "@/components/transfers/pages";
 
 export default async function Page() {
   const actor = await requireActor();
-  return <DashboardHome actor={actor} roleLabel="Line-haul Driver" />;
+  return <DriverDashboardPage actor={actor} />;
 }

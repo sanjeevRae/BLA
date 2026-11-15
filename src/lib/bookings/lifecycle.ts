@@ -71,6 +71,12 @@ export const PACKAGE_TRANSITIONS: readonly PackageTransition[] = [
   T("SORTED", "READY_FOR_DISPATCH", "mark_ready_for_dispatch", "package.sort"),
   // Transfer leg (Phase 5)
   T("READY_FOR_DISPATCH", "TRANSFER_ASSIGNED", "add_to_transfer", "transfer.prepare"),
+  // Pre-dispatch release (Phase 5): a manifested package removed from
+  // its transfer — or released by a transfer cancellation — returns to
+  // origin stock. The parcel never left origin custody, so this is a
+  // defined release path (rule T10), not a backwards edit; it exists
+  // only before dispatch (no edge out of DISPATCHED and beyond).
+  T("TRANSFER_ASSIGNED", "READY_FOR_DISPATCH", "remove_from_transfer", "transfer.prepare"),
   T("TRANSFER_ASSIGNED", "DISPATCHED", "dispatch_transfer", "transfer.dispatch"),
   T("DISPATCHED", "IN_TRANSIT", "trip_departed", "trip.update_progress"),
   T("IN_TRANSIT", "ARRIVED_AT_DESTINATION", "trip_arrived", "trip.update_progress"),

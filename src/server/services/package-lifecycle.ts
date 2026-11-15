@@ -268,6 +268,10 @@ export interface TransitionOptions {
    *  returns the current state without writing a second event. */
   idempotencyKey?: string | null;
   source?: string;
+  /** Operational context recorded on the TrackingEvent (Phase 5:
+   *  transfer/trip legs attribute their events to the movement). */
+  transferId?: string | null;
+  tripId?: string | null;
 }
 
 /** Delivery-progress side effects of operational moves (schema doc §5:
@@ -399,6 +403,8 @@ async function applyTransitionInTx(
       notes: options.notes ?? null,
       source: options.source ?? "WEB",
       idempotencyKey: options.idempotencyKey ?? null,
+      transferId: options.transferId ?? null,
+      tripId: options.tripId ?? null,
     },
   });
   await rollupShipmentStatus(tx, pkg.shipmentId);

@@ -74,7 +74,7 @@ export async function getActorContext(): Promise<ActorContext | null> {
   // P3-4: the vendor link resolves only while the vendor is APPROVED —
   // a suspended / rejected / not-yet-approved vendor's users keep their
   // login and roles but lose all vendor portal data immediately.
-  const [vendorLink, customerProfile] = await Promise.all([
+  const [vendorLink, customerProfile, driverProfile] = await Promise.all([
     prisma.vendorUser.findFirst({
       where: {
         userId: user.id,
@@ -84,6 +84,14 @@ export async function getActorContext(): Promise<ActorContext | null> {
       orderBy: { createdAt: "asc" },
     }),
     prisma.customer.findUnique({ where: { userId: user.id } }),
+    // Phase 5: the operational Driver profile (1:1 with the user).
+    // Resolved regardless of employment status — the services decide
+    // what a suspended/inactive driver may still see (their history),
+    // while assignment checks enforce employment + availability.
+    prisma.driver.findUnique({
+      where: { userId: user.id },
+      select: { id: true },
+    }),
   ]);
 
   return {
@@ -102,7 +110,7 @@ export async function getActorContext(): Promise<ActorContext | null> {
     })),
     vendorId: vendorLink?.vendorId ?? null,
     vendorRole: vendorLink?.vendorRole ?? null,
-    driverId: null,
+    driverId: driverProfile?.id ?? null,
     customerId: customerProfile?.id ?? null,
     landingPath: landingPathForRoles(roles),
   };

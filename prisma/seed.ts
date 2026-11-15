@@ -122,6 +122,7 @@ async function main(): Promise<void> {
 
   await seedWarehouses(roleIdByCode);
   await seedPhase3(superAdmin.id);
+  await seedPhase5();
 }
 
 /**
@@ -570,4 +571,101 @@ async function seedPhase3(superAdminId: string): Promise<void> {
   });
 
   console.log("Seeded Phase 3 reference data, demo vendor and demo customer.");
+}
+
+/**
+ * Phase 5 seed: local demo fleet fixtures.
+ * - A line-haul driver login (linehaul@bla.test) holding the
+ *   LINEHAUL_DRIVER role, with a Driver profile (LINEHAUL capability,
+ *   home WH-KTM-01, licence valid into 2030).
+ * - One AVAILABLE demo truck (BA 2 KHA 5001) homed at WH-KTM-01 with
+ *   the demo driver as its default driver.
+ * Local-only + create-only, exactly like the Phase 2/3 fixtures
+ * (targetsLocalDatabase guard, P2-6/P3-3): an existing account,
+ * profile or vehicle is left exactly as it is — re-running the seed
+ * never resets a password, status or assignment.
+ */
+async function seedPhase5(): Promise<void> {
+  if (!targetsLocalDatabase()) {
+    console.log(
+      "Refusing to seed Phase 5 demo fleet fixtures: DATABASE_URL does " +
+        "not target a local database (localhost/127.0.0.1 + bla_dev/bla_test).",
+    );
+    return;
+  }
+  const testPassword = process.env.SEED_TEST_WA_PASSWORD;
+  if (!testPassword) {
+    throw new Error("SEED_TEST_WA_PASSWORD must be set (see prisma/.env).");
+  }
+
+  const ktm = await prisma.warehouse.findUnique({ where: { code: "WH-KTM-01" } });
+  if (!ktm) throw new Error("WH-KTM-01 missing after warehouse seed");
+  const linehaulRole = await prisma.role.findUnique({ where: { code: "LINEHAUL_DRIVER" } });
+  if (!linehaulRole) throw new Error("LINEHAUL_DRIVER role missing after catalog seed");
+
+  let driverUser = await prisma.user.findUnique({
+    where: { email: "linehaul@bla.test" },
+  });
+  if (!driverUser) {
+    driverUser = await prisma.user.create({
+      data: {
+        email: "linehaul@bla.test",
+        fullName: "Demo Linehaul Driver",
+        passwordHash: await hash(testPassword, 10),
+        status: "ACTIVE",
+        emailVerifiedAt: new Date(),
+      },
+    });
+  } else {
+    console.log(
+      "Demo linehaul driver linehaul@bla.test already exists — leaving password and status untouched.",
+    );
+  }
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: driverUser.id, roleId: linehaulRole.id } },
+    update: {},
+    create: { userId: driverUser.id, roleId: linehaulRole.id },
+  });
+
+  let driver = await prisma.driver.findUnique({ where: { userId: driverUser.id } });
+  if (!driver) {
+    driver = await prisma.driver.create({
+      data: {
+        userId: driverUser.id,
+        homeWarehouseId: ktm.id,
+        licenseNumber: "LIC-P5-DEMO-001",
+        licenseCategory: "C",
+        licenseExpiry: new Date("2030-01-01T00:00:00.000Z"),
+        employmentStatus: "ACTIVE",
+        availabilityStatus: "AVAILABLE",
+        capabilities: { create: [{ capability: "LINEHAUL" }] },
+      },
+    });
+  } else {
+    console.log("Demo driver profile already exists — leaving it untouched.");
+  }
+
+  const existingVehicle = await prisma.vehicle.findUnique({
+    where: { registration: "BA 2 KHA 5001" },
+  });
+  if (!existingVehicle) {
+    await prisma.vehicle.create({
+      data: {
+        registration: "BA 2 KHA 5001",
+        type: "TRUCK",
+        capacityKg: 5000,
+        capacityVolumeM3: 20,
+        homeWarehouseId: ktm.id,
+        status: "AVAILABLE",
+        insuranceExpiry: new Date("2027-06-01T00:00:00.000Z"),
+        registrationExpiry: new Date("2027-06-01T00:00:00.000Z"),
+        inspectionStatus: "VALID",
+        assignedDriverId: driver.id,
+      },
+    });
+  } else {
+    console.log("Demo vehicle BA 2 KHA 5001 already exists — leaving it untouched.");
+  }
+
+  console.log("Seeded Phase 5 demo fleet fixtures (create-only).");
 }

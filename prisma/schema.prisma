@@ -71,6 +71,16 @@ model User {
   handoverBatchesFrom     HandoverBatch[]             @relation("HandoverBatchFromUser")
   handoverBatchesTo       HandoverBatch[]             @relation("HandoverBatchToUser")
 
+  driverProfile              Driver?
+  transfersCreated           Transfer[]         @relation("TransferCreatedBy")
+  transfersApproved          Transfer[]         @relation("TransferApprovedBy")
+  transfersSupervised        Transfer[]         @relation("TransferDispatchSupervisor")
+  manifestsGenerated         TransferManifest[] @relation("ManifestGeneratedBy")
+  transferItemsReceived      TransferItem[]     @relation("TransferItemReceivedBy")
+  transferScansPerformed     TransferScan[]     @relation("TransferScanBy")
+  tripStopsRecorded          TripStop[]         @relation("TripStopRecordedBy")
+  vehicleMaintenanceRecorded VehicleMaintenance[] @relation("VehicleMaintenanceRecordedBy")
+
   @@index([phone])
   @@schema("app")
 }
@@ -318,6 +328,12 @@ model Warehouse {
   handoverBatches   HandoverBatch[]             @relation("HandoverBatchWarehouse")
   handoverBatchesFrom HandoverBatch[]           @relation("HandoverBatchFromWarehouse")
   handoverBatchesTo   HandoverBatch[]           @relation("HandoverBatchToWarehouse")
+
+  driversHome       Driver[]                    @relation("DriverHomeWarehouse")
+  vehiclesHome      Vehicle[]                   @relation("VehicleHomeWarehouse")
+  transfersOrigin   Transfer[]                  @relation("TransferOriginWarehouse")
+  transfersDest     Transfer[]                  @relation("TransferDestinationWarehouse")
+  transferScans     TransferScan[]              @relation("TransferScanWarehouse")
 
   @@index([district])
   @@index([status])
@@ -879,6 +895,7 @@ model Package {
   inventoryMovements InventoryMovement[]
   custodies         PackageCustody[]
   handoverLines     CustodyHandover[]
+  transferItems     TransferItem[]
 
   @@index([shipmentId])
   @@index([currentWarehouseId, operationalStatus])
@@ -930,13 +947,15 @@ model PackageLabel {
 /// brief's "PackageStatusHistory": the unified TrackingEvent stream
 /// carries the previous/new operational-status pair for every package
 /// transition). No `updatedAt`, no update/delete path; protected by
-/// the append-only trigger like AuditLog. Transfer/trip/assignment
-/// context FKs join when those models land (Phases 5–6).
+/// the append-only trigger like AuditLog. Transfer/trip context FKs
+/// landed with the Phase 5 transport models.
 model TrackingEvent {
   id             String   @id @default(uuid())
   packageId      String?
   shipmentId     String?
   orderId        String?
+  transferId     String?
+  tripId         String?
   subjectType    String
   eventType      String
   previousStatus String?
@@ -953,6 +972,8 @@ model TrackingEvent {
   package   Package?   @relation(fields: [packageId], references: [id], onDelete: Restrict)
   shipment  Shipment?  @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
   order     Order?     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  transfer  Transfer?  @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  trip      Trip?      @relation(fields: [tripId], references: [id], onDelete: Restrict)
   actor     User?      @relation("TrackingEventActor", fields: [actorId], references: [id], onDelete: Restrict)
   warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
 
@@ -1187,5 +1208,292 @@ model StockMovement {
 
   @@index([stockItemId, createdAt])
   @@index([warehouseId, createdAt])
+  @@schema("app")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — Transfers & transport: drivers, vehicles, transfers with
+// manifests and scans, trips (docs/database-schema.md §7,
+// docs/transfer-workflow.md, docs/driver-workflow.md).
+// ---------------------------------------------------------------------------
+
+/// The operational driver profile; the login identity is the linked
+/// User (1:1, schema doc §7 "Driver"). `employmentStatus` is set by
+/// driver managers; `availabilityStatus` is written only by the
+/// assignment services from real work (trip dispatch/completion),
+/// never from login state. `profilePhotoFileId` stays a plain column
+/// until FileAsset lands (platform phase), like PackageLabel.fileId.
+/// `incidentId` columns elsewhere follow the same deferral pattern.
+model Driver {
+  id                    String    @id @default(uuid())
+  userId                String    @unique
+  homeWarehouseId       String
+  licenseNumber         String
+  licenseCategory       String?
+  licenseExpiry         DateTime  @db.Date
+  profilePhotoFileId    String?
+  emergencyContactName  String?
+  emergencyContactPhone String?
+  employmentStatus      String    @default("ACTIVE")
+  availabilityStatus    String    @default("AVAILABLE")
+  currentTripId         String?
+  lastSeenAt            DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user          User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  homeWarehouse Warehouse         @relation("DriverHomeWarehouse", fields: [homeWarehouseId], references: [id], onDelete: Restrict)
+  currentTrip   Trip?             @relation("DriverCurrentTrip", fields: [currentTripId], references: [id], onDelete: Restrict)
+  capabilities  DriverCapability[]
+  trips         Trip[]            @relation("TripDriver")
+  transfers     Transfer[]        @relation("TransferDriver")
+  vehiclesDefault Vehicle[]       @relation("VehicleAssignedDriver")
+
+  @@index([homeWarehouseId, availabilityStatus])
+  @@index([licenseExpiry])
+  @@schema("app")
+}
+
+/// Capability-based assignment (schema doc §7): a driver without the
+/// LINEHAUL capability can never be assigned a Trip — checked in the
+/// transfer service at assignment time, not just in the UI.
+model DriverCapability {
+  id         String   @id @default(uuid())
+  driverId   String
+  capability String
+  createdAt  DateTime @default(now())
+
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@unique([driverId, capability])
+  @@schema("app")
+}
+
+/// Fleet vehicle (schema doc §7). `status` replaces the legacy
+/// is_active + status pair: AVAILABLE / ASSIGNED / ON_TRIP /
+/// MAINTENANCE / OFFLINE. The service refuses trip assignment for
+/// expired insurance/registration, failed inspection, or any
+/// non-AVAILABLE status (driver-workflow.md §4).
+model Vehicle {
+  id                String    @id @default(uuid())
+  registration      String    @unique
+  type              String
+  capacityKg        Decimal?  @db.Decimal(10, 2)
+  capacityVolumeM3  Decimal?  @db.Decimal(8, 2)
+  homeWarehouseId   String?
+  status            String    @default("AVAILABLE")
+  insuranceExpiry   DateTime? @db.Date
+  registrationExpiry DateTime? @db.Date
+  inspectionStatus  String    @default("VALID")
+  assignedDriverId  String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  homeWarehouse  Warehouse?          @relation("VehicleHomeWarehouse", fields: [homeWarehouseId], references: [id], onDelete: Restrict)
+  assignedDriver Driver?             @relation("VehicleAssignedDriver", fields: [assignedDriverId], references: [id], onDelete: SetNull)
+  trips          Trip[]              @relation("TripVehicle")
+  transfers      Transfer[]          @relation("TransferVehicle")
+  maintenance    VehicleMaintenance[]
+
+  @@index([status])
+  @@index([homeWarehouseId, status])
+  @@schema("app")
+}
+
+model VehicleMaintenance {
+  id          String    @id @default(uuid())
+  vehicleId   String
+  kind        String
+  scheduledAt DateTime
+  completedAt DateTime?
+  costPaisa   BigInt?
+  notes       String?
+  nextDueAt   DateTime?
+  recordedById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  vehicle    Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  recordedBy User    @relation("VehicleMaintenanceRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([vehicleId, scheduledAt])
+  @@schema("app")
+}
+
+/// Inter-warehouse transfer header (schema doc §7): origin/destination,
+/// the fifteen-state lifecycle plus CANCELLED, crew assignment, and the
+/// one Trip that executes it. Closure invariant: CLOSED requires
+/// RECONCILED, which requires every item RECEIVED or DAMAGED
+/// (accounted) — enforced by TransferService; counts are always
+/// counted from items, never denormalised.
+model Transfer {
+  id                    String    @id @default(uuid())
+  transferNumber        String    @unique
+  originWarehouseId     String
+  destinationWarehouseId String
+  status                String    @default("DRAFT")
+  driverId              String?
+  vehicleId             String?
+  tripId                String?   @unique
+  dispatchSupervisorId  String?
+  createdById           String
+  approvedById          String?
+  approvedAt            DateTime?
+  expectedArrivalAt     DateTime?
+  dispatchedAt          DateTime?
+  arrivedAt             DateTime?
+  reconciledAt          DateTime?
+  closedAt              DateTime?
+  instructions          String?
+  version               Int       @default(1)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  originWarehouse    Warehouse        @relation("TransferOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
+  destinationWarehouse Warehouse      @relation("TransferDestinationWarehouse", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
+  driver             Driver?          @relation("TransferDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  vehicle            Vehicle?         @relation("TransferVehicle", fields: [vehicleId], references: [id], onDelete: Restrict)
+  trip               Trip?            @relation("TransferTrip", fields: [tripId], references: [id], onDelete: Restrict)
+  dispatchSupervisor User?            @relation("TransferDispatchSupervisor", fields: [dispatchSupervisorId], references: [id], onDelete: Restrict)
+  createdBy          User             @relation("TransferCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy         User?            @relation("TransferApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  items              TransferItem[]
+  manifest           TransferManifest?
+  executedTrip       Trip?            @relation("TripTransfer")
+  trackingEvents     TrackingEvent[]
+
+  @@index([originWarehouseId, status])
+  @@index([destinationWarehouseId, status])
+  @@index([driverId, status])
+  @@schema("app")
+}
+
+/// One manifested package on a transfer. A package may appear on only
+/// one OPEN transfer at a time — enforced by a trigger in the Phase 5
+/// hardening migration (the predicate spans two tables, so Prisma
+/// cannot express it as an index). `incidentId` links the Phase 8
+/// Incident once that model lands; plain column until then.
+model TransferItem {
+  id                String    @id @default(uuid())
+  transferId        String
+  packageId         String
+  expectedCondition String    @default("GOOD")
+  itemStatus        String    @default("EXPECTED")
+  receivedCondition String?
+  receivedById      String?
+  receivedAt        DateTime?
+  discrepancyNote   String?
+  incidentId        String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  transfer   Transfer       @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  package    Package        @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  receivedBy User?          @relation("TransferItemReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
+  scans      TransferScan[]
+
+  @@unique([transferId, packageId])
+  @@index([packageId])
+  @@index([transferId, itemStatus])
+  @@schema("app")
+}
+
+/// The frozen loading document. Once generated, the item set it
+/// snapshots can change only through an authorised amendment that
+/// writes an AuditLog row (and a TrackingEvent on the package) — the
+/// counts here are updated by that amendment path only, and
+/// regeneration after dispatch is impossible (service-enforced).
+model TransferManifest {
+  id            String    @id @default(uuid())
+  transferId    String    @unique
+  manifestCode  String    @unique
+  generatedById String
+  generatedAt   DateTime  @default(now())
+  packageCount  Int
+  totalWeightKg Decimal   @db.Decimal(12, 3)
+  totalCodPaisa BigInt    @default(0)
+  sealedAt      DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  transfer    Transfer @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  generatedBy User     @relation("ManifestGeneratedBy", fields: [generatedById], references: [id], onDelete: Restrict)
+
+  @@schema("app")
+}
+
+/// Append-only physical scan evidence for loading/unloading
+/// (schema doc §7). The unique idempotencyKey makes a duplicate scan
+/// return the original scan instead of double-counting (Scenario 7);
+/// rows are trigger-protected against update/delete like the other
+/// ledgers.
+model TransferScan {
+  id             String   @id @default(uuid())
+  transferItemId String
+  scanType       String
+  warehouseId    String
+  scannedById    String
+  scannedAt      DateTime @default(now())
+  idempotencyKey String   @unique
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  transferItem TransferItem @relation(fields: [transferItemId], references: [id], onDelete: Restrict)
+  warehouse    Warehouse    @relation("TransferScanWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  scannedBy    User         @relation("TransferScanBy", fields: [scannedById], references: [id], onDelete: Restrict)
+
+  @@index([transferItemId, scanType])
+  @@schema("app")
+}
+
+/// One line-haul journey executing one Transfer (schema doc §7).
+/// Manual TripStop checkpoints are the reliable progress mechanism;
+/// GPS is optional garnish and no workflow step depends on it.
+model Trip {
+  id                 String    @id @default(uuid())
+  tripNumber         String    @unique
+  transferId         String    @unique
+  driverId           String
+  vehicleId          String
+  status             String    @default("ASSIGNED")
+  plannedDepartureAt DateTime?
+  actualDepartureAt  DateTime?
+  expectedArrivalAt  DateTime?
+  actualArrivalAt    DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  transfer       Transfer  @relation("TripTransfer", fields: [transferId], references: [id], onDelete: Restrict)
+  onTransfer     Transfer? @relation("TransferTrip")
+  driver         Driver    @relation("TripDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  vehicle        Vehicle   @relation("TripVehicle", fields: [vehicleId], references: [id], onDelete: Restrict)
+  stops          TripStop[]
+  currentForDriver Driver[] @relation("DriverCurrentTrip")
+  trackingEvents TrackingEvent[]
+
+  @@index([driverId, status])
+  @@index([vehicleId, status])
+  @@schema("app")
+}
+
+/// Manual checkpoint on a Trip (replaces legacy `checkpoints`).
+model TripStop {
+  id          String    @id @default(uuid())
+  tripId      String
+  sequence    Int
+  label       String
+  latitude    Decimal?  @db.Decimal(10, 7)
+  longitude   Decimal?  @db.Decimal(10, 7)
+  plannedAt   DateTime?
+  passedAt    DateTime?
+  recordedById String
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  trip       Trip @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  recordedBy User @relation("TripStopRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@unique([tripId, sequence])
+  @@index([tripId, createdAt])
   @@schema("app")
 }
