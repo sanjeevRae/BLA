@@ -62,8 +62,21 @@ async function main(): Promise<void> {
       if (!permissionId) throw new Error(`Permission missing after upsert: ${code}`);
       return { roleId, permissionId };
     });
-    await prisma.rolePermission.deleteMany({ where: { roleId } });
-    await prisma.rolePermission.createMany({ data: grants });
+    // Convergent, race-safe sync: the integration suites upsert these
+    // same catalog rows in parallel against the shared test database,
+    // and seed-safety re-runs this seed as a subprocess alongside them.
+    // A delete-all + create-all pair raced with those upserts (a row
+    // re-created inside the delete→create window made createMany throw
+    // P2002). Insert-missing-first never throws on rows a concurrent
+    // writer just created, and the follow-up delete removes only the
+    // grants the catalog no longer lists — the final set is unchanged.
+    await prisma.rolePermission.createMany({ data: grants, skipDuplicates: true });
+    await prisma.rolePermission.deleteMany({
+      where: {
+        roleId,
+        permissionId: { notIn: grants.map((g) => g.permissionId) },
+      },
+    });
   }
 
   const email = process.env.SEED_SUPER_ADMIN_EMAIL?.trim().toLowerCase();
@@ -356,15 +369,11 @@ main()
  *   PENDING vendor for the verification queue.
  * - A customer login (customer@bla.test) linked to a Customer record.
  * Demo logins share the local test password from SEED_TEST_WA_PASSWORD.
- * All idempotent.
+ * The demo vendor/customer fixtures are created ONLY against a local
+ * database (targetsLocalDatabase, P3-3 — the P2-6 guard); the
+ * reference data above them is seeded everywhere. All idempotent.
  */
 async function seedPhase3(superAdminId: string): Promise<void> {
-  const testPassword = process.env.SEED_TEST_WA_PASSWORD;
-  if (!testPassword) {
-    throw new Error("SEED_TEST_WA_PASSWORD must be set (see prisma/.env).");
-  }
-  const passwordHash = await hash(testPassword, 12);
-
   const standard = await prisma.shippingService.upsert({
     where: { code: "STANDARD" },
     update: { isActive: true },
@@ -421,6 +430,26 @@ async function seedPhase3(superAdminId: string): Promise<void> {
       },
     });
   }
+
+  // P3-3: the demo vendor organisation and the demo logins below are
+  // local-only fixtures with a shared env password — the same guard
+  // the Phase 2 test warehouse admins use (P2-6). Against any other
+  // database the seed stops after the reference data above: an
+  // APPROVED vendor owned by a known-password account, and a customer
+  // login linked to a Customer record, must never appear elsewhere.
+  if (!targetsLocalDatabase()) {
+    console.log(
+      "Refusing to seed Phase 3 demo vendor/customer accounts: DATABASE_URL does " +
+        "not target a local database (localhost/127.0.0.1 + bla_dev/bla_test).",
+    );
+    console.log("Seeded Phase 3 reference data only.");
+    return;
+  }
+  const testPassword = process.env.SEED_TEST_WA_PASSWORD;
+  if (!testPassword) {
+    throw new Error("SEED_TEST_WA_PASSWORD must be set (see prisma/.env).");
+  }
+  const passwordHash = await hash(testPassword, 12);
 
   let vendor = await prisma.vendor.findFirst({
     where: { businessName: "Himalaya Handicrafts (test)" },
