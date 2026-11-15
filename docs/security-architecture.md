@@ -174,6 +174,13 @@ attempted scope) **without** copying the protected data into the log
 | Vendor suspended | Vendor users' sessions deleted; vendor bookings frozen (no new bookings, in-flight packages continue). |
 | Driver deactivated | Sessions deleted; open tasks/trips must be reassigned through DeliveryService/TripService so custody handovers are recorded (Scenario 14). |
 
+**Decision (2026-11-15, Phase 2 review P2-10):** the "Role/permission change → all
+sessions deleted" row is superseded for role, permission and membership changes.
+The ActorContext is rebuilt from the database on every request (role-permission
+matrix §4.1 rule 5), so grants and revocations take effect on the very next
+request without session deletion. Sessions are deleted on suspension/deactivation
+and on password change/reset only, as implemented in Phases 1–2.
+
 ---
 
 ## 5. Registration and the closed signup hole

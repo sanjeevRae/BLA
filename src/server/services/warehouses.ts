@@ -11,6 +11,7 @@ import {
   type ActorContext,
 } from "@/lib/auth/actor";
 import { ConflictError, DomainValidationError, NotFoundError } from "@/lib/errors";
+import type { RoleCode } from "@/lib/permissions/catalog";
 import {
   STANDARD_ZONES,
   WAREHOUSE_CODE_PATTERN,
@@ -174,18 +175,52 @@ async function assertWarehouseInScope(
  * Scoped actors may only mutate an ACTIVE warehouse. Setup of a
  * not-yet-active (or deactivated) warehouse is done by Admin/Super Admin;
  * a deactivated warehouse therefore rejects its own admin's operations
- * until it is reactivated (docs/warehouse-workflow.md §2, §6).
+ * until it is reactivated (docs/warehouse-workflow.md §2, §6). The denial
+ * is audit-logged like every other scoped denial (§3.4, review P2-8).
  */
-function assertScopedMutationAllowed(
+async function assertScopedMutationAllowed(
   actor: ActorContext,
-  warehouse: { status: string },
-): void {
+  warehouse: { id: string; status: string },
+): Promise<void> {
   if (isUnscoped(actor)) return;
   if (warehouse.status !== "ACTIVE") {
+    await auditDenied(actor, {
+      warehouseId: warehouse.id,
+      reason: "warehouse_not_active",
+    });
     throw new DomainValidationError(
       "Warehouse is not active — operational changes are read-only until an Admin reactivates it",
     );
   }
+}
+
+/** The actor's membership role in one warehouse, or null (P2-4). */
+function membershipRoleIn(actor: ActorContext, warehouseId: string): RoleCode | null {
+  return (
+    actor.membershipRoles.find((m) => m.warehouseId === warehouseId)?.roleCode ?? null
+  );
+}
+
+/**
+ * Scoped MUTATIONS require the actor to be a Warehouse Admin OF THAT
+ * warehouse — or an unscoped actor (Phase 2 review P2-4). Membership
+ * presence plus a global WA role is not enough: a user who is WA of
+ * warehouse A but only staff of warehouse B must not mutate B. Reads
+ * stay presence-based (assertWarehouseInScope). Denials are audited.
+ */
+async function assertScopedAdminMutation(
+  actor: ActorContext,
+  warehouseId: string,
+): Promise<void> {
+  if (isUnscoped(actor)) return;
+  if (membershipRoleIn(actor, warehouseId) === "WAREHOUSE_ADMIN") return;
+  await auditDenied(actor, {
+    warehouseId,
+    reason: "scoped_mutation_requires_warehouse_admin",
+  });
+  throw new AuthorizationError(
+    "Only a Warehouse Admin of this warehouse can make that change",
+  );
 }
 
 async function audit(
@@ -406,6 +441,22 @@ export interface ListWarehousesResult {
   totalPages: number;
 }
 
+/**
+ * Minimal ACTIVE-warehouse directory for form selects (booking drop-off
+ * choices, vendor assignment pickers). Any authenticated actor may read
+ * this reference data — it carries no operational detail (name, code,
+ * city, district only), unlike the scoped warehouse module reads.
+ */
+export async function listWarehouseDirectory(): Promise<
+  { id: string; code: string; name: string; city: string; district: string }[]
+> {
+  return prisma.warehouse.findMany({
+    where: { status: "ACTIVE" },
+    orderBy: { code: "asc" },
+    select: { id: true, code: true, name: true, city: true, district: true },
+  });
+}
+
 export async function listWarehouses(
   actor: ActorContext,
   query: ListWarehousesQuery = {},
@@ -506,7 +557,8 @@ export async function updateWarehouse(
   const data = parse(updateWarehouseSchema, input);
 
   if (!isUnscoped(actor)) {
-    assertScopedMutationAllowed(actor, row);
+    await assertScopedAdminMutation(actor, warehouseId);
+    await assertScopedMutationAllowed(actor, row);
     const forbidden = Object.keys(data).filter(
       (key) => data[key as keyof typeof data] !== undefined && !SCOPED_EDITABLE_FIELDS.has(key),
     );
@@ -707,10 +759,12 @@ export async function listMembers(
   warehouseId: string,
 ): Promise<WarehouseMemberView[]> {
   const row = await loadWarehouse(warehouseId);
+  // P2-11: the member roster is operational data — warehouse.read_all
+  // (Finance/Support directory access) no longer opens it. Holders of
+  // assign_staff or read_assigned only.
   if (
     !hasPermission(actor, "warehouse.assign_staff") &&
-    !hasPermission(actor, "warehouse.read_assigned") &&
-    !hasPermission(actor, "warehouse.read_all")
+    !hasPermission(actor, "warehouse.read_assigned")
   ) {
     await auditDenied(actor, { warehouseId, reason: "missing_permission:members.read" });
     throw new AuthorizationError("Missing required permission to view warehouse members");
@@ -744,7 +798,8 @@ export async function assignMember(
   const data = parse(assignMemberSchema, input);
 
   if (!isUnscoped(actor)) {
-    assertScopedMutationAllowed(actor, row);
+    await assertScopedAdminMutation(actor, warehouseId);
+    await assertScopedMutationAllowed(actor, row);
     // A Warehouse Admin staffs their own warehouse with staff only —
     // appointing another Warehouse Admin is an Admin decision (§5).
     if (data.roleCode !== "WAREHOUSE_STAFF") {
@@ -767,36 +822,50 @@ export async function assignMember(
   const role = await prisma.role.findUnique({ where: { code: data.roleCode } });
   if (!role) throw new DomainValidationError(`Unknown role: ${data.roleCode}`);
 
-  const existing = await prisma.warehouseMembership.findFirst({
-    where: { userId: user.id, warehouseId, revokedAt: null },
-  });
-  if (existing) {
-    throw new ConflictError(`${email} is already an active member of this warehouse`);
+  // P2-5: the duplicate check runs INSIDE the transaction, and the
+  // partial unique index on active (userId, warehouseId, roleId) is the
+  // database backstop — a racing assign surfaces as P2002 and is
+  // translated to the same ConflictError.
+  let membership;
+  try {
+    membership = await prisma.$transaction(async (tx) => {
+      const existing = await tx.warehouseMembership.findFirst({
+        where: { userId: user.id, warehouseId, revokedAt: null },
+      });
+      if (existing) {
+        throw new ConflictError(`${email} is already an active member of this warehouse`);
+      }
+      const hasAnyMembership = await tx.warehouseMembership.count({
+        where: { userId: user.id, revokedAt: null },
+      });
+      const created = await tx.warehouseMembership.create({
+        data: {
+          userId: user.id,
+          warehouseId,
+          roleId: role.id,
+          isPrimary: hasAnyMembership === 0,
+          assignedById: actor.userId,
+        },
+      });
+      // The membership role is also the user's global role for landing and
+      // permission resolution (Phase 1 model: permissions come from
+      // UserRole). Grant it if the user does not already hold it.
+      await tx.userRole.upsert({
+        where: { userId_roleId: { userId: user.id, roleId: role.id } },
+        update: {},
+        create: { userId: user.id, roleId: role.id, assignedById: actor.userId },
+      });
+      return created;
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new ConflictError(`${email} is already an active member of this warehouse`);
+    }
+    throw error;
   }
-  const hasAnyMembership = await prisma.warehouseMembership.count({
-    where: { userId: user.id, revokedAt: null },
-  });
-
-  const membership = await prisma.$transaction(async (tx) => {
-    const created = await tx.warehouseMembership.create({
-      data: {
-        userId: user.id,
-        warehouseId,
-        roleId: role.id,
-        isPrimary: hasAnyMembership === 0,
-        assignedById: actor.userId,
-      },
-    });
-    // The membership role is also the user's global role for landing and
-    // permission resolution (Phase 1 model: permissions come from
-    // UserRole). Grant it if the user does not already hold it.
-    await tx.userRole.upsert({
-      where: { userId_roleId: { userId: user.id, roleId: role.id } },
-      update: {},
-      create: { userId: user.id, roleId: role.id, assignedById: actor.userId },
-    });
-    return created;
-  });
 
   await audit(actor, "warehouse.member_assign", warehouseId, {
     userId: user.id,
@@ -838,7 +907,8 @@ export async function removeMember(
   if (!membership) throw new NotFoundError("Active membership not found");
 
   if (!isUnscoped(actor)) {
-    assertScopedMutationAllowed(actor, row);
+    await assertScopedAdminMutation(actor, warehouseId);
+    await assertScopedMutationAllowed(actor, row);
     if (membership.role.code !== "WAREHOUSE_STAFF") {
       await auditDenied(actor, { warehouseId, reason: "scoped_remove_admin_role" });
       throw new AuthorizationError(
@@ -849,6 +919,11 @@ export async function removeMember(
 
   let warning: string | undefined;
   await prisma.$transaction(async (tx) => {
+    // P2-7: serialize concurrent removals for the same user. Without the
+    // row lock, two parallel removals could each count the other's
+    // still-active membership and both skip the global-role cleanup,
+    // stranding a UserRole with no membership behind it.
+    await tx.$queryRaw`SELECT "id" FROM "app"."User" WHERE "id" = ${membership.userId} FOR UPDATE`;
     await tx.warehouseMembership.update({
       where: { id: membershipId },
       data: { revokedAt: new Date(), revokedById: actor.userId },
@@ -954,7 +1029,8 @@ export async function createZone(
   const row = await loadWarehouse(warehouseId);
   await requirePermAudited(actor, "warehouse.manage_locations", warehouseId);
   await assertWarehouseInScope(actor, warehouseId);
-  assertScopedMutationAllowed(actor, row);
+  await assertScopedAdminMutation(actor, warehouseId);
+  await assertScopedMutationAllowed(actor, row);
   const data = parse(createZoneSchema, input);
   const code = data.code ?? standardZoneCodeForKind(data.kind);
 
@@ -1001,7 +1077,8 @@ export async function updateZone(
   if (!zone) throw new NotFoundError(`Zone not found: ${zoneId}`);
   await requirePermAudited(actor, "warehouse.manage_locations", zone.warehouseId);
   await assertWarehouseInScope(actor, zone.warehouseId);
-  assertScopedMutationAllowed(actor, zone.warehouse);
+  await assertScopedAdminMutation(actor, zone.warehouseId);
+  await assertScopedMutationAllowed(actor, zone.warehouse);
   const data = parse(updateZoneSchema, input);
 
   const updated = await prisma.warehouseZone.update({
@@ -1043,7 +1120,8 @@ export async function createStorageLocation(
   if (!zone) throw new NotFoundError(`Zone not found: ${zoneId}`);
   await requirePermAudited(actor, "warehouse.manage_locations", zone.warehouseId);
   await assertWarehouseInScope(actor, zone.warehouseId);
-  assertScopedMutationAllowed(actor, zone.warehouse);
+  await assertScopedAdminMutation(actor, zone.warehouseId);
+  await assertScopedMutationAllowed(actor, zone.warehouse);
   const data = parse(createLocationSchema, input);
 
   let fullCode: string;
@@ -1114,7 +1192,8 @@ export async function updateStorageLocation(
   const warehouseId = location.zone.warehouseId;
   await requirePermAudited(actor, "warehouse.manage_locations", warehouseId);
   await assertWarehouseInScope(actor, warehouseId);
-  assertScopedMutationAllowed(actor, location.zone.warehouse);
+  await assertScopedAdminMutation(actor, warehouseId);
+  await assertScopedMutationAllowed(actor, location.zone.warehouse);
   const data = parse(updateLocationSchema, input);
 
   const updated = await prisma.storageLocation.update({

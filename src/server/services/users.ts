@@ -24,6 +24,34 @@ export const newPasswordSchema = z
   .min(10, "Password must be at least 10 characters")
   .max(200);
 
+/**
+ * requirePermission("user.manage") + an access.denied AuditLog row when
+ * the permission is missing (security doc §3.4; Phase 2 review P2-8 —
+ * the identity services now audit denials exactly like WarehouseService).
+ */
+async function requireManagePermissionAudited(
+  actor: ActorContext,
+  targetUserId: string,
+): Promise<void> {
+  try {
+    requirePermission(actor, "user.manage");
+  } catch (error) {
+    if (error instanceof AuthorizationError) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: actor.userId,
+          actorRole: actor.primaryRole,
+          action: "access.denied",
+          entityType: "User",
+          entityId: targetUserId,
+          after: { reason: "missing_permission:user.manage" },
+        },
+      });
+    }
+    throw error;
+  }
+}
+
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(200),
   newPassword: newPasswordSchema,
@@ -62,7 +90,7 @@ export async function changePassword(
     throw new DomainValidationError("New password must be different from the current password");
   }
 
-  const passwordHash = await hash(parsed.data.newPassword, 10);
+  const passwordHash = await hash(parsed.data.newPassword, 12);
   await prisma.$transaction(async (tx) => {
     await tx.user.update({
       where: { id: user.id },
@@ -107,7 +135,7 @@ export async function suspendUser(
   targetUserId: string,
   reason?: string,
 ): Promise<{ suspended: true }> {
-  requirePermission(actor, "user.manage");
+  await requireManagePermissionAudited(actor, targetUserId);
   if (targetUserId === actor.userId) {
     throw new DomainValidationError("You cannot suspend your own account");
   }
@@ -122,6 +150,12 @@ export async function suspendUser(
   }
   if (target.status === "SUSPENDED") {
     throw new DomainValidationError("User is already suspended");
+  }
+  // P2-9: a DEACTIVATED account must stay deactivated. Suspending it
+  // would move it to SUSPENDED, from where reactivateUser would
+  // resurrect it to ACTIVE — deactivation is a one-way door here.
+  if (target.status === "DEACTIVATED") {
+    throw new DomainValidationError("A deactivated account cannot be suspended");
   }
 
   await prisma.$transaction(async (tx) => {
@@ -149,7 +183,7 @@ export async function reactivateUser(
   actor: ActorContext,
   targetUserId: string,
 ): Promise<{ reactivated: true }> {
-  requirePermission(actor, "user.manage");
+  await requireManagePermissionAudited(actor, targetUserId);
   const target = await prisma.user.findUnique({ where: { id: targetUserId } });
   if (!target) throw new NotFoundError(`User not found: ${targetUserId}`);
   if (target.status !== "SUSPENDED") {

@@ -2,7 +2,11 @@
 
 import { redirect } from "next/navigation";
 
-import { AuthorizationError, getActorContext } from "@/lib/auth/permissions";
+import {
+  AuthorizationError,
+  getActorContext,
+  requireUnflagged,
+} from "@/lib/auth/permissions";
 import { ConflictError, DomainValidationError, NotFoundError } from "@/lib/errors";
 import {
   acceptInvitation,
@@ -20,6 +24,7 @@ export async function createInvitationAction(
   const actor = await getActorContext();
   if (!actor) return { success: false, error: "Authentication required" };
   try {
+    requireUnflagged(actor); // P2-3: flagged accounts act nowhere but password change
     const created = await createInvitation(actor, input);
     return { success: true, data: { token: created.token, expiresAt: created.expiresAt } };
   } catch (error) {

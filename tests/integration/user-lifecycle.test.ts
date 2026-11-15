@@ -55,7 +55,7 @@ async function actorFor(userId: string) {
           role: { include: { permissions: { include: { permission: true } } } },
         },
       },
-      memberships: { where: { revokedAt: null } },
+      memberships: { where: { revokedAt: null }, include: { role: true } },
     },
   });
   if (!user) throw new Error("fixture user missing");
@@ -76,7 +76,12 @@ async function actorFor(userId: string) {
     primaryRole: catalog.primaryRoleFor(roles as never[]),
     permissions,
     warehouseIds: user.memberships.map((m) => m.warehouseId),
+    membershipRoles: user.memberships.map((m) => ({
+      warehouseId: m.warehouseId,
+      roleCode: m.role.code as never,
+    })),
     vendorId: null,
+    vendorRole: null,
     driverId: null,
     customerId: null,
     landingPath: catalog.landingPathForRoles(roles as never[]),

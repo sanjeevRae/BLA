@@ -26,8 +26,10 @@ import {
  * contract and expiry remain Auth.js's.
  */
 
-/** Dummy bcrypt hash so unknown-email logins cost the same compare as real ones. */
-const DUMMY_HASH = "$2b$10$CwTycUXWue0Thq9StjUM0uJ8hOCPFPoGJvJBjBJveS0hBJpGJMjVy";
+/** Dummy bcrypt hash so unknown-email logins cost the same compare as real
+ *  ones. Cost 12 to match the password hashing cost (Phase 2 review
+ *  P2-12) — a cheaper dummy would re-open the F7 timing channel. */
+const DUMMY_HASH = "$2b$12$ZjhVh53BWy1oisBtzToUx.Ckzfy98BhdhQCOKonBg2cr0jaSCFrny";
 
 export interface LoginRequestMeta {
   ipAddress: string | null;

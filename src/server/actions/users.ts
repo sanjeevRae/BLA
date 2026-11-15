@@ -3,7 +3,11 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 
-import { AuthorizationError, getActorContext } from "@/lib/auth/permissions";
+import {
+  AuthorizationError,
+  getActorContext,
+  requireUnflagged,
+} from "@/lib/auth/permissions";
 import { sessionCookieName } from "@/lib/auth/session-cookie";
 import { ConflictError, DomainValidationError, NotFoundError } from "@/lib/errors";
 import {
@@ -49,6 +53,7 @@ export async function suspendUserAction(
   const actor = await getActorContext();
   if (!actor) return { success: false, error: "Authentication required" };
   try {
+    requireUnflagged(actor); // P2-3: flagged accounts act nowhere but password change
     const data = await suspendUser(actor, userId, reason);
     revalidatePath("/admin/warehouses");
     revalidatePath("/super-admin/warehouses");
@@ -72,6 +77,7 @@ export async function reactivateUserAction(
   const actor = await getActorContext();
   if (!actor) return { success: false, error: "Authentication required" };
   try {
+    requireUnflagged(actor); // P2-3
     const data = await reactivateUser(actor, userId);
     revalidatePath("/admin/warehouses");
     revalidatePath("/super-admin/warehouses");

@@ -9,6 +9,7 @@ import {
 } from "@/lib/permissions/catalog";
 import {
   AuthenticationError,
+  requireUnflagged,
   type ActorContext,
 } from "@/lib/auth/actor";
 
@@ -17,6 +18,7 @@ export {
   AuthorizationError,
   hasPermission,
   requirePermission,
+  requireUnflagged,
   type ActorContext,
 } from "@/lib/auth/actor";
 
@@ -49,7 +51,7 @@ export async function getActorContext(): Promise<ActorContext | null> {
           role: { include: { permissions: { include: { permission: true } } } },
         },
       },
-      memberships: { where: { revokedAt: null } },
+      memberships: { where: { revokedAt: null }, include: { role: true } },
     },
   });
 
@@ -65,6 +67,18 @@ export async function getActorContext(): Promise<ActorContext | null> {
     }
   }
 
+  // Phase 3 scope links: the vendor organisation (via an active
+  // VendorUser row on an active vendor) and the customer record linked
+  // to this login. Resolved from the database on every request, never
+  // from client input (security doc §3.3).
+  const [vendorLink, customerProfile] = await Promise.all([
+    prisma.vendorUser.findFirst({
+      where: { userId: user.id, isActive: true, vendor: { isActive: true } },
+      orderBy: { createdAt: "asc" },
+    }),
+    prisma.customer.findUnique({ where: { userId: user.id } }),
+  ]);
+
   return {
     userId: user.id,
     email: user.email,
@@ -75,9 +89,14 @@ export async function getActorContext(): Promise<ActorContext | null> {
     primaryRole: primaryRoleFor(roles),
     permissions,
     warehouseIds: user.memberships.map((m) => m.warehouseId),
-    vendorId: null,
+    membershipRoles: user.memberships.map((m) => ({
+      warehouseId: m.warehouseId,
+      roleCode: m.role.code as RoleCode,
+    })),
+    vendorId: vendorLink?.vendorId ?? null,
+    vendorRole: vendorLink?.vendorRole ?? null,
     driverId: null,
-    customerId: null,
+    customerId: customerProfile?.id ?? null,
     landingPath: landingPathForRoles(roles),
   };
 }
@@ -86,5 +105,16 @@ export async function getActorContext(): Promise<ActorContext | null> {
 export async function requireActor(): Promise<ActorContext> {
   const actor = await getActorContext();
   if (!actor) throw new AuthenticationError();
+  return actor;
+}
+
+/**
+ * requireActor + the mustChangePassword gate (Phase 2 review P2-3):
+ * flagged accounts are refused everywhere except the password-change
+ * and sign-out paths, not just on dashboard pages.
+ */
+export async function requireUnflaggedActor(): Promise<ActorContext> {
+  const actor = await requireActor();
+  requireUnflagged(actor);
   return actor;
 }
