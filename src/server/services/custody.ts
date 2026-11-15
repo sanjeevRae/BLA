@@ -231,6 +231,30 @@ export async function initiateHandover(
     );
   }
 
+  // P4-2: a handover out of a person's custody starts with that
+  // person (docs/inventory-and-custody.md §3.1 — the giver records
+  // the offer). For USER-custodied packages only the custodian
+  // themselves, a Warehouse Admin of this warehouse, or an unscoped
+  // actor may initiate; anyone else is denied + audited, so the
+  // two-person control cannot collapse into one person moving
+  // custody out of someone else's hands and confirming it themselves.
+  // WAREHOUSE-custodied packages stay open to warehouse members
+  // (shelf-taking is a normal warehouse act).
+  if (first.custodianType === "USER" && first.custodianUserId !== actor.userId) {
+    const isWarehouseAdminHere = actor.membershipRoles.some(
+      (m) => m.warehouseId === warehouseId && m.roleCode === "WAREHOUSE_ADMIN",
+    );
+    if (!isWarehouseAdminHere && !isUnscoped(actor)) {
+      await auditAccessDenied(actor, "CustodyHandover", {
+        warehouseId,
+        reason: "handover_initiate_not_custodian",
+      });
+      throw new AuthorizationError(
+        "Only the staff member holding these packages (or a Warehouse Admin) can start this handover",
+      );
+    }
+  }
+
   // Receiver validation.
   let toUserId: string | null = null;
   let toWarehouseId: string | null = null;
@@ -271,6 +295,34 @@ export async function initiateHandover(
   }
 
   const batch = await prisma.$transaction(async (tx) => {
+    // P4-3: a package may sit in only ONE open batch. Without this
+    // check a second batch could be initiated for a package already
+    // promised elsewhere; when that stale batch is later closed
+    // short it would mark the package MISSING and write a false
+    // loss record (EXCEPTION_RAISED) onto its permanent history,
+    // even though it was handed over correctly through the first
+    // batch. Checked inside the creation transaction.
+    const openLines = await tx.custodyHandover.findMany({
+      where: {
+        packageId: { in: packageIds },
+        status: "PENDING",
+        batch: { status: { in: ["PENDING", "PARTIALLY_CONFIRMED"] } },
+      },
+      select: { packageId: true },
+    });
+    if (openLines.length > 0) {
+      const trackingByPackage = new Map(
+        custodies.map((c) => [c.packageId, c.package.trackingId]),
+      );
+      const names = [
+        ...new Set(
+          openLines.map((l) => trackingByPackage.get(l.packageId) ?? l.packageId),
+        ),
+      ];
+      throw new ConflictError(
+        `Package(s) already in an open handover batch: ${names.join(", ")}`,
+      );
+    }
     const created = await tx.handoverBatch.create({
       data: {
         warehouseId,
@@ -349,10 +401,33 @@ export async function confirmHandoverPackage(
 
   await prisma.$transaction(async (tx) => {
     const now = new Date();
+    // P4-1: confirms of one batch are serialized on the batch row.
+    // The batch is locked and re-read INSIDE the transaction (the
+    // pre-transaction snapshot above is only a fast path) and the
+    // completion count below is derived from the batch's actual line
+    // states — never incremented from a stale snapshot. Previously
+    // two concurrent confirms (the normal "confirm two parcels in
+    // quick succession" case) both wrote confirmedCount from the
+    // same pre-transaction read, leaving the batch stuck in
+    // PARTIALLY_CONFIRMED with a count contradicting its lines,
+    // unable to ever complete or close.
+    await tx.$queryRaw`SELECT "id" FROM "app"."HandoverBatch" WHERE "id" = ${batch.id} FOR UPDATE`;
+    const freshBatch = await tx.handoverBatch.findUniqueOrThrow({
+      where: { id: batch.id },
+      include: { lines: true },
+    });
+    if (freshBatch.status !== "PENDING" && freshBatch.status !== "PARTIALLY_CONFIRMED") {
+      throw new ConflictError(`Handover batch is already ${freshBatch.status}`);
+    }
+    const freshLine = freshBatch.lines.find((l) => l.packageId === data.packageId);
+    if (!freshLine) throw new NotFoundError("Package is not part of this handover batch");
+    if (freshLine.status !== "PENDING") {
+      throw new ConflictError(`This package's handover line is already ${freshLine.status}`);
+    }
     const openCustody = await tx.packageCustody.findFirst({
       where: { packageId: data.packageId, endedAt: null },
     });
-    if (!openCustody || openCustody.id !== line.fromCustodyId) {
+    if (!openCustody || openCustody.id !== freshLine.fromCustodyId) {
       throw new ConflictError(
         "The package's custody changed since this handover was initiated — close the batch and re-initiate",
       );
@@ -376,20 +451,20 @@ export async function confirmHandoverPackage(
         newStatus: pkg.operationalStatus,
         actorId: actor.userId,
         actorRole: actor.primaryRole,
-        warehouseId: batch.warehouseId,
+        warehouseId: freshBatch.warehouseId,
         source: "WEB",
-        notes: `Custody confirmed in handover batch ${batch.id} (${batch.fromCustodianType} → ${batch.toCustodianType}).`,
+        notes: `Custody confirmed in handover batch ${freshBatch.id} (${freshBatch.fromCustodianType} → ${freshBatch.toCustodianType}).`,
       },
     });
     const newCustody = await tx.packageCustody.create({
       data: {
         packageId: data.packageId,
-        custodianType: batch.toCustodianType,
-        custodianUserId: batch.toUserId ?? null,
-        warehouseId: batch.toWarehouseId ?? null,
+        custodianType: freshBatch.toCustodianType,
+        custodianUserId: freshBatch.toUserId ?? null,
+        warehouseId: freshBatch.toWarehouseId ?? null,
         storageLocationId:
-          batch.toCustodianType === "WAREHOUSE" ? openCustody.storageLocationId : null,
-        handoverId: line.id,
+          freshBatch.toCustodianType === "WAREHOUSE" ? openCustody.storageLocationId : null,
+        handoverId: freshLine.id,
         trackingEventId: event.id,
       },
     });
@@ -401,19 +476,25 @@ export async function confirmHandoverPackage(
       });
     }
     await tx.custodyHandover.update({
-      where: { id: line.id },
+      where: { id: freshLine.id },
       data: {
         status: damaged ? "DAMAGED" : "CONFIRMED",
         toCustodyId: newCustody.id,
         confirmedAt: now,
       },
     });
-    const confirmedCount = batch.confirmedCount + 1;
-    const complete = confirmedCount === batch.expectedCount;
+    // Completion is derived from the lines as they now stand: every
+    // accounted line (CONFIRMED, or DAMAGED on receipt) counts, and
+    // the batch completes exactly when all expected lines are in —
+    // the stored count can never contradict the lines.
+    const accountedCount = await tx.custodyHandover.count({
+      where: { batchId: batch.id, status: { in: ["CONFIRMED", "DAMAGED"] } },
+    });
+    const complete = accountedCount === freshBatch.expectedCount;
     await tx.handoverBatch.update({
       where: { id: batch.id },
       data: {
-        confirmedCount,
+        confirmedCount: accountedCount,
         status: complete ? "CONFIRMED" : "PARTIALLY_CONFIRMED",
         ...(complete ? { confirmedAt: now, confirmedById: actor.userId } : {}),
       },
