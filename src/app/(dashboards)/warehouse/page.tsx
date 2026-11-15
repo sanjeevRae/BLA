@@ -10,6 +10,7 @@ import { MembersPanel } from "@/components/warehouses/MembersPanel";
 import { WarehouseInfoCard } from "@/components/warehouses/pages";
 import { SectionCard } from "@/components/warehouses/ui";
 import { ZonesPanel } from "@/components/warehouses/ZonesPanel";
+import { WarehouseBookingsPanel } from "@/components/bookings/pages";
 
 /**
  * Warehouse Admin dashboard: the actor's OWN warehouse(s) only — real
@@ -91,6 +92,8 @@ export default async function Page() {
           />
         </div>
       ))}
+
+      <WarehouseBookingsPanel actor={actor} basePath="/warehouse" />
     </div>
   );
 }

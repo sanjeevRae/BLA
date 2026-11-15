@@ -108,6 +108,7 @@ async function main(): Promise<void> {
   );
 
   await seedWarehouses(roleIdByCode);
+  await seedPhase3(superAdmin.id);
 }
 
 /**
@@ -182,6 +183,24 @@ const TEST_WAREHOUSE_ADMINS = [
   { email: "ktm.admin@bla.test", fullName: "KTM Warehouse Admin (test)", warehouseCode: "WH-KTM-01" },
   { email: "pkr.admin@bla.test", fullName: "PKR Warehouse Admin (test)", warehouseCode: "WH-PKR-01" },
 ] as const;
+
+/**
+ * True only when DATABASE_URL targets a local dev/test database
+ * (Phase 2 review P2-6): the test warehouse admins are local fixtures
+ * with a shared env password and must never be created anywhere else.
+ */
+function targetsLocalDatabase(): boolean {
+  const raw = process.env.DATABASE_URL;
+  if (!raw) return false;
+  try {
+    const url = new URL(raw);
+    const hostOk = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    const nameOk = url.pathname === "/bla_dev" || url.pathname === "/bla_test";
+    return hostOk && nameOk;
+  } catch {
+    return false;
+  }
+}
 
 async function seedWarehouses(
   roleIdByCode: Map<string, string>,
@@ -258,53 +277,62 @@ async function seedWarehouses(
     }
   }
 
-  const testPassword = process.env.SEED_TEST_WA_PASSWORD;
-  if (!testPassword) {
-    throw new Error("SEED_TEST_WA_PASSWORD must be set (see prisma/.env).");
-  }
-  const testPasswordHash = await hash(testPassword, 10);
-  for (const testAdmin of TEST_WAREHOUSE_ADMINS) {
-    const warehouseId = warehouseIdByCode.get(testAdmin.warehouseCode);
-    if (!warehouseId) throw new Error(`Warehouse missing after upsert: ${testAdmin.warehouseCode}`);
-    const user = await prisma.user.upsert({
-      where: { email: testAdmin.email },
-      update: {
-        fullName: testAdmin.fullName,
-        passwordHash: testPasswordHash,
-        status: "ACTIVE",
-        emailVerifiedAt: new Date(),
-      },
-      create: {
-        email: testAdmin.email,
-        fullName: testAdmin.fullName,
-        passwordHash: testPasswordHash,
-        status: "ACTIVE",
-        emailVerifiedAt: new Date(),
-      },
-    });
-    await prisma.userRole.upsert({
-      where: { userId_roleId: { userId: user.id, roleId: warehouseAdminRoleId } },
-      update: {},
-      create: { userId: user.id, roleId: warehouseAdminRoleId },
-    });
-    const activeMembership = await prisma.warehouseMembership.findFirst({
-      where: { userId: user.id, warehouseId, revokedAt: null },
-    });
-    if (!activeMembership) {
-      await prisma.warehouseMembership.create({
-        data: { userId: user.id, warehouseId, roleId: warehouseAdminRoleId, isPrimary: true },
+  // P2-6: test accounts are local-only, create-only fixtures. Against a
+  // non-local database the seed refuses to create them at all; against a
+  // local one, an existing test account is left exactly as it is —
+  // re-running the seed never resets its password or reactivates it
+  // (the F11 super-admin protection, extended to the test admins).
+  if (!targetsLocalDatabase()) {
+    console.log(
+      "Refusing to seed test warehouse admin accounts: DATABASE_URL does " +
+        "not target a local database (localhost/127.0.0.1 + bla_dev/bla_test).",
+    );
+  } else {
+    const testPassword = process.env.SEED_TEST_WA_PASSWORD;
+    if (!testPassword) {
+      throw new Error("SEED_TEST_WA_PASSWORD must be set (see prisma/.env).");
+    }
+    for (const testAdmin of TEST_WAREHOUSE_ADMINS) {
+      const warehouseId = warehouseIdByCode.get(testAdmin.warehouseCode);
+      if (!warehouseId) throw new Error(`Warehouse missing after upsert: ${testAdmin.warehouseCode}`);
+      let user = await prisma.user.findUnique({ where: { email: testAdmin.email } });
+      if (!user) {
+        user = await prisma.user.create({
+          data: {
+            email: testAdmin.email,
+            fullName: testAdmin.fullName,
+            passwordHash: await hash(testPassword, 10),
+            status: "ACTIVE",
+            emailVerifiedAt: new Date(),
+          },
+        });
+      } else {
+        console.log(
+          `Test warehouse admin ${testAdmin.email} already exists — leaving password and status untouched.`,
+        );
+      }
+      await prisma.userRole.upsert({
+        where: { userId_roleId: { userId: user.id, roleId: warehouseAdminRoleId } },
+        update: {},
+        create: { userId: user.id, roleId: warehouseAdminRoleId },
+      });
+      const activeMembership = await prisma.warehouseMembership.findFirst({
+        where: { userId: user.id, warehouseId, revokedAt: null },
+      });
+      if (!activeMembership) {
+        await prisma.warehouseMembership.create({
+          data: { userId: user.id, warehouseId, roleId: warehouseAdminRoleId, isPrimary: true },
+        });
+      }
+      await prisma.warehouse.update({
+        where: { id: warehouseId },
+        data: { managerUserId: user.id },
       });
     }
-    await prisma.warehouse.update({
-      where: { id: warehouseId },
-      data: { managerUserId: user.id },
-    });
+    console.log(`Seeded ${TEST_WAREHOUSE_ADMINS.length} test warehouse admins (create-only).`);
   }
 
-  console.log(
-    `Seeded ${REAL_WAREHOUSES.length} warehouses with standard zones and ` +
-      `${TEST_WAREHOUSE_ADMINS.length} test warehouse admins.`,
-  );
+  console.log(`Seeded ${REAL_WAREHOUSES.length} warehouses with standard zones.`);
 }
 
 main()
@@ -315,3 +343,202 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+
+/**
+ * Phase 3 seed: reference data + local demo fixtures.
+ * - Shipping services (STANDARD / EXPRESS).
+ * - District → warehouse routing: one ServiceArea per seeded
+ *   warehouse's district (Kathmandu, Kaski, Chitwan, Lalitpur).
+ * - A catch-all STANDARD PricingRule (tariffs are configuration rows,
+ *   never code — spec §6.3): NPR 150 base + NPR 50 per billable kg.
+ * - An APPROVED demo vendor with an approved pickup address, an origin
+ *   assignment, and an owner login (vendor.owner@bla.test), plus a
+ *   PENDING vendor for the verification queue.
+ * - A customer login (customer@bla.test) linked to a Customer record.
+ * Demo logins share the local test password from SEED_TEST_WA_PASSWORD.
+ * All idempotent.
+ */
+async function seedPhase3(superAdminId: string): Promise<void> {
+  const testPassword = process.env.SEED_TEST_WA_PASSWORD;
+  if (!testPassword) {
+    throw new Error("SEED_TEST_WA_PASSWORD must be set (see prisma/.env).");
+  }
+  const passwordHash = await hash(testPassword, 12);
+
+  const standard = await prisma.shippingService.upsert({
+    where: { code: "STANDARD" },
+    update: { isActive: true },
+    create: { code: "STANDARD", name: "Standard Delivery", estimatedDaysMin: 1, estimatedDaysMax: 3 },
+  });
+  await prisma.shippingService.upsert({
+    where: { code: "EXPRESS" },
+    update: { isActive: true },
+    create: { code: "EXPRESS", name: "Express Delivery", estimatedDaysMin: 1, estimatedDaysMax: 1 },
+  });
+
+  const warehouses = await prisma.warehouse.findMany({
+    select: { id: true, code: true, district: true, city: true, province: true },
+  });
+  const warehouseByCode = new Map(warehouses.map((w) => [w.code, w]));
+  const areaDefs = [
+    { name: "Kathmandu Metro", warehouseCode: "WH-KTM-01" },
+    { name: "Pokhara Valley", warehouseCode: "WH-PKR-01" },
+    { name: "Chitwan Valley", warehouseCode: "WH-CHT-01" },
+    { name: "Lalitpur Metro", warehouseCode: "WH-LTP-01" },
+  ];
+  for (const def of areaDefs) {
+    const warehouse = warehouseByCode.get(def.warehouseCode);
+    if (!warehouse) continue;
+    await prisma.serviceArea.upsert({
+      where: { district_name: { district: warehouse.district, name: def.name } },
+      update: { servingWarehouseId: warehouse.id, isActive: true },
+      create: {
+        name: def.name,
+        district: warehouse.district,
+        city: warehouse.city,
+        province: warehouse.province,
+        servingWarehouseId: warehouse.id,
+      },
+    });
+  }
+
+  const catchAll = await prisma.pricingRule.findFirst({
+    where: {
+      shippingServiceId: standard.id,
+      originServiceAreaId: null,
+      destinationServiceAreaId: null,
+      isActive: true,
+    },
+  });
+  if (!catchAll) {
+    await prisma.pricingRule.create({
+      data: {
+        shippingServiceId: standard.id,
+        baseRatePaisa: BigInt(15000),
+        perKgRatePaisa: BigInt(5000),
+        volumetricDivisor: 5000,
+        createdById: superAdminId,
+      },
+    });
+  }
+
+  let vendor = await prisma.vendor.findFirst({
+    where: { businessName: "Himalaya Handicrafts (test)" },
+  });
+  if (!vendor) {
+    vendor = await prisma.vendor.create({
+      data: {
+        businessName: "Himalaya Handicrafts (test)",
+        registrationNumber: "TEST-REG-001",
+        contactName: "Vendor Owner (test)",
+        email: "vendor.owner@bla.test",
+        phone: "9779851000001",
+        verificationStatus: "APPROVED",
+        verifiedById: superAdminId,
+        verifiedAt: new Date(),
+        createdById: superAdminId,
+      },
+    });
+  }
+  const ktm = warehouseByCode.get("WH-KTM-01");
+  if (ktm) {
+    const existingAddress = await prisma.vendorAddress.findFirst({
+      where: { vendorId: vendor.id, kind: "PICKUP" },
+    });
+    if (!existingAddress) {
+      await prisma.vendorAddress.create({
+        data: {
+          vendorId: vendor.id,
+          kind: "PICKUP",
+          addressLine1: "Thamel Marg 12",
+          city: "Kathmandu",
+          district: "Kathmandu",
+          province: "Bagmati",
+          contactName: "Vendor Owner (test)",
+          contactPhone: "9779851000001",
+          isApproved: true,
+          approvedById: superAdminId,
+        },
+      });
+    }
+    await prisma.vendorWarehouseAssignment.upsert({
+      where: { vendorId_warehouseId_kind: { vendorId: vendor.id, warehouseId: ktm.id, kind: "ORIGIN" } },
+      update: { isActive: true },
+      create: { vendorId: vendor.id, warehouseId: ktm.id, kind: "ORIGIN", assignedById: superAdminId },
+    });
+  }
+  const vendorOwner = await prisma.user.upsert({
+    where: { email: "vendor.owner@bla.test" },
+    update: {},
+    create: {
+      email: "vendor.owner@bla.test",
+      fullName: "Vendor Owner (test)",
+      passwordHash,
+      status: "ACTIVE",
+      emailVerifiedAt: new Date(),
+    },
+  });
+  const vendorRoleRow = await prisma.role.findUnique({ where: { code: "VENDOR" } });
+  if (vendorRoleRow) {
+    await prisma.userRole.upsert({
+      where: { userId_roleId: { userId: vendorOwner.id, roleId: vendorRoleRow.id } },
+      update: {},
+      create: { userId: vendorOwner.id, roleId: vendorRoleRow.id, assignedById: superAdminId },
+    });
+  }
+  await prisma.vendorUser.upsert({
+    where: { vendorId_userId: { vendorId: vendor.id, userId: vendorOwner.id } },
+    update: { isActive: true, vendorRole: "OWNER" },
+    create: { vendorId: vendor.id, userId: vendorOwner.id, vendorRole: "OWNER", invitedById: superAdminId },
+  });
+
+  const pendingVendor = await prisma.vendor.findFirst({
+    where: { businessName: "Pending Traders (test)" },
+  });
+  if (!pendingVendor) {
+    await prisma.vendor.create({
+      data: {
+        businessName: "Pending Traders (test)",
+        contactName: "Pending Contact (test)",
+        email: "pending.vendor@bla.test",
+        phone: "9779851000002",
+        verificationStatus: "PENDING_VERIFICATION",
+        createdById: superAdminId,
+      },
+    });
+  }
+
+  const customerUser = await prisma.user.upsert({
+    where: { email: "customer@bla.test" },
+    update: {},
+    create: {
+      email: "customer@bla.test",
+      fullName: "Demo Customer (test)",
+      passwordHash,
+      status: "ACTIVE",
+      emailVerifiedAt: new Date(),
+    },
+  });
+  const customerRoleRow = await prisma.role.findUnique({ where: { code: "CUSTOMER" } });
+  if (customerRoleRow) {
+    await prisma.userRole.upsert({
+      where: { userId_roleId: { userId: customerUser.id, roleId: customerRoleRow.id } },
+      update: {},
+      create: { userId: customerUser.id, roleId: customerRoleRow.id, assignedById: superAdminId },
+    });
+  }
+  await prisma.customer.upsert({
+    where: { normalizedPhone: "9779812345678" },
+    update: { userId: customerUser.id },
+    create: {
+      fullName: "Demo Customer (test)",
+      phone: "9812345678",
+      normalizedPhone: "9779812345678",
+      email: "customer@bla.test",
+      userId: customerUser.id,
+      createdById: superAdminId,
+    },
+  });
+
+  console.log("Seeded Phase 3 reference data, demo vendor and demo customer.");
+}

@@ -44,6 +44,23 @@ model User {
   auditLogs         AuditLog[]
   rolesAssigned     UserRole[]            @relation("UserRoleAssignedBy")
   invitationsSent   UserInvitation[]      @relation("InvitationSentBy")
+  vendorLinks       VendorUser[]
+  customerProfile   Customer?
+
+  pricingRulesCreated     PricingRule[]               @relation("PricingRuleCreatedBy")
+  vendorsVerified         Vendor[]                    @relation("VendorVerifiedBy")
+  vendorsCreated          Vendor[]                    @relation("VendorCreatedBy")
+  vendorUsersInvited      VendorUser[]                @relation("VendorUserInvitedBy")
+  vendorAddressesApproved VendorAddress[]             @relation("VendorAddressApprovedBy")
+  vendorDocumentsUploaded VendorDocument[]            @relation("VendorDocumentUploadedBy")
+  vendorDocumentsReviewed VendorDocument[]            @relation("VendorDocumentReviewedBy")
+  vendorAssignmentsMade   VendorWarehouseAssignment[] @relation("VendorAssignmentBy")
+  customersCreated        Customer[]                  @relation("CustomerCreatedBy")
+  ordersCreated           Order[]                     @relation("OrderCreatedBy")
+  ordersApproved          Order[]                     @relation("OrderApprovedBy")
+  packagesWeighed         Package[]                   @relation("PackageWeightMeasuredBy")
+  labelsPrinted           PackageLabel[]              @relation("PackageLabelPrintedBy")
+  trackingEventsActed     TrackingEvent[]             @relation("TrackingEventActor")
 
   @@index([phone])
   @@schema("app")
@@ -132,6 +149,10 @@ model Session {
 /// The warehouse-scoping mechanism (adopted from the live legacy table).
 /// `warehouseId` became a real FK when the Warehouse model landed in
 /// Phase 2 (docs/database-schema.md §2).
+/// A partial unique index on (userId, warehouseId, roleId) WHERE
+/// revokedAt IS NULL — at most one ACTIVE membership per triple — lives
+/// in migration 20261115173000_membership_active_unique; Prisma cannot
+/// express partial indexes here (Phase 2 review P2-5).
 model WarehouseMembership {
   id           String    @id @default(uuid())
   userId       String
@@ -161,6 +182,9 @@ model UserInvitation {
   roleId      String
   warehouseId String?
   vendorId    String?
+  /// Intra-vendor role granted on acceptance (OWNER / MANAGER /
+  /// BOOKING_STAFF / ACCOUNTS_STAFF) when the invitation is vendor-scoped.
+  vendorRole  String?
   tokenHash   String    @unique
   invitedById String
   expiresAt   DateTime
@@ -172,6 +196,7 @@ model UserInvitation {
   role      Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
   invitedBy User       @relation("InvitationSentBy", fields: [invitedById], references: [id], onDelete: Restrict)
   warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  vendor    Vendor?    @relation(fields: [vendorId], references: [id], onDelete: Restrict)
 
   @@index([email, status])
   @@schema("app")
@@ -268,6 +293,14 @@ model Warehouse {
   memberships WarehouseMembership[]
   invitations UserInvitation[]
 
+  serviceAreas      ServiceArea[]
+  vendorAssignments VendorWarehouseAssignment[]
+  ordersOrigin      Order[]                     @relation("OrderOriginWarehouse")
+  shipmentsOrigin   Shipment[]                  @relation("ShipmentOriginWarehouse")
+  shipmentsDest     Shipment[]                  @relation("ShipmentDestinationWarehouse")
+  packagesCurrent   Package[]                   @relation("PackageCurrentWarehouse")
+  trackingEvents    TrackingEvent[]
+
   @@index([district])
   @@index([status])
   @@schema("app")
@@ -352,5 +385,554 @@ model WarehouseOperatingHours {
   warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
 
   @@unique([warehouseId, dayOfWeek])
+  @@schema("app")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: routing & pricing configuration (docs/database-schema.md §11)
+// ---------------------------------------------------------------------------
+
+/// A deliverable geography. Routing resolves a booking's destination
+/// district to the warehouse that serves it. `@@unique([district, name])`.
+model ServiceArea {
+  id                 String   @id @default(uuid())
+  name               String
+  district           String
+  city               String?
+  province           String
+  servingWarehouseId String
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  servingWarehouse Warehouse     @relation(fields: [servingWarehouseId], references: [id], onDelete: Restrict)
+  orders           Order[]
+  shipments        Shipment[]
+  pricingDest      PricingRule[] @relation("PricingDestinationArea")
+  pricingOrigin    PricingRule[] @relation("PricingOriginArea")
+
+  @@unique([district, name])
+  @@index([district])
+  @@index([servingWarehouseId])
+  @@schema("app")
+}
+
+/// A sellable delivery product (STANDARD / EXPRESS / SAME_DAY).
+model ShippingService {
+  id                  String   @id @default(uuid())
+  code                String   @unique
+  name                String
+  estimatedDaysMin    Int?
+  estimatedDaysMax    Int?
+  requiresProofMethod String?
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  pricingRules PricingRule[]
+  shipments    Shipment[]
+
+  @@schema("app")
+}
+
+/// Tariff configuration — prices are data, never code (spec §6.3).
+/// Rule resolution picks the most specific active rule for
+/// (service, origin area, destination area, billable weight) at booking
+/// time; the result is snapshotted onto the Shipment.
+model PricingRule {
+  id                       String    @id @default(uuid())
+  shippingServiceId        String
+  originServiceAreaId      String?
+  destinationServiceAreaId String?
+  minWeightKg              Decimal?  @db.Decimal(10, 3)
+  maxWeightKg              Decimal?  @db.Decimal(10, 3)
+  baseRatePaisa            BigInt
+  perKgRatePaisa           BigInt
+  codFeePercent            Decimal?  @db.Decimal(5, 2)
+  volumetricDivisor        Int       @default(5000)
+  effectiveFrom            DateTime  @default(now())
+  effectiveTo              DateTime?
+  isActive                 Boolean   @default(true)
+  createdById              String
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  shippingService        ShippingService @relation(fields: [shippingServiceId], references: [id], onDelete: Restrict)
+  originServiceArea      ServiceArea?    @relation("PricingOriginArea", fields: [originServiceAreaId], references: [id], onDelete: Restrict)
+  destinationServiceArea ServiceArea?    @relation("PricingDestinationArea", fields: [destinationServiceAreaId], references: [id], onDelete: Restrict)
+  createdBy              User            @relation("PricingRuleCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  shipments              Shipment[]
+
+  @@index([shippingServiceId, isActive])
+  @@schema("app")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: vendors & customers (docs/database-schema.md §3)
+// ---------------------------------------------------------------------------
+
+/// A business customer organisation (spec §14.1). Never deleted —
+/// lifecycle is the verification status:
+/// PENDING_VERIFICATION / UNDER_REVIEW / APPROVED / REJECTED /
+/// SUSPENDED / INACTIVE. Only APPROVED vendors can create bookings.
+model Vendor {
+  id                 String    @id @default(uuid())
+  businessName       String
+  registrationNumber String?
+  contactName        String
+  email              String?
+  phone              String
+  verificationStatus String    @default("PENDING_VERIFICATION")
+  verifiedById       String?
+  verifiedAt         DateTime?
+  verificationNotes  String?
+  billingPreference  String    @default("COD_OFFSET")
+  creditLimitPaisa   BigInt?
+  isActive           Boolean   @default(true)
+  createdById        String
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  verifiedBy  User?                       @relation("VendorVerifiedBy", fields: [verifiedById], references: [id], onDelete: Restrict)
+  createdBy   User                        @relation("VendorCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  users       VendorUser[]
+  addresses   VendorAddress[]
+  documents   VendorDocument[]
+  assignments VendorWarehouseAssignment[]
+  invitations UserInvitation[]
+  orders      Order[]
+
+  @@index([verificationStatus])
+  @@index([businessName])
+  @@schema("app")
+}
+
+/// Authorised employees of a vendor, with intra-vendor roles
+/// (OWNER / MANAGER / BOOKING_STAFF / ACCOUNTS_STAFF — spec §14.2).
+/// Every vendor-scoped query resolves the caller's vendor through this
+/// table server-side; a vendor user never sees another vendor's rows.
+model VendorUser {
+  id          String   @id @default(uuid())
+  vendorId    String
+  userId      String
+  vendorRole  String
+  isActive    Boolean  @default(true)
+  invitedById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  vendor    Vendor @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  user      User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  invitedBy User   @relation("VendorUserInvitedBy", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@unique([vendorId, userId])
+  @@index([userId, isActive])
+  @@schema("app")
+}
+
+/// Pickup / billing / office addresses. Vendors pick up from APPROVED
+/// pickup addresses (spec §4.7); approval is an Admin act.
+model VendorAddress {
+  id           String   @id @default(uuid())
+  vendorId     String
+  kind         String   @default("PICKUP")
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  district     String
+  province     String
+  postalCode   String?
+  latitude     Decimal? @db.Decimal(10, 7)
+  longitude    Decimal? @db.Decimal(10, 7)
+  contactName  String?
+  contactPhone String?
+  isApproved   Boolean  @default(false)
+  approvedById String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  vendor     Vendor  @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  approvedBy User?   @relation("VendorAddressApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  orders     Order[] @relation("OrderPickupVendorAddress")
+
+  @@index([vendorId, kind])
+  @@schema("app")
+}
+
+/// Verification document metadata. The file itself lives in private
+/// object storage (FileAsset lands with the platform phase); this row
+/// is the reviewable metadata record: PENDING_REVIEW / APPROVED /
+/// REJECTED. `storageKey` is unique when present.
+model VendorDocument {
+  id           String    @id @default(uuid())
+  vendorId     String
+  documentType String
+  fileName     String
+  mimeType     String?
+  sizeBytes    Int?
+  storageKey   String?   @unique
+  sha256       String?
+  status       String    @default("PENDING_REVIEW")
+  uploadedById String
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNotes  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  vendor     Vendor @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  uploadedBy User   @relation("VendorDocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+  reviewedBy User?  @relation("VendorDocumentReviewedBy", fields: [reviewedById], references: [id], onDelete: Restrict)
+
+  @@index([vendorId, status])
+  @@schema("app")
+}
+
+/// A vendor's assigned company warehouse for a purpose (ORIGIN — the
+/// warehouse its pickups/drop-offs route through when the pickup
+/// address district does not resolve one).
+model VendorWarehouseAssignment {
+  id           String   @id @default(uuid())
+  vendorId     String
+  warehouseId  String
+  kind         String   @default("ORIGIN")
+  isActive     Boolean  @default(true)
+  assignedById String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  vendor     Vendor    @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  warehouse  Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  assignedBy User      @relation("VendorAssignmentBy", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@unique([vendorId, warehouseId, kind])
+  @@index([vendorId, isActive])
+  @@schema("app")
+}
+
+/// A sender/recipient person record, deduplicated on the normalised
+/// phone (spec §14.3). Recipients do NOT need an account to track a
+/// parcel — `userId` is an optional link if they later register.
+model Customer {
+  id              String   @id @default(uuid())
+  fullName        String
+  phone           String
+  normalizedPhone String   @unique
+  email           String?  @unique
+  userId          String?  @unique
+  mergedIntoId    String?
+  isMerged        Boolean  @default(false)
+  createdById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user       User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  mergedInto Customer?         @relation("CustomerMerge", fields: [mergedIntoId], references: [id], onDelete: Restrict)
+  mergedFrom Customer[]        @relation("CustomerMerge")
+  createdBy  User?             @relation("CustomerCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  addresses  CustomerAddress[]
+  orders     Order[]           @relation("OrderSenderCustomer")
+  packages   Package[]         @relation("PackageRecipientCustomer")
+
+  @@index([fullName])
+  @@schema("app")
+}
+
+/// Customer addresses (PICKUP / DELIVERY / HOME) with the Nepal
+/// recipient addressing fields (spec §6.2).
+model CustomerAddress {
+  id           String   @id @default(uuid())
+  customerId   String
+  kind         String   @default("DELIVERY")
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  district     String
+  province     String
+  municipality String?
+  wardNumber   String?
+  landmark     String?
+  postalCode   String?
+  latitude     Decimal? @db.Decimal(10, 7)
+  longitude    Decimal? @db.Decimal(10, 7)
+  isDefault    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  orders   Order[]  @relation("OrderPickupCustomerAddress")
+
+  @@index([customerId])
+  @@schema("app")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: orders, shipments & packages (docs/database-schema.md §4–§5)
+// One chain only: Order (booking request) → Shipment (consignment) →
+// Package (physical parcel). The brief's "BookingRequest/BookingItem"
+// are this Order/OrderItem pair (roadmap Phase 3, schema doc §4).
+// ---------------------------------------------------------------------------
+
+/// The booking request. Sender data is snapshotted (the printed receipt
+/// shows what was declared even if the Customer record is later
+/// corrected). Order-level payment fields are a derived roll-up cache;
+/// the authoritative money records land in Phase 7.
+model Order {
+  id                       String    @id @default(uuid())
+  orderNumber              String    @unique
+  vendorId                 String?
+  customerId               String?
+  createdById              String
+  createdByRole            String
+  senderName               String
+  senderPhone              String
+  senderEmail              String?
+  originWarehouseId        String?
+  destinationDistrict      String
+  destinationServiceAreaId String?
+  approvalStatus           String    @default("APPROVED")
+  approvedById             String?
+  approvedAt               DateTime?
+  approvalNote             String?
+  status                   String    @default("CONFIRMED")
+  cancelRequestedById      String?
+  cancelApprovedById       String?
+  cancelReason             String?
+  cancelStage              String?
+  cancelChargesPaisa       BigInt    @default(0)
+  cancelledAt              DateTime?
+  paymentMethod            String
+  paymentStatus            String    @default("UNPAID")
+  pickupMethod             String
+  pickupVendorAddressId    String?
+  pickupCustomerAddressId  String?
+  deliveryInstructions     String?
+  notes                    String?
+  scheduledAt              DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  vendor                 Vendor?          @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  customer               Customer?        @relation("OrderSenderCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy              User             @relation("OrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy             User?            @relation("OrderApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  originWarehouse        Warehouse?       @relation("OrderOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
+  destinationServiceArea ServiceArea?     @relation(fields: [destinationServiceAreaId], references: [id], onDelete: Restrict)
+  pickupVendorAddress    VendorAddress?   @relation("OrderPickupVendorAddress", fields: [pickupVendorAddressId], references: [id], onDelete: Restrict)
+  pickupCustomerAddress  CustomerAddress? @relation("OrderPickupCustomerAddress", fields: [pickupCustomerAddressId], references: [id], onDelete: Restrict)
+  items                  OrderItem[]
+  shipments              Shipment[]
+  packages               Package[]
+  trackingEvents         TrackingEvent[]
+
+  @@index([vendorId, createdAt])
+  @@index([customerId])
+  @@index([approvalStatus])
+  @@index([status, createdAt])
+  @@index([destinationDistrict])
+  @@schema("app")
+}
+
+/// What was booked, line by line. Items describe intent; the physical
+/// parcels generated from them are Packages (one package per unit).
+model OrderItem {
+  id             String   @id @default(uuid())
+  orderId        String
+  description    String
+  quantity       Int
+  unitPricePaisa BigInt?
+  weightKg       Decimal? @db.Decimal(10, 3)
+  sku            String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  order        Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  packageItems PackageItem[]
+
+  @@schema("app")
+}
+
+/// The consignment moving under one contract. `status` is a roll-up
+/// derived from its Packages, recomputed by the lifecycle service on
+/// every package transition — never set directly. Charge snapshots
+/// freeze the price as quoted at booking (spec §6.3).
+/// routeKind: LAST_MILE / INTER_WAREHOUSE / UNROUTED (destination
+/// district has no serving warehouse yet — the booking is HELD in this
+/// visible state, never silently misrouted).
+model Shipment {
+  id                       String    @id @default(uuid())
+  shipmentNumber           String    @unique
+  orderId                  String
+  kind                     String    @default("FORWARD")
+  originalShipmentId       String?
+  originWarehouseId        String
+  destinationWarehouseId   String?
+  destinationServiceAreaId String?
+  routeKind                String
+  shippingServiceId        String
+  pricingRuleId            String?
+  shippingChargePaisa      BigInt
+  codAmountPaisa           BigInt    @default(0)
+  status                   String    @default("ACTIVE")
+  expectedDeliveryAt       DateTime?
+  totalWeightKg            Decimal?  @db.Decimal(10, 3)
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  order                  Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  originalShipment       Shipment?       @relation("ShipmentOriginal", fields: [originalShipmentId], references: [id], onDelete: Restrict)
+  derivedShipments       Shipment[]      @relation("ShipmentOriginal")
+  originWarehouse        Warehouse       @relation("ShipmentOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
+  destinationWarehouse   Warehouse?      @relation("ShipmentDestinationWarehouse", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
+  destinationServiceArea ServiceArea?    @relation(fields: [destinationServiceAreaId], references: [id], onDelete: Restrict)
+  shippingService        ShippingService @relation(fields: [shippingServiceId], references: [id], onDelete: Restrict)
+  pricingRule            PricingRule?    @relation(fields: [pricingRuleId], references: [id], onDelete: Restrict)
+  packages               Package[]
+  trackingEvents         TrackingEvent[]
+
+  @@index([orderId])
+  @@index([originWarehouseId, status])
+  @@index([destinationWarehouseId, status])
+  @@schema("app")
+}
+
+/// The canonical physical parcel — one row per physical box, each with
+/// its own tracking ID and history. Recipient data is snapshotted per
+/// package. Five separate status fields (schema doc §5): operational
+/// status is written ONLY by the package lifecycle service.
+model Package {
+  id                      String    @id @default(uuid())
+  trackingId              String    @unique
+  shipmentId              String
+  orderId                 String
+  recipientName           String
+  recipientPhone          String
+  recipientAltPhone       String?
+  recipientEmail          String?
+  recipientCustomerId     String?
+  deliveryAddress         String
+  deliveryCity            String
+  deliveryDistrict        String
+  municipality            String?
+  wardNumber              String?
+  landmark                String?
+  deliveryLatitude        Decimal?  @db.Decimal(10, 7)
+  deliveryLongitude       Decimal?  @db.Decimal(10, 7)
+  declaredWeightKg        Decimal   @db.Decimal(10, 3)
+  actualWeightKg          Decimal?  @db.Decimal(10, 3)
+  volumetricWeightKg      Decimal?  @db.Decimal(10, 3)
+  billableWeightKg        Decimal?  @db.Decimal(10, 3)
+  weightMeasuredById      String?
+  weightMeasuredAt        DateTime?
+  lengthCm                Decimal?  @db.Decimal(10, 2)
+  widthCm                 Decimal?  @db.Decimal(10, 2)
+  heightCm                Decimal?  @db.Decimal(10, 2)
+  declaredValuePaisa      BigInt?
+  description             String
+  category                String    @default("PACKAGE")
+  isFragile               Boolean   @default(false)
+  handlingInstructions    String?
+  restrictedGoodsDeclared Boolean   @default(false)
+  codAmountPaisa          BigInt    @default(0)
+  currentWarehouseId      String?
+  operationalStatus       String    @default("BOOKED")
+  condition               String    @default("GOOD")
+  paymentStatus           String    @default("NOT_APPLICABLE")
+  deliveryStatus          String    @default("NOT_STARTED")
+  exceptionStatus         String    @default("NONE")
+  version                 Int       @default(1)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  shipment          Shipment        @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  order             Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  recipientCustomer Customer?       @relation("PackageRecipientCustomer", fields: [recipientCustomerId], references: [id], onDelete: Restrict)
+  currentWarehouse  Warehouse?      @relation("PackageCurrentWarehouse", fields: [currentWarehouseId], references: [id], onDelete: Restrict)
+  weightMeasuredBy  User?           @relation("PackageWeightMeasuredBy", fields: [weightMeasuredById], references: [id], onDelete: Restrict)
+  items             PackageItem[]
+  labels            PackageLabel[]
+  trackingEvents    TrackingEvent[]
+
+  @@index([shipmentId])
+  @@index([currentWarehouseId, operationalStatus])
+  @@index([operationalStatus, createdAt])
+  @@index([recipientPhone])
+  @@index([recipientCustomerId])
+  @@schema("app")
+}
+
+/// Physical contents of one package (which booked line it fulfils).
+model PackageItem {
+  id                 String   @id @default(uuid())
+  packageId          String
+  orderItemId        String?
+  description        String
+  quantity           Int
+  declaredValuePaisa BigInt?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  package   Package    @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  orderItem OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+
+  @@schema("app")
+}
+
+/// The printed label record. Regenerating a label never changes the
+/// package's trackingId. `fileId` becomes a FileAsset FK in the
+/// platform phase; it is a plain column until then.
+model PackageLabel {
+  id              String    @id @default(uuid())
+  packageId       String
+  labelCode       String    @unique
+  qrPayload       String
+  fileId          String?
+  printCount      Int       @default(0)
+  lastPrintedAt   DateTime?
+  lastPrintedById String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  package       Package @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  lastPrintedBy User?   @relation("PackageLabelPrintedBy", fields: [lastPrintedById], references: [id], onDelete: Restrict)
+
+  @@schema("app")
+}
+
+/// Append-only package/shipment/order history (schema doc §4 — the
+/// brief's "PackageStatusHistory": the unified TrackingEvent stream
+/// carries the previous/new operational-status pair for every package
+/// transition). No `updatedAt`, no update/delete path; protected by
+/// the append-only trigger like AuditLog. Transfer/trip/assignment
+/// context FKs join when those models land (Phases 5–6).
+model TrackingEvent {
+  id             String   @id @default(uuid())
+  packageId      String?
+  shipmentId     String?
+  orderId        String?
+  subjectType    String
+  eventType      String
+  previousStatus String?
+  newStatus      String?
+  occurredAt     DateTime @default(now())
+  actorId        String?
+  actorRole      String?
+  warehouseId    String?
+  notes          String?
+  source         String   @default("WEB")
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+
+  package   Package?   @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  shipment  Shipment?  @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  order     Order?     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  actor     User?      @relation("TrackingEventActor", fields: [actorId], references: [id], onDelete: Restrict)
+  warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+
+  @@index([packageId, occurredAt])
+  @@index([shipmentId, occurredAt])
+  @@index([orderId, occurredAt])
+  @@index([actorId, createdAt])
+  @@index([eventType, createdAt])
   @@schema("app")
 }
