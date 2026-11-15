@@ -30,7 +30,6 @@ import {
 } from "@/lib/operations/domain";
 import {
   auditAccessDenied,
-  isUniqueViolationOn,
   pageArgs,
   pageMeta,
   parse,
@@ -57,9 +56,11 @@ import {
  *    handovers, transfer missing/disputed items, misrouted
  *    packages, rider-displacing scan-backs, COD discrepancies).
  *    Auto-creation is idempotent per source event: the caller passes
- *    a stable `sourceKey`, the source row is locked by the caller's
- *    transaction, and the unique sourceKey collides instead of
- *    duplicating when the source operation retries.
+ *    a stable `sourceKey`; raises for the same key are serialised by
+ *    a per-key advisory transaction lock (P8-R5) over the unique
+ *    sourceKey index, so a retry returns the existing incident
+ *    instead of duplicating — or erroring — when the source
+ *    operation retries.
  *
  * Resolution follows the documented workflow
  * REPORTED → ACKNOWLEDGED → ASSIGNED → INVESTIGATING →
@@ -280,6 +281,18 @@ export async function raiseIncidentInTx(
   input: RaiseIncidentInTxInput,
 ): Promise<{ incidentId: string; incidentNumber: string; created: boolean }> {
   if (input.sourceKey) {
+    // Phase 8 review P8-R5: serialise concurrent raises for the
+    // same source event BEFORE the existence check. The previous
+    // recovery — catch the sourceKey unique violation and re-query
+    // for the winner's row — could never work: a unique violation
+    // aborts the Postgres transaction, so the re-query failed too
+    // and the caller's SOURCE operation (discrepancy verification,
+    // handover close, transfer receiving…) rolled back with it.
+    // An advisory transaction lock keyed by the sourceKey makes
+    // check-then-create atomic across transactions: the loser
+    // waits, then sees the winner's committed row and returns
+    // created: false. The unique index remains the backstop.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${input.sourceKey}))`;
     const existing = await tx.incident.findUnique({
       where: { sourceKey: input.sourceKey },
       select: { id: true, incidentNumber: true },
@@ -291,45 +304,29 @@ export async function raiseIncidentInTx(
   const seq = await tx.$queryRaw<{ nextval: bigint }[]>`
     SELECT nextval('"app"."incident_number_seq"') AS nextval`;
   const incidentNumber = `INC-${seq[0].nextval.toString()}`;
-  let incident: { id: string; incidentNumber: string };
-  try {
-    incident = await tx.incident.create({
-      data: {
-        incidentNumber,
-        category: input.category,
-        severity: input.severity ?? INCIDENT_DEFAULT_SEVERITY[input.category],
-        status: "REPORTED",
-        sourceKey: input.sourceKey ?? null,
-        description: input.description,
-        reporterId: input.reporterId,
-        responsibleTeam: input.responsibleTeam ?? defaultTeamForCategory(input.category),
-        warehouseId: input.warehouseId ?? null,
-        packageId: input.packageId ?? null,
-        orderId: input.orderId ?? null,
-        shipmentId: input.shipmentId ?? null,
-        transferId: input.transferId ?? null,
-        tripId: input.tripId ?? null,
-        codCollectionId: input.codCollectionId ?? null,
-        remittanceId: input.remittanceId ?? null,
-        handoverBatchId: input.handoverBatchId ?? null,
-        deliveryAssignmentId: input.deliveryAssignmentId ?? null,
-      },
-      select: { id: true, incidentNumber: true },
-    });
-  } catch (err) {
-    // Lost a race on the sourceKey: the other writer's incident is
-    // the one true record for this source event.
-    if (input.sourceKey && isUniqueViolationOn(err, "sourceKey")) {
-      const existing = await tx.incident.findUnique({
-        where: { sourceKey: input.sourceKey },
-        select: { id: true, incidentNumber: true },
-      });
-      if (existing) {
-        return { incidentId: existing.id, incidentNumber: existing.incidentNumber, created: false };
-      }
-    }
-    throw err;
-  }
+  const incident = await tx.incident.create({
+    data: {
+      incidentNumber,
+      category: input.category,
+      severity: input.severity ?? INCIDENT_DEFAULT_SEVERITY[input.category],
+      status: "REPORTED",
+      sourceKey: input.sourceKey ?? null,
+      description: input.description,
+      reporterId: input.reporterId,
+      responsibleTeam: input.responsibleTeam ?? defaultTeamForCategory(input.category),
+      warehouseId: input.warehouseId ?? null,
+      packageId: input.packageId ?? null,
+      orderId: input.orderId ?? null,
+      shipmentId: input.shipmentId ?? null,
+      transferId: input.transferId ?? null,
+      tripId: input.tripId ?? null,
+      codCollectionId: input.codCollectionId ?? null,
+      remittanceId: input.remittanceId ?? null,
+      handoverBatchId: input.handoverBatchId ?? null,
+      deliveryAssignmentId: input.deliveryAssignmentId ?? null,
+    },
+    select: { id: true, incidentNumber: true },
+  });
 
   // Routing fan-out (dedupe per incident event + recipient).
   const severity = input.severity ?? INCIDENT_DEFAULT_SEVERITY[input.category];
@@ -447,7 +444,51 @@ export async function createIncident(
       select: { id: true, originWarehouseId: true, destinationWarehouseId: true },
     });
     if (!transfer) throw new NotFoundError("Linked transfer not found");
+    // Phase 8 review P8-R6: the transfer link is scope-validated
+    // exactly like the package/order links above. Previously any
+    // reporter could attach an arbitrary transfer: the incident
+    // landed on the transfer's destination warehouse and the
+    // creation fan-out fired to that warehouse's admins, with no
+    // relationship between the reporter and the transfer at all.
+    if (actor.customerId) {
+      await auditAccessDenied(actor, "Incident", { reason: "transfer_link_not_customer" });
+      throw new AuthorizationError("Customers cannot report incidents against transfers");
+    }
+    if (actor.vendorId) {
+      const ownItems = await prisma.transferItem.count({
+        where: {
+          transferId: transfer.id,
+          package: { order: { vendorId: actor.vendorId } },
+        },
+      });
+      if (ownItems === 0) {
+        await auditAccessDenied(actor, "Incident", { reason: "transfer_not_own_vendor" });
+        throw new AuthorizationError(
+          "Vendors can only report incidents on transfers carrying their own packages",
+        );
+      }
+    } else if (
+      !isUnscoped(actor) &&
+      !actor.warehouseIds.includes(transfer.originWarehouseId) &&
+      !actor.warehouseIds.includes(transfer.destinationWarehouseId)
+    ) {
+      await auditAccessDenied(actor, "Incident", {
+        warehouseId: transfer.destinationWarehouseId,
+        reason: "transfer_out_of_scope",
+      });
+      throw new AuthorizationError("Transfer is outside your warehouse scope");
+    }
     warehouseId = warehouseId ?? transfer.destinationWarehouseId;
+    if (
+      !isUnscoped(actor) &&
+      !actor.vendorId &&
+      !actor.warehouseIds.includes(warehouseId) &&
+      actor.warehouseIds.includes(transfer.originWarehouseId)
+    ) {
+      // Scoped staff validated via the origin side: the incident
+      // belongs to the warehouse they actually work with.
+      warehouseId = transfer.originWarehouseId;
+    }
   }
   if (warehouseId && !isUnscoped(actor) && !actor.vendorId && !actor.customerId) {
     if (!actor.warehouseIds.includes(warehouseId)) {
@@ -552,9 +593,52 @@ export async function listIncidents(actor: ActorContext, input: ListIncidentsInp
   return { items: rows.map(toIncidentView), meta: pageMeta(total, data.page, data.pageSize) };
 }
 
+/**
+ * Who receives the FULL incident record (investigation thread,
+ * evidence, resolution text, staff identities): incident.manage
+ * holders, and staff who are the reporter or the assignee.
+ * Raiser-side viewers — vendors and customers, whose visibility
+ * comes from their package linkage — receive the customer-safe
+ * summary instead (exception-management.md §4): status, category,
+ * severity, the incident description and its timestamps, with the
+ * internal thread, evidence, resolution and staff identities
+ * withheld (Phase 8 review P8-R1).
+ */
+function incidentFullView(
+  actor: ActorContext,
+  row: { reporterId: string; assigneeId: string | null },
+): boolean {
+  if (hasPermission(actor, "incident.manage")) return true;
+  const staffParty = !actor.vendorId && !actor.customerId;
+  return staffParty && (row.reporterId === actor.userId || row.assigneeId === actor.userId);
+}
+
 export async function getIncident(actor: ActorContext, incidentId: string) {
   const row = await loadIncidentOr404(incidentId);
   await assertIncidentVisible(actor, row);
+  if (!incidentFullView(actor, row)) {
+    return {
+      ...toIncidentView(row),
+      resolution: null,
+      reporterName: null,
+      assigneeId: null,
+      assigneeName: null,
+      notes: [] as {
+        id: string;
+        body: string;
+        authorId: string;
+        authorName: string | null;
+        createdAt: string;
+      }[],
+      evidence: [] as {
+        id: string;
+        fileId: string;
+        caption: string | null;
+        uploadedById: string;
+        createdAt: string;
+      }[],
+    };
+  }
   const [notes, evidence] = await Promise.all([
     prisma.incidentNote.findMany({
       where: { incidentId },
@@ -652,13 +736,36 @@ export async function assignIncident(
     throw new DomainValidationError("Assignee must be an active user");
   }
   // Warehouse-scoped managers assign within their warehouse's team.
-  if (!isUnscoped(actor) && row.warehouseId && actor.warehouseIds.includes(row.warehouseId)) {
-    const member = await prisma.warehouseMembership.findFirst({
-      where: { userId: data.assigneeId, warehouseId: row.warehouseId, revokedAt: null },
-      select: { id: true },
-    });
-    if (!member && data.assigneeId !== actor.userId) {
-      throw new DomainValidationError("Assignee is not a member of the incident's warehouse");
+  // Phase 8 review (minor): the membership check previously applied
+  // only when the incident's warehouse was inside the manager's own
+  // scope — with a null or foreign warehouse it was skipped, and a
+  // scoped manager could grant any active user read visibility of
+  // the incident by assigning it to them. The check now follows the
+  // incident: a set warehouse requires membership of THAT warehouse;
+  // no warehouse requires a membership the manager shares.
+  if (!isUnscoped(actor) && data.assigneeId !== actor.userId) {
+    if (row.warehouseId) {
+      const member = await prisma.warehouseMembership.findFirst({
+        where: { userId: data.assigneeId, warehouseId: row.warehouseId, revokedAt: null },
+        select: { id: true },
+      });
+      if (!member) {
+        throw new DomainValidationError("Assignee is not a member of the incident's warehouse");
+      }
+    } else {
+      const shared = await prisma.warehouseMembership.findFirst({
+        where: {
+          userId: data.assigneeId,
+          warehouseId: { in: actor.warehouseIds },
+          revokedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!shared) {
+        throw new DomainValidationError(
+          "Assignee is not a member of any of your warehouses",
+        );
+      }
     }
   }
   const view = await transitionIncident(actor, incidentId, "assigned",

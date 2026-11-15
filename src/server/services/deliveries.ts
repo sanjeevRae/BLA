@@ -1971,6 +1971,26 @@ export async function scanBackPackage(
         status: "RECEIVED",
       };
     }
+    if (displacedFromRider && data.reason) {
+      // Phase 8 review P8-R8: the displacement incident raises
+      // INSIDE the scan-back transaction. It previously ran in a
+      // separate transaction after the scan-back committed, so a
+      // failure in between lost the incident permanently — the
+      // scan-back cannot be retried once the package has moved.
+      // Idempotent per assignment (sourceKey): the assignment is
+      // terminal after a scan-back, so this fires exactly once.
+      await raiseIncidentInTx(tx, {
+        sourceKey: `scan-back:${assignment.id}`,
+        category: "DELIVERY_FAILURE",
+        description:
+          `Rider ${assignment.driver.user.fullName} was displaced from package ${trackingId} ` +
+          `(assignment ${assignment.id}) by a warehouse scan-back. Reason: ${data.reason}`,
+        reporterId: actor.userId,
+        warehouseId: warehouse.id,
+        packageId: pkg.id,
+        deliveryAssignmentId: assignment.id,
+      });
+    }
     return { advancedReturn };
   });
 
@@ -1987,24 +2007,6 @@ export async function scanBackPackage(
       displacedRiderName: assignment.driver.user.fullName,
     },
   });
-  if (displacedFromRider && data.reason) {
-    // Phase 8: the displacement incident names the rider and the
-    // recorded reason. Idempotent per assignment (sourceKey) — the
-    // assignment is terminal after a scan-back, so this fires once.
-    await prisma.$transaction((tx) =>
-      raiseIncidentInTx(tx, {
-        sourceKey: `scan-back:${assignment.id}`,
-        category: "DELIVERY_FAILURE",
-        description:
-          `Rider ${assignment.driver.user.fullName} was displaced from package ${trackingId} ` +
-          `(assignment ${assignment.id}) by a warehouse scan-back. Reason: ${data.reason}`,
-        reporterId: actor.userId,
-        warehouseId: warehouse.id,
-        packageId: pkg.id,
-        deliveryAssignmentId: assignment.id,
-      }),
-    );
-  }
   return {
     packageId: pkg.id,
     trackingId,

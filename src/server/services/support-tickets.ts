@@ -6,6 +6,11 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
 import { normalizePhone } from "@/lib/bookings/phone";
+import { isValidTrackingId } from "@/lib/bookings/tracking";
+import {
+  TRACKING_DETAIL_LOCK_MS,
+  TRACKING_DETAIL_MAX_FAILURES,
+} from "@/lib/deliveries/domain";
 
 import { prisma } from "@/lib/db/prisma";
 import {
@@ -409,6 +414,22 @@ export async function replyToTicket(actor: ActorContext, ticketId: string, input
   }
   await prisma.$transaction(async (tx) => {
     await lockTicketRow(tx, ticketId);
+    // Phase 8 review P8-R4: the status is re-read INSIDE the locked
+    // transaction. The pre-transaction snapshot above is only a fast
+    // path — a resolve landing while this reply waited on the row
+    // lock previously still received the message, and the OPEN →
+    // IN_PROGRESS nudge was computed from the stale snapshot,
+    // resurrecting the RESOLVED ticket. Terminal tickets take no
+    // new messages (the same rule the pre-check enforces).
+    const fresh = await tx.supportTicket.findUniqueOrThrow({
+      where: { id: ticketId },
+      select: { status: true },
+    });
+    if (fresh.status === "RESOLVED" || fresh.status === "CLOSED") {
+      throw new ConflictError(
+        `Ticket ${row.ticketNumber} is ${fresh.status} — it cannot take new messages`,
+      );
+    }
     await tx.supportTicketMessage.create({
       data: {
         ticketId,
@@ -418,12 +439,13 @@ export async function replyToTicket(actor: ActorContext, ticketId: string, input
       },
     });
     if (!data.internal) {
-      // Status nudges: a staff reply moves OPEN → IN_PROGRESS; a
-      // raiser reply reopens AWAITING_CUSTOMER threads.
-      if (staff && row.status === "OPEN") {
+      // Status nudges (from the FRESH status): a staff reply moves
+      // OPEN → IN_PROGRESS; a raiser reply reopens AWAITING_CUSTOMER
+      // threads.
+      if (staff && fresh.status === "OPEN") {
         await tx.supportTicket.update({ where: { id: ticketId }, data: { status: "IN_PROGRESS" } });
       }
-      if (!staff && row.status === "AWAITING_CUSTOMER") {
+      if (!staff && fresh.status === "AWAITING_CUSTOMER") {
         await tx.supportTicket.update({ where: { id: ticketId }, data: { status: "IN_PROGRESS" } });
       }
       // Notify the other side (same transaction).
@@ -474,7 +496,7 @@ export type AssignTicketInput = z.input<typeof assignTicketSchema>;
 
 export async function assignTicket(actor: ActorContext, ticketId: string, input: AssignTicketInput) {
   const data = parse(assignTicketSchema, input);
-  const row = await loadTicketOr404(ticketId);
+  await loadTicketOr404(ticketId);
   await assertTicketManageable(actor);
   const assignee = await prisma.user.findUnique({
     where: { id: data.assigneeId },
@@ -491,12 +513,24 @@ export async function assignTicket(actor: ActorContext, ticketId: string, input:
   if (!assignee.roles.some((r) => staffRoles.includes(r.role.code))) {
     throw new DomainValidationError("Tickets can only be assigned to support staff");
   }
-  await prisma.supportTicket.update({
-    where: { id: ticketId },
-    data: {
-      assignedToId: data.assigneeId,
-      status: row.status === "OPEN" ? "IN_PROGRESS" : row.status,
-    },
+  // Phase 8 review P8-R4: the update runs inside a transaction
+  // under the ticket row lock, and the OPEN → IN_PROGRESS nudge is
+  // computed from the FRESH status — the pre-transaction snapshot
+  // previously let an assignment racing a resolve write the stale
+  // IN_PROGRESS back over RESOLVED, resurrecting the ticket.
+  await prisma.$transaction(async (tx) => {
+    await lockTicketRow(tx, ticketId);
+    const fresh = await tx.supportTicket.findUniqueOrThrow({
+      where: { id: ticketId },
+      select: { status: true },
+    });
+    await tx.supportTicket.update({
+      where: { id: ticketId },
+      data: {
+        assignedToId: data.assigneeId,
+        status: fresh.status === "OPEN" ? "IN_PROGRESS" : fresh.status,
+      },
+    });
   });
   await auditOps(actor, "support.ticket_assigned", "SupportTicket", ticketId, {
     after: { assigneeId: data.assigneeId },
@@ -598,8 +632,28 @@ async function requestFollowUp(
   if (!row.packageId) {
     throw new DomainValidationError("This ticket is not linked to a package");
   }
+  // Phase 8 review P8-R4: terminal tickets are closed to follow-ups.
+  // This guard did not exist — a redelivery request on a CLOSED
+  // ticket silently moved it back to IN_PROGRESS and overwrote its
+  // category, destroying the record of what the ticket was about.
+  if (row.status === "RESOLVED" || row.status === "CLOSED") {
+    throw new ConflictError(
+      `Ticket ${row.ticketNumber} is ${row.status} — follow-ups cannot be requested on a terminal ticket`,
+    );
+  }
   await prisma.$transaction(async (tx) => {
     await lockTicketRow(tx, ticketId);
+    // Re-checked under the row lock: a resolve landing while this
+    // request waited must not be overwritten either.
+    const fresh = await tx.supportTicket.findUniqueOrThrow({
+      where: { id: ticketId },
+      select: { status: true },
+    });
+    if (fresh.status === "RESOLVED" || fresh.status === "CLOSED") {
+      throw new ConflictError(
+        `Ticket ${row.ticketNumber} is ${fresh.status} — follow-ups cannot be requested on a terminal ticket`,
+      );
+    }
     await tx.supportTicketMessage.create({
       data: {
         ticketId,
@@ -716,6 +770,21 @@ export type TrackingComplaintInput = z.input<typeof trackingComplaintSchema>;
 const TRACKING_COMPLAINT_DENIAL =
   "Tracking details are not available for this tracking code and phone number";
 
+/**
+ * Per-package open-complaint cap (Phase 8 review P8-R2): at most
+ * this many open (OPEN / IN_PROGRESS / AWAITING_CUSTOMER /
+ * ESCALATED) tickets may exist for one package; further public
+ * complaints are refused with the same indistinguishable denial.
+ * The rule bounds the TICKET_RAISED fan-out — every complaint
+ * notifies every SUPPORT / ADMIN / SUPER_ADMIN user — while still
+ * letting a recipient keep distinct concurrent issues open (late
+ * AND damaged AND wrong item). It is checked only AFTER the phone
+ * is verified, so it cannot be probed without the second factor,
+ * and a capped denial writes nothing: the complainant proved the
+ * phone, so the refusal must not push the code toward lockout.
+ */
+const MAX_OPEN_COMPLAINTS_PER_PACKAGE = 3;
+
 export async function raiseTrackingComplaint(
   trackingId: string,
   input: TrackingComplaintInput,
@@ -723,6 +792,34 @@ export async function raiseTrackingComplaint(
   const data = parse(trackingComplaintSchema, input);
   const normalized = normalizePhone(data.phone);
   const phoneHash = createHash("sha256").update(normalized).digest("hex");
+
+  // Phase 8 review P8-R3 (the P6-R6 bookkeeping discipline, applied
+  // to this endpoint): a MALFORMED tracking code or an unusable
+  // phone is denied with NO writes at all — the complaint path
+  // previously recorded a TrackingAccessAttempt for codes that are
+  // not even well-formed, the unbounded unauthenticated write the
+  // detailed view was fixed for. Mirrors getDetailedTracking.
+  if (!isValidTrackingId(trackingId) || normalized.length === 0) {
+    throw new NotFoundError(TRACKING_COMPLAINT_DENIAL);
+  }
+
+  // Phase 8 review P8-R2: this endpoint shares the detailed view's
+  // second factor (tracking code + recipient phone), so it honours
+  // the SAME failure lockout, checked BEFORE the phone comparison.
+  // Without it the endpoint was an unlocked phone-guessing oracle:
+  // unlimited wrong guesses, and a correct guess confirmed by a
+  // ticket landing in the support queue. A locked denial writes
+  // nothing, so the lock expires with the window (P6-R6).
+  const failures = await prisma.trackingAccessAttempt.count({
+    where: {
+      trackingId,
+      succeeded: false,
+      createdAt: { gt: new Date(Date.now() - TRACKING_DETAIL_LOCK_MS) },
+    },
+  });
+  if (failures >= TRACKING_DETAIL_MAX_FAILURES) {
+    throw new NotFoundError(TRACKING_COMPLAINT_DENIAL);
+  }
 
   const pkg = await prisma.package.findUnique({
     where: { trackingId },
@@ -755,6 +852,20 @@ export async function raiseTrackingComplaint(
     });
     throw new NotFoundError(TRACKING_COMPLAINT_DENIAL);
   }
+
+  // Per-package open-complaint cap (see the constant above).
+  const openTickets = await prisma.supportTicket.count({
+    where: { packageId: pkg.id, status: { in: [...TICKET_OPEN_STATUSES] } },
+  });
+  if (openTickets >= MAX_OPEN_COMPLAINTS_PER_PACKAGE) {
+    throw new NotFoundError(TRACKING_COMPLAINT_DENIAL);
+  }
+
+  // Success bookkeeping mirrors the detailed view (P6-R6): prior
+  // failures for the code are cleared and the success is recorded.
+  await prisma.trackingAccessAttempt.deleteMany({
+    where: { trackingId, succeeded: false },
+  });
   await prisma.trackingAccessAttempt.create({
     data: { trackingId, phoneHash, succeeded: true },
   });

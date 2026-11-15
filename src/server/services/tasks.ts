@@ -122,6 +122,54 @@ async function loadTaskOr404(id: string): Promise<TaskRow> {
   return row;
 }
 
+/**
+ * Roles that make a user an assignable staff member — every catalog
+ * role except VENDOR and CUSTOMER (the set the assignee picker,
+ * listStaffUserOptions, offers; LINEHAUL_DRIVER is the catalog's
+ * line-haul code). Phase 8 review P8-R7: assignees were previously
+ * validated only as ACTIVE users, so an internal task could be
+ * assigned to a vendor account, which could then read and fully
+ * work it despite holding no task permission. Tasks are internal
+ * work records; they are never assignable outside staff.
+ */
+const STAFF_ASSIGNEE_ROLES = new Set([
+  "SUPER_ADMIN",
+  "ADMIN",
+  "WAREHOUSE_ADMIN",
+  "WAREHOUSE_STAFF",
+  "FINANCE",
+  "SUPPORT",
+  "RIDER",
+  "LINEHAUL_DRIVER",
+  "TRANSPORT_DRIVER",
+]);
+
+function assertStaffAssigneeUser(
+  assignee: {
+    status: string;
+    roles: { role: { code: string } }[];
+  } | null,
+): void {
+  if (!assignee || assignee.status !== "ACTIVE") {
+    throw new DomainValidationError("Assignee must be an active user");
+  }
+  if (!assignee.roles.some((r) => STAFF_ASSIGNEE_ROLES.has(r.role.code))) {
+    throw new DomainValidationError("Tasks can only be assigned to staff users");
+  }
+}
+
+async function assertStaffAssignee(assigneeId: string): Promise<void> {
+  const assignee = await prisma.user.findUnique({
+    where: { id: assigneeId },
+    select: {
+      id: true,
+      status: true,
+      roles: { select: { role: { select: { code: true } } } },
+    },
+  });
+  assertStaffAssigneeUser(assignee);
+}
+
 async function lockTaskRow(tx: Prisma.TransactionClient, id: string): Promise<void> {
   const rows = await tx.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "app"."Task" WHERE "id" = ${id} FOR UPDATE`;
@@ -150,6 +198,29 @@ async function assertTaskVisible(actor: ActorContext, row: TaskRow): Promise<voi
   }
 }
 
+/**
+ * Read/work gate (Phase 8 review P8-R7): visibility alone is not
+ * authority over a task. The creator acts in their own right;
+ * task.assign managers and task.verify reviewers act in theirs;
+ * the assignee works the task via task.update_own. Anyone else —
+ * notably a non-staff assignee named on a row from before the
+ * staff-assignee validation existed — is denied (audited) even
+ * though the row names them, because they hold no task permission
+ * at all. Applied by getTask / updateTaskStatus / addTaskComment.
+ */
+async function assertTaskAccessible(actor: ActorContext, row: TaskRow): Promise<void> {
+  await assertTaskVisible(actor, row);
+  if (row.createdById === actor.userId) return;
+  if (hasPermission(actor, "task.assign") || hasPermission(actor, "task.verify")) return;
+  if (row.assigneeId === actor.userId && hasPermission(actor, "task.update_own")) return;
+  await auditAccessDenied(actor, "Task", {
+    entityId: row.id,
+    warehouseId: row.warehouseId,
+    reason: "task_missing_permission",
+  });
+  throw new AuthorizationError("You do not hold a task permission for this task");
+}
+
 // ---------------------------------------------------------------------------
 // Create / assign
 // ---------------------------------------------------------------------------
@@ -174,13 +245,7 @@ export async function createTask(actor: ActorContext, input: CreateTaskInput): P
   const data = parse(createTaskSchema, input);
   await requirePermAudited(actor, "task.create", "Task");
 
-  const assignee = await prisma.user.findUnique({
-    where: { id: data.assigneeId },
-    select: { id: true, status: true },
-  });
-  if (!assignee || assignee.status !== "ACTIVE") {
-    throw new DomainValidationError("Assignee must be an active user");
-  }
+  await assertStaffAssignee(data.assigneeId);
   let warehouseId = data.warehouseId ?? null;
   if (data.relatedPackageId) {
     const pkg = await prisma.package.findUnique({
@@ -312,7 +377,7 @@ export async function listTasks(actor: ActorContext, input: ListTasksInput) {
 
 export async function getTask(actor: ActorContext, taskId: string) {
   const row = await loadTaskOr404(taskId);
-  await assertTaskVisible(actor, row);
+  await assertTaskAccessible(actor, row);
   const comments = await prisma.taskComment.findMany({
     where: { taskId },
     include: { author: { select: { fullName: true } } },
@@ -357,7 +422,7 @@ export async function updateTaskStatus(
 ): Promise<TaskView> {
   const data = parse(updateTaskStatusSchema, input);
   const row = await loadTaskOr404(taskId);
-  await assertTaskVisible(actor, row);
+  await assertTaskAccessible(actor, row);
   const target = data.status as TaskStatus;
 
   await prisma.$transaction(async (tx) => {
@@ -428,13 +493,7 @@ export async function reassignTask(
   await requirePermAudited(actor, "task.assign", "Task");
   const row = await loadTaskOr404(taskId);
   await assertTaskVisible(actor, row);
-  const assignee = await prisma.user.findUnique({
-    where: { id: data.assigneeId },
-    select: { id: true, status: true },
-  });
-  if (!assignee || assignee.status !== "ACTIVE") {
-    throw new DomainValidationError("Assignee must be an active user");
-  }
+  await assertStaffAssignee(data.assigneeId);
   await prisma.$transaction(async (tx) => {
     await lockTaskRow(tx, taskId);
     const fresh = await tx.task.findUniqueOrThrow({
@@ -529,7 +588,7 @@ export type AddTaskCommentInput = z.input<typeof addTaskCommentSchema>;
 export async function addTaskComment(actor: ActorContext, taskId: string, input: AddTaskCommentInput) {
   const data = parse(addTaskCommentSchema, input);
   const row = await loadTaskOr404(taskId);
-  await assertTaskVisible(actor, row);
+  await assertTaskAccessible(actor, row);
   await prisma.taskComment.create({
     data: { taskId, authorId: actor.userId, body: data.body },
   });
@@ -554,6 +613,18 @@ export async function createTaskInTx(
     relatedPackageId?: string | null;
   },
 ): Promise<{ id: string }> {
+  // P8-R7: the staff-assignee rule applies on this path too (ticket
+  // escalation composes it) — validated against the caller's
+  // transaction so a bad assignee aborts the whole escalation.
+  const assignee = await tx.user.findUnique({
+    where: { id: input.assigneeId },
+    select: {
+      id: true,
+      status: true,
+      roles: { select: { role: { select: { code: true } } } },
+    },
+  });
+  assertStaffAssigneeUser(assignee);
   const created = await tx.task.create({
     data: {
       title: input.title,
