@@ -37,10 +37,43 @@ process.env.DATABASE_URL =
 
 const RUN = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6)}`;
 const email = (label: string) => `${label}-${RUN}@test.local`;
-const pair = String(Date.now() % 90 + 10); // two digits for warehouse codes
-const CODE_A = `WH-TSA-${pair}`;
-const CODE_B = `WH-TSB-${pair}`;
-const CODE_C = `WH-TSC-${pair}`;
+
+// Warehouse codes must match /^WH-[A-Z]{3}-\d{2}$/, so only 90 numeric
+// pairs exist — and bla_test keeps every warehouse ever created, so a
+// pair drawn blindly (the old `Date.now() % 90 + 10`) increasingly
+// collides with an accumulated row and kills fixture setup with P2002.
+// The fixture codes are therefore established lazily (in beforeAll, or
+// in the test that creates the warehouse) by drawing candidate pairs
+// until one is unused in bla_test.
+let CODE_A: string;
+let CODE_B: string;
+let CODE_C: string;
+
+/** All 90 legal warehouse-code pairs ("10".."99"), shuffled. */
+function candidatePairs(): string[] {
+  const all = Array.from({ length: 90 }, (_, i) => String(i + 10));
+  for (let i = all.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [all[i], all[j]] = [all[j], all[i]];
+  }
+  return all;
+}
+
+function isUniqueViolation(e: unknown): boolean {
+  return (e as { code?: string } | null)?.code === "P2002";
+}
+
+/** First candidate pair whose `WH-<prefix>-<pair>` code is unused. */
+async function firstUnusedPair(prefix: string): Promise<string> {
+  for (const candidate of candidatePairs()) {
+    const existing = await prisma.warehouse.findUnique({
+      where: { code: `WH-${prefix}-${candidate}` },
+      select: { id: true },
+    });
+    if (!existing) return candidate;
+  }
+  throw new Error(`no unused warehouse code pair for prefix ${prefix}`);
+}
 
 let prisma: PrismaClient;
 let svc: typeof import("@/server/services/warehouses");
@@ -184,8 +217,24 @@ beforeAll(async () => {
         status: "ACTIVE",
       },
     });
-  whA = (await mkWarehouse(CODE_A, "Test Warehouse A")).id;
-  whB = (await mkWarehouse(CODE_B, "Test Warehouse B")).id;
+  // Draw pairs until both fixture codes are fresh in bla_test (see the
+  // note at CODE_A): a P2002 on either create moves to the next pair.
+  for (const candidate of candidatePairs()) {
+    CODE_A = `WH-TSA-${candidate}`;
+    CODE_B = `WH-TSB-${candidate}`;
+    try {
+      whA = (await mkWarehouse(CODE_A, "Test Warehouse A")).id;
+      whB = (await mkWarehouse(CODE_B, "Test Warehouse B")).id;
+      break;
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;
+      whA = "";
+      whB = "";
+    }
+  }
+  if (!whA || !whB) {
+    throw new Error("no fresh warehouse code pair available for fixtures");
+  }
 
   await addMembership(aAdminId, whA, "WAREHOUSE_ADMIN");
   await addMembership(bAdminId, whB, "WAREHOUSE_ADMIN");
@@ -201,10 +250,18 @@ describe("warehouse isolation (Phase 2 acceptance)", () => {
     const aList = await svc.listWarehouses(await actorFor(aAdminId), {});
     expect(aList.items.map((w) => w.id)).toEqual([whA]);
 
-    const adminList = await svc.listWarehouses(await actorFor(adminId), {
-      pageSize: 100,
-    });
-    expect(adminList.items.map((w) => w.id)).toEqual(expect.arrayContaining([whA, whB]));
+    // Admin is unscoped, so both fixtures must appear in the full list.
+    // bla_test accumulates warehouses from every suite and run (well
+    // past one 100-row page by now), so walk all pages rather than
+    // asserting on a single page.
+    const admin = await actorFor(adminId);
+    const adminIds: string[] = [];
+    for (let page = 1; ; page++) {
+      const list = await svc.listWarehouses(admin, { page, pageSize: 100 });
+      adminIds.push(...list.items.map((w) => w.id));
+      if (adminIds.length >= list.total || list.items.length === 0) break;
+    }
+    expect(adminIds).toEqual(expect.arrayContaining([whA, whB]));
 
     const none = await svc.listWarehouses(await actorFor(noMemberId), {});
     expect(none.items).toEqual([]);
@@ -308,6 +365,9 @@ describe("warehouse isolation (Phase 2 acceptance)", () => {
 describe("warehouse lifecycle rules", () => {
   it("create makes an INACTIVE warehouse with 7 standard zones; duplicate code conflicts", async () => {
     const admin = await actorFor(adminId);
+    // CODE_C must be a pair no earlier run has consumed (see CODE_A note);
+    // the duplicate assertion below reuses this just-created code.
+    CODE_C = `WH-TSC-${await firstUnusedPair("TSC")}`;
     const created = await svc.createWarehouse(admin, {
       code: CODE_C,
       name: "Test Warehouse C",
@@ -334,9 +394,10 @@ describe("warehouse lifecycle rules", () => {
     ).rejects.toBeInstanceOf(errors.ConflictError);
 
     // A Warehouse Admin cannot create warehouses at all.
+    const deniedPair = await firstUnusedPair("TSD");
     await expect(
       svc.createWarehouse(await actorFor(aAdminId), {
-        code: `WH-TSD-${pair}`,
+        code: `WH-TSD-${deniedPair}`,
         name: "Nope",
         type: "LOCAL_HUB",
         district: "Lalitpur",

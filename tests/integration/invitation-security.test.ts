@@ -66,9 +66,28 @@ process.env.DATABASE_URL =
 
 const RUN = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6)}`;
 const email = (label: string) => `${label}-${RUN}@test.local`;
-const pair = String((Date.now() % 90) + 10);
-const CODE_A = `WH-ISA-${pair}`;
-const CODE_B = `WH-ISB-${pair}`;
+// Warehouse codes must match /^WH-[A-Z]{3}-\d{2}$/, so only 90 numeric
+// pairs exist — and bla_test keeps every warehouse ever created, so a
+// pair drawn blindly (the old `Date.now() % 90 + 10`) increasingly
+// collides with an accumulated row and kills fixture setup with P2002.
+// The fixture codes are therefore established in beforeAll by drawing
+// candidate pairs until one is unused in bla_test.
+let CODE_A: string;
+let CODE_B: string;
+
+/** All 90 legal warehouse-code pairs ("10".."99"), shuffled. */
+function candidatePairs(): string[] {
+  const all = Array.from({ length: 90 }, (_, i) => String(i + 10));
+  for (let i = all.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [all[i], all[j]] = [all[j], all[i]];
+  }
+  return all;
+}
+
+function isUniqueViolation(e: unknown): boolean {
+  return (e as { code?: string } | null)?.code === "P2002";
+}
 
 let prisma: PrismaClient;
 let invitationsSvc: typeof import("@/server/services/invitations");
@@ -226,8 +245,24 @@ beforeAll(async () => {
         status: "ACTIVE",
       },
     });
-  whA = (await mkWarehouse(CODE_A, "InviteSec Warehouse A")).id;
-  whB = (await mkWarehouse(CODE_B, "InviteSec Warehouse B")).id;
+  // Draw pairs until both fixture codes are fresh in bla_test (see the
+  // note at CODE_A): a P2002 on either create moves to the next pair.
+  for (const candidate of candidatePairs()) {
+    CODE_A = `WH-ISA-${candidate}`;
+    CODE_B = `WH-ISB-${candidate}`;
+    try {
+      whA = (await mkWarehouse(CODE_A, "InviteSec Warehouse A")).id;
+      whB = (await mkWarehouse(CODE_B, "InviteSec Warehouse B")).id;
+      break;
+    } catch (e) {
+      if (!isUniqueViolation(e)) throw e;
+      whA = "";
+      whB = "";
+    }
+  }
+  if (!whA || !whB) {
+    throw new Error("no fresh warehouse code pair available for fixtures");
+  }
 
   await addMembership(waId, whA, "WAREHOUSE_ADMIN");
   await addMembership(dualId, whA, "WAREHOUSE_ADMIN");
