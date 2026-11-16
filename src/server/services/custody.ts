@@ -700,6 +700,47 @@ export async function listCustody(
   };
 }
 
+/**
+ * Phase 6 (V2) rider-home read: the packages in the ACTOR'S OWN
+ * custody right now — open PackageCustody rows where the actor is
+ * the custodian. Unlike listCustody this needs no warehouse scope:
+ * a rider's custody follows the rider (e.g. parcels out for
+ * delivery have no open inventory record to scope by), and the
+ * query can only ever return the actor's own rows.
+ */
+export async function listMyCustody(actor: ActorContext): Promise<CustodyView[]> {
+  if (!hasPermission(actor, "custody.read")) {
+    await auditAccessDenied(actor, "PackageCustody", {
+      reason: "missing_permission:custody.read",
+    });
+    throw new AuthorizationError("Missing required permission: custody.read");
+  }
+  const rows = await prisma.packageCustody.findMany({
+    where: { custodianType: "USER", custodianUserId: actor.userId, endedAt: null },
+    include: {
+      package: { select: { trackingId: true, operationalStatus: true } },
+      custodianUser: { select: { fullName: true } },
+      warehouse: { select: { code: true } },
+      storageLocation: { select: { fullCode: true } },
+    },
+    orderBy: { startedAt: "asc" },
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    packageId: row.packageId,
+    trackingId: row.package.trackingId,
+    packageStatus: row.package.operationalStatus,
+    custodianType: row.custodianType,
+    custodianUserId: row.custodianUserId,
+    custodianName: row.custodianUser?.fullName ?? null,
+    warehouseId: row.warehouseId,
+    warehouseCode: row.warehouse?.code ?? null,
+    storageLocationId: row.storageLocationId,
+    locationCode: row.storageLocation?.fullCode ?? null,
+    startedAt: row.startedAt.toISOString(),
+  }));
+}
+
 export interface ListHandoversQuery {
   warehouseId: string;
   status?: string;

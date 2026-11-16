@@ -8,13 +8,23 @@ import { listWarehouses } from "@/server/services/warehouses";
 import {
   getDeliveryBatch,
   getRiderBatch,
-  getRiderDaySummary,
+  getRiderHomeToday,
   listDeliveryBatches,
   listDeliveryRiders,
   listEligibleDeliveryPackages,
   listRiderBatches,
   type DeliveryBatchView,
 } from "@/server/services/deliveries";
+import { listMyCustody } from "@/server/services/custody";
+import { getRiderCodPosition } from "@/server/services/cod-remittances";
+import {
+  RiderCodCard,
+  RiderCurrentBatchCard,
+  RiderCustodyList,
+  RiderFailedAttemptsList,
+  RiderTodayStrip,
+  riderSubtleActionClass,
+} from "@/components/deliveries/rider-home";
 import { getReturn, listReturns } from "@/server/services/returns";
 import {
   AddPackagesForm,
@@ -483,45 +493,80 @@ export async function ReturnDetailPage({
 
 export async function RiderHomePage({ actor }: { actor: ActorContext }) {
   const today = new Date().toISOString().slice(0, 10);
-  const [batches, summary] = await Promise.all([
+  // Mobile-first job home (V2 Phase 6, audit M-12). Order:
+  // today's summary strip → failed attempts needing action →
+  // current assignment / next stop → custody → COD position →
+  // today's other batches. The Location Tracking panel lives in
+  // the rider layout (Phase 4) above this page — nothing here
+  // duplicates or contradicts its controls.
+  const [home, batches, custody, codPosition] = await Promise.all([
+    getRiderHomeToday(actor, today),
     listRiderBatches(actor, { date: today }),
-    getRiderDaySummary(actor, today),
+    listMyCustody(actor),
+    getRiderCodPosition(actor),
   ]);
+  const currentBatchId = home.currentBatch?.batch.id ?? null;
+  const otherBatches = batches.filter((b: DeliveryBatchView) => b.id !== currentBatchId);
   return (
     <div className="flex flex-col gap-5">
       <PageHeader eyebrow="Delivery Rider" title="Today's deliveries" />
-      <SectionCard title="End-of-day summary">
-        <p className="text-[13px] text-slate2">
-          {summary.assigned} assigned · {summary.outForDelivery} still out · {summary.delivered}{" "}
-          delivered · {summary.failedOrReturned} failed/returned · COD collected{" "}
-          {formatPaisa(BigInt(summary.codCollectedPaisa))} of{" "}
-          {formatPaisa(BigInt(summary.codExpectedPaisa))} expected
-          {summary.codMismatches > 0 ? ` · ${summary.codMismatches} mismatch(es)` : ""} ·{" "}
-          {summary.openBatches} open batch(es)
-        </p>
-      </SectionCard>
-      {batches.length === 0 ? (
-        <SectionCard title="Batches">
-          <p className="text-[13px] text-slate2">
-            No batch assigned to you today. Your dispatcher creates batches at the warehouse.
-          </p>
+
+      <RiderTodayStrip
+        assigned={home.assigned}
+        delivered={home.delivered}
+        remaining={home.remaining}
+        failedAttemptsNeedingAction={home.failedAttemptsNeedingAction}
+      />
+
+      {home.failedAttempts.length > 0 ? (
+        <SectionCard title="Failed attempts — need action">
+          <RiderFailedAttemptsList attempts={home.failedAttempts} />
         </SectionCard>
-      ) : (
-        batches.map((b: DeliveryBatchView) => (
-          <SectionCard key={b.id} title={`${b.warehouseCode} · ${b.batchDate}`}>
-            <div className="flex flex-wrap items-center gap-3">
-              <DeliveryStatusBadge status={b.status} />
-              <span className="text-[13px] text-slate2">
-                {b.counts.total} package(s) · {b.counts.completed} delivered ·{" "}
-                {b.counts.inProgress} out · {b.counts.pending} waiting pickup
-              </span>
-              <Link href={`/rider/batches/${b.id}`} className={subtleButtonClass}>
-                Open batch →
+      ) : null}
+
+      <SectionCard title="Current assignment">
+        {home.currentBatch ? (
+          <RiderCurrentBatchCard
+            batchId={home.currentBatch.batch.id}
+            warehouseCode={home.currentBatch.batch.warehouseCode}
+            batchDate={home.currentBatch.batch.batchDate}
+            batchStatus={home.currentBatch.batch.status}
+            totalPackages={home.currentBatch.batch.counts.total}
+            deliveredPackages={home.currentBatch.batch.counts.completed}
+            nextStop={home.currentBatch.nextStop}
+          />
+        ) : (
+          <p className="text-[14px] text-ink">
+            No batch assigned to you today. Your dispatcher creates batches at the warehouse —
+            a new batch will appear here as soon as it is assigned.
+          </p>
+        )}
+      </SectionCard>
+
+      <SectionCard title={`In your custody (${custody.length})`}>
+        <RiderCustodyList items={custody} />
+      </SectionCard>
+
+      <SectionCard title="Cash on delivery">
+        <RiderCodCard
+          collectedTodayPaisa={home.codCollectedPaisa}
+          handedOverPaisa={codPosition.verifiedRemittedPaisa}
+          toRemitPaisa={codPosition.awaitingRemittanceTotalPaisa}
+        />
+      </SectionCard>
+
+      {otherBatches.length > 0 ? (
+        <SectionCard title="Today's other batches">
+          <div className="flex flex-col gap-2">
+            {otherBatches.map((b: DeliveryBatchView) => (
+              <Link key={b.id} href={`/rider/batches/${b.id}`} className={riderSubtleActionClass}>
+                {b.warehouseCode} · {b.status.replaceAll("_", " ")} · {b.counts.completed}/
+                {b.counts.total} delivered →
               </Link>
-            </div>
-          </SectionCard>
-        ))
-      )}
+            ))}
+          </div>
+        </SectionCard>
+      ) : null}
     </div>
   );
 }

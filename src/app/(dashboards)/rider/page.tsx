@@ -8,19 +8,10 @@ export default async function Page() {
   const actor = await requireActor();
   return (
     <div className="grid gap-5">
+      {/* The COD position card lives inside RiderHomePage (Phase 6
+          mobile home); this page only adds the Reports link. The
+          Location Tracking panel is mounted by the rider layout. */}
       <RiderHomePage actor={actor} />
-      <SectionCard title="Cash on delivery">
-        <div className="flex flex-col gap-3">
-          <p className="text-[13px] text-slate2">
-            See the COD you have collected, hand it over as a remittance, and track verification.
-          </p>
-          <div>
-            <Link href="/rider/cod" className={subtleButtonClass}>
-              Your COD obligations →
-            </Link>
-          </div>
-        </div>
-      </SectionCard>
       <SectionCard title="Reports">
         <div className="flex flex-col gap-3">
           <p className="text-[13px] text-slate2">

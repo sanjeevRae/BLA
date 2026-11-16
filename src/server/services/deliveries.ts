@@ -2547,4 +2547,175 @@ export async function getRiderDaySummary(
   };
 }
 
+/** One failed attempt from today that still needs rider action:
+ *  the package is still out with the rider (assignment IN_PROGRESS),
+ *  so a re-attempt or a call to the recipient is the next step.
+ *  Attempts on assignments that have since completed or failed
+ *  terminally are history, not action items, and are excluded. */
+export interface RiderFailedAttemptView {
+  attemptId: string;
+  assignmentId: string;
+  batchId: string | null;
+  trackingId: string;
+  result: string;
+  failureReason: string | null;
+  nextAction: string;
+  notes: string | null;
+  attemptedAt: string;
+  recipientArea: string;
+  codExpectedPaisa: string;
+}
+
+export interface RiderHomeToday {
+  date: string;
+  /** Every assignment on today's batches. */
+  assigned: number;
+  delivered: number;
+  /** Stops still to do: waiting pickup + out for delivery. */
+  remaining: number;
+  failedAttemptsNeedingAction: number;
+  failedAttempts: RiderFailedAttemptView[];
+  codExpectedPaisa: string;
+  codCollectedPaisa: string;
+  /** The rider's first open batch today, with its next stop. */
+  currentBatch: {
+    batch: DeliveryBatchView;
+    nextStop: {
+      assignmentId: string;
+      trackingId: string;
+      status: string;
+      recipientName: string;
+      recipientArea: string;
+      codExpectedPaisa: string;
+    } | null;
+  } | null;
+}
+
+/**
+ * Phase 6 (V2) rider-home read: today's summary counts, the failed
+ * attempts that still need action, and the current batch's next
+ * stop — in one rider-scoped read. Rider isolation matches every
+ * other rider read: the actor's own driver profile only.
+ */
+export async function getRiderHomeToday(
+  actor: ActorContext,
+  date?: string,
+): Promise<RiderHomeToday> {
+  if (!actor.driverId) {
+    throw new AuthorizationError("Only riders have a delivery day summary");
+  }
+  const day = date ?? new Date().toISOString().slice(0, 10);
+  const batchRows = await prisma.deliveryBatch.findMany({
+    where: { riderId: actor.driverId, batchDate: new Date(`${day}T00:00:00.000Z`) },
+    include: batchInclude,
+    orderBy: { createdAt: "asc" },
+  });
+  const batches = batchRows.map(toBatchView);
+  const batchIds = batches.map((b) => b.id);
+
+  const assignmentRows = batchIds.length
+    ? await prisma.deliveryAssignment.findMany({
+        where: { batchId: { in: batchIds } },
+        include: assignmentInclude,
+      })
+    : [];
+  let delivered = 0;
+  let remaining = 0;
+  let codExpected = BigInt(0);
+  let codCollected = BigInt(0);
+  for (const row of assignmentRows) {
+    if (row.status === "COMPLETED") delivered += 1;
+    if (row.status === "PENDING" || row.status === "ACCEPTED" || row.status === "IN_PROGRESS") {
+      remaining += 1;
+    }
+    if (row.status === "IN_PROGRESS" || row.status === "COMPLETED") {
+      codExpected += row.package.codAmountPaisa;
+    }
+    if (row.codCollection) codCollected += row.codCollection.collectedPaisa;
+  }
+
+  const dayStart = new Date(`${day}T00:00:00.000Z`);
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+  const attemptRows = batchIds.length
+    ? await prisma.deliveryAttempt.findMany({
+        where: {
+          assignment: { driverId: actor.driverId, batchId: { in: batchIds } },
+          attemptedAt: { gte: dayStart, lt: dayEnd },
+          result: { not: "DELIVERED" },
+        },
+        include: {
+          assignment: {
+            select: {
+              id: true,
+              batchId: true,
+              status: true,
+              package: {
+                select: {
+                  trackingId: true,
+                  deliveryCity: true,
+                  deliveryDistrict: true,
+                  codAmountPaisa: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: { attemptedAt: "desc" },
+      })
+    : [];
+  const failedAttempts: RiderFailedAttemptView[] = attemptRows
+    .filter((a) => a.assignment.status === "IN_PROGRESS")
+    .map((a) => ({
+      attemptId: a.id,
+      assignmentId: a.assignment.id,
+      batchId: a.assignment.batchId,
+      trackingId: a.assignment.package.trackingId,
+      result: a.result,
+      failureReason: a.failureReason,
+      nextAction: a.nextAction,
+      notes: a.notes,
+      attemptedAt: a.attemptedAt.toISOString(),
+      recipientArea: [a.assignment.package.deliveryCity, a.assignment.package.deliveryDistrict]
+        .filter(Boolean)
+        .join(" · "),
+      codExpectedPaisa: a.assignment.package.codAmountPaisa.toString(),
+    }));
+
+  const openBatch = batches.find((b) => b.status === "OPEN" || b.status === "IN_PROGRESS") ?? null;
+  let currentBatch: RiderHomeToday["currentBatch"] = null;
+  if (openBatch) {
+    const { assignments } = await getRiderBatch(actor, openBatch.id);
+    const next = assignments.find(
+      (a) => a.status === "PENDING" || a.status === "ACCEPTED" || a.status === "IN_PROGRESS",
+    );
+    currentBatch = {
+      batch: openBatch,
+      nextStop: next
+        ? {
+            assignmentId: next.id,
+            trackingId: next.trackingId,
+            status: next.status,
+            recipientName: next.recipientName,
+            recipientArea: [next.destinationCity, next.destinationDistrict]
+              .filter(Boolean)
+              .join(" · "),
+            codExpectedPaisa: next.codExpectedPaisa,
+          }
+        : null,
+    };
+  }
+
+  return {
+    date: day,
+    assigned: assignmentRows.length,
+    delivered,
+    remaining,
+    failedAttemptsNeedingAction: failedAttempts.length,
+    failedAttempts,
+    codExpectedPaisa: codExpected.toString(),
+    codCollectedPaisa: codCollected.toString(),
+    currentBatch,
+  };
+}
+
 export { DELIVERY_ASSIGNMENT_STATUSES };
