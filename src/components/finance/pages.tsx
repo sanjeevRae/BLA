@@ -4,6 +4,7 @@ import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { formatDateTime, formatPaisa, StatusBadge } from "@/components/bookings/ui";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import { getFinanceOverview, listFinanceVendors, listLedgerEntries } from "@/server/services/finance-overview";
+import { getFinanceHome } from "@/server/services/finance-home";
 import { getInvoice, listInvoices } from "@/server/services/invoices";
 import { getRemittance, getRiderCodPosition, listRemittances } from "@/server/services/cod-remittances";
 import { getSettlement, getVendorStatement, listSettlements } from "@/server/services/settlements";
@@ -76,37 +77,266 @@ function StatTile({ label, value, sub }: { label: string; value: string; sub?: s
 // ---------------------------------------------------------------------------
 
 export async function FinanceHomePage({ actor }: { actor: ActorContext }) {
-  const overview = await getFinanceOverview(actor);
+  const home = await getFinanceHome(actor);
+  const attention = home.attention;
+  const nothingWaiting =
+    attention.remittancesAwaitingVerification.count === 0 &&
+    attention.remittancesInDiscrepancy.count === 0 &&
+    attention.adjustmentsRequested.count === 0 &&
+    attention.refundsRequested.count === 0 &&
+    attention.settlementsAwaitingAdminApproval.count === 0;
   return (
     <div className="grid gap-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <PageHeader eyebrow="Finance" title="Finance dashboard" />
         <FinanceNav basePath="/finance" />
       </div>
-      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+
+      <SectionCard title="Needs attention">
+        {nothingWaiting ? (
+          <p className="text-[13px] text-slate2">
+            Nothing is waiting on Finance right now. New remittances, discrepancies and
+            adjustment or refund requests appear here as they arrive.
+          </p>
+        ) : (
+          <div className="grid gap-2">
+            {attention.remittancesAwaitingVerification.items.map((item) => (
+              <div
+                key={item.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]"
+              >
+                <span className="text-ink">
+                  Remittance {item.remittanceNumber} — {formatPaisa(item.declaredAmountPaisa)} declared,
+                  awaiting verification
+                </span>
+                <Link href={`/finance/remittances/${item.id}`} className="font-semibold text-brand">
+                  Verify →
+                </Link>
+              </div>
+            ))}
+            {attention.remittancesAwaitingVerification.count >
+            attention.remittancesAwaitingVerification.items.length ? (
+              <p className="text-[12px] text-slate2">
+                {attention.remittancesAwaitingVerification.count} remittances awaiting verification in
+                total — see the{" "}
+                <Link href="/finance/remittances" className="font-semibold text-brand">
+                  remittances queue
+                </Link>
+                .
+              </p>
+            ) : null}
+            {attention.remittancesInDiscrepancy.items.map((item) => (
+              <div
+                key={item.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-redbg px-3 py-2 text-[13px]"
+              >
+                <span className="text-ink">
+                  Remittance {item.remittanceNumber} — COD discrepancy
+                  {item.discrepancyPaisa ? ` of ${formatPaisa(item.discrepancyPaisa)}` : ""}
+                </span>
+                <Link href={`/finance/remittances/${item.id}`} className="font-semibold text-brand">
+                  Resolve →
+                </Link>
+              </div>
+            ))}
+            {attention.adjustmentsRequested.items.map((item) => (
+              <div
+                key={item.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]"
+              >
+                <span className="text-ink">
+                  Adjustment — {item.targetType} · {formatPaisa(item.amountPaisa)} · {item.reason}
+                  {item.awaiting === "AWAITING_ANOTHER_APPROVER" ? (
+                    <span className="text-slate2">
+                      {" "}
+                      · you created this, so it awaits another approver (four-eyes)
+                    </span>
+                  ) : item.awaiting === "ACTIONABLE_BY_ACTOR" ? (
+                    <span className="text-slate2"> · awaiting a decision</span>
+                  ) : (
+                    <span className="text-slate2"> · awaiting an approver</span>
+                  )}
+                </span>
+                <Link href="/finance/adjustments" className="font-semibold text-brand">
+                  Review →
+                </Link>
+              </div>
+            ))}
+            {attention.refundsRequested.items.map((item) => (
+              <div
+                key={item.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]"
+              >
+                <span className="text-ink">
+                  Refund — {formatPaisa(item.amountPaisa)} · {item.reason}
+                  {item.awaiting === "AWAITING_ANOTHER_APPROVER" ? (
+                    <span className="text-slate2">
+                      {" "}
+                      · you requested this, so it awaits another approver (four-eyes)
+                    </span>
+                  ) : item.awaiting === "ACTIONABLE_BY_ACTOR" ? (
+                    <span className="text-slate2"> · awaiting a decision</span>
+                  ) : (
+                    <span className="text-slate2"> · awaiting an approver</span>
+                  )}
+                </span>
+                <Link href="/finance/adjustments" className="font-semibold text-brand">
+                  Review →
+                </Link>
+              </div>
+            ))}
+            {attention.settlementsAwaitingAdminApproval.count > 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
+                <span className="text-ink">
+                  {attention.settlementsAwaitingAdminApproval.count} settlement(s) awaiting approval —{" "}
+                  {formatPaisa(attention.settlementsAwaitingAdminApproval.netPayablePaisa)} net payable.
+                  Approval sits with Admin / Super Admin, so this is read-only here.
+                </span>
+                <Link href="/finance/settlements" className="font-semibold text-brand">
+                  View →
+                </Link>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </SectionCard>
+
+      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <StatTile
-          label="Open invoices"
-          value={String(overview.openInvoices.count)}
-          sub={`${formatPaisa(overview.openInvoices.outstandingPaisa)} outstanding`}
+          label={`Revenue (${home.metrics.revenueRange.from} – ${home.metrics.revenueRange.to})`}
+          value={formatPaisa(home.metrics.revenueLast30DaysPaisa)}
+          sub="Shipping revenue from the ledger — COD is never revenue"
         />
         <StatTile
-          label="Remittances to verify"
-          value={String(overview.remittancesAwaitingVerification)}
-          sub={`${overview.remittancesInDiscrepancy} in discrepancy`}
+          label="Outstanding receivables"
+          value={formatPaisa(home.metrics.outstandingReceivablesPaisa)}
+          sub={`${home.metrics.openInvoicesCount} open invoices`}
         />
+        <StatTile label="COD collected" value={formatPaisa(home.metrics.codCollectedPaisa)} />
         <StatTile
-          label="Settlements pending"
-          value={String(overview.settlementsPending.count)}
-          sub={`${formatPaisa(overview.settlementsPending.netPayablePaisa)} net`}
+          label="COD held by riders"
+          value={formatPaisa(home.metrics.codHeldByRidersPaisa)}
+          sub="Collected, not yet verified as remitted"
         />
+        <StatTile label="COD remitted (verified)" value={formatPaisa(home.metrics.codRemittedVerifiedPaisa)} />
         <StatTile
-          label="Approved, unpaid"
-          value={String(overview.settlementsApprovedUnpaid.count)}
-          sub={`${formatPaisa(overview.settlementsApprovedUnpaid.netPayablePaisa)} net payable`}
+          label="Vendor payable"
+          value={formatPaisa(home.metrics.vendorPayablePaisa)}
+          sub="Pending + approved-unpaid settlements"
         />
-        <StatTile label="Refunds requested" value={String(overview.refundsRequested)} />
-        <StatTile label="Adjustments requested" value={String(overview.adjustmentsRequested)} />
       </dl>
+
+      <SectionCard title="Current operations">
+        <div className="grid gap-2 text-[13px]">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2">
+            <span className="text-ink">
+              Settlements queue — {home.operationsToday.settlementsPending.count} pending (
+              {formatPaisa(home.operationsToday.settlementsPending.netPayablePaisa)} net),{" "}
+              {home.operationsToday.settlementsApprovedUnpaid.count} approved and unpaid (
+              {formatPaisa(home.operationsToday.settlementsApprovedUnpaid.netPayablePaisa)} net)
+            </span>
+            <Link href="/finance/settlements" className="font-semibold text-brand">
+              Settlements →
+            </Link>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2">
+            <span className="text-ink">
+              Invoices issued today — {home.operationsToday.invoicesIssued.count} ·{" "}
+              {formatPaisa(home.operationsToday.invoicesIssued.totalPaisa)}
+            </span>
+            <Link href="/finance/invoices" className="font-semibold text-brand">
+              Invoices →
+            </Link>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2">
+            <span className="text-ink">
+              Payments today — {home.operationsToday.paymentsReceived.count} ·{" "}
+              {formatPaisa(home.operationsToday.paymentsReceived.totalPaisa)}
+            </span>
+            <Link href="/finance/ledger" className="font-semibold text-brand">
+              Ledger →
+            </Link>
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Recent activity">
+        {home.recentLedger.length === 0 && home.recentPayments.length === 0 ? (
+          <p className="text-[13px] text-slate2">No ledger entries or payments yet.</p>
+        ) : (
+          <div className="grid gap-4">
+            {home.recentLedger.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[13px]">
+                  <thead>
+                    <tr className="text-slate2">
+                      <th className="py-1 pr-3 font-medium">Reference</th>
+                      <th className="py-1 pr-3 font-medium">Account</th>
+                      <th className="py-1 pr-3 font-medium">Type</th>
+                      <th className="py-1 pr-3 font-medium">Debit</th>
+                      <th className="py-1 pr-3 font-medium">Credit</th>
+                      <th className="py-1 font-medium">When</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {home.recentLedger.map((entry) => (
+                      <tr key={entry.id} className="border-t border-line">
+                        <td className="py-1.5 pr-3 font-medium text-ink">{entry.reference}</td>
+                        <td className="py-1.5 pr-3">{entry.accountCode}</td>
+                        <td className="py-1.5 pr-3">{entry.type}</td>
+                        <td className="tnum py-1.5 pr-3">
+                          {entry.direction === "DEBIT" ? formatPaisa(entry.amountPaisa) : "—"}
+                        </td>
+                        <td className="tnum py-1.5 pr-3">
+                          {entry.direction === "CREDIT" ? formatPaisa(entry.amountPaisa) : "—"}
+                        </td>
+                        <td className="py-1.5">{formatDateTime(entry.occurredAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            {home.recentPayments.length > 0 ? (
+              <div className="grid gap-2">
+                {home.recentPayments.map((payment) => (
+                  <div
+                    key={payment.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]"
+                  >
+                    <span className="text-ink">
+                      Payment {formatPaisa(payment.amountPaisa)} · {payment.method} ·{" "}
+                      {formatDateTime(payment.createdAt)}
+                    </span>
+                    <StatusBadge status={payment.status} />
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Quick actions">
+        <div className="flex flex-wrap gap-2">
+          <Link href="/finance/invoices" className={subtleButtonClass}>
+            Generate invoice →
+          </Link>
+          <Link href="/finance/remittances" className={subtleButtonClass}>
+            Verify a remittance →
+          </Link>
+          <Link href="/finance/adjustments" className={subtleButtonClass}>
+            Adjustments & refunds →
+          </Link>
+          <Link href="/finance/tasks" className={subtleButtonClass}>
+            Tasks →
+          </Link>
+          <Link href="/finance/reports" className={subtleButtonClass}>
+            Financial reports →
+          </Link>
+        </div>
+      </SectionCard>
+
       <SectionCard title="Account balances (derived from the ledger)">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-[13px]">
@@ -119,7 +349,7 @@ export async function FinanceHomePage({ actor }: { actor: ActorContext }) {
               </tr>
             </thead>
             <tbody>
-              {overview.accounts.map((account) => (
+              {home.accounts.map((account) => (
                 <tr key={account.id} className="border-t border-line">
                   <td className="py-1.5 pr-3 font-medium text-ink">{account.code}</td>
                   <td className="py-1.5 pr-3">{account.kind}</td>
