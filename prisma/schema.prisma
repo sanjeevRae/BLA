@@ -870,6 +870,7 @@ model OrderItem {
   order        Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
   packageItems PackageItem[]
 
+  @@index([orderId])
   @@schema("app")
 }
 
@@ -1016,6 +1017,8 @@ model PackageItem {
   package   Package    @relation(fields: [packageId], references: [id], onDelete: Cascade)
   orderItem OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
 
+  @@index([packageId])
+  @@index([orderItemId])
   @@schema("app")
 }
 
@@ -1037,6 +1040,7 @@ model PackageLabel {
   package       Package @relation(fields: [packageId], references: [id], onDelete: Restrict)
   lastPrintedBy User?   @relation("PackageLabelPrintedBy", fields: [lastPrintedById], references: [id], onDelete: Restrict)
 
+  @@index([packageId])
   @@schema("app")
 }
 
@@ -2096,6 +2100,12 @@ model Payment {
   status          String    @default("PAID")
   transactionRef  String?
   idempotencyKey  String?   @unique
+  /// Phase 2 (V2): SHA-256 fingerprint of the canonical payment
+  /// payload recorded under `idempotencyKey`. A replay with the same
+  /// key but a different payload is rejected; the same payload
+  /// returns the original payment. Null on rows recorded before the
+  /// fingerprint existed (replays of those return the original).
+  requestFingerprint String?
   gatewayProvider String?
   paidAt          DateTime?
   recordedById    String
