@@ -391,6 +391,7 @@ export function PutAwayForm({
         className={`${inputClass} w-[220px]`}
         value={locationId}
         onChange={(e) => setLocationId(e.target.value)}
+        aria-label="Storage location"
       >
         <option value="">Storage location…</option>
         {usable.map((l) => (
@@ -431,6 +432,7 @@ export function MoveInternalForm({
         className={`${inputClass} w-[200px]`}
         value={locationId}
         onChange={(e) => setLocationId(e.target.value)}
+        aria-label="Move to location"
       >
         <option value="">Move to…</option>
         {locations
@@ -445,6 +447,7 @@ export function MoveInternalForm({
         className={`${inputClass} w-[170px]`}
         value={reason}
         onChange={(e) => setReason(e.target.value)}
+        aria-label="Move reason"
         placeholder={correction ? "Reason (required)" : "Reason (optional)"}
       />
       <label className="inline-flex items-center gap-1 text-[12px] text-slate2">
@@ -493,6 +496,7 @@ export function ReadyForDispatchForm({
         className={`${inputClass} w-[200px]`}
         value={locationId}
         onChange={(e) => setLocationId(e.target.value)}
+        aria-label="Dispatch staging location (optional)"
       >
         <option value="">Dispatch staging (optional)…</option>
         {dispatchLocations.map((l) => (

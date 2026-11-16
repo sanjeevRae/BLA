@@ -427,6 +427,7 @@ export function BookingApprovalControls({ booking }: { booking: BookingView }) {
         className={inputClass}
         style={{ maxWidth: 260 }}
         placeholder="Rejection reason"
+        aria-label="Rejection reason"
         value={reason}
         onChange={(e) => setReason(e.target.value)}
       />
@@ -460,6 +461,7 @@ export function BookingCancelControl({ booking }: { booking: BookingView }) {
         className={inputClass}
         style={{ maxWidth: 260 }}
         placeholder="Cancellation reason"
+        aria-label="Cancellation reason"
         value={reason}
         onChange={(e) => setReason(e.target.value)}
       />

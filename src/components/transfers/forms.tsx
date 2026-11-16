@@ -229,6 +229,7 @@ export function AddItemsForm({
                 <td className="px-3 py-2">
                   <input
                     type="checkbox"
+                    aria-label={`Select package ${pkg.trackingId} for the transfer`}
                     checked={selected.has(pkg.id)}
                     onChange={() => toggle(pkg.id)}
                   />
@@ -586,6 +587,7 @@ export function LoadScanForm({ transferId }: { transferId: string }) {
           value={trackingId}
           onChange={(e) => setTrackingId(e.target.value)}
           placeholder="Scan or type tracking ID"
+          aria-label="Tracking ID to load"
           required
         />
         <button type="submit" className={primaryButtonClass} disabled={busy}>
@@ -703,6 +705,7 @@ export function DestinationScanForm({ transferId }: { transferId: string }) {
           value={trackingId}
           onChange={(e) => setTrackingId(e.target.value)}
           placeholder="Scan or type tracking ID"
+          aria-label="Tracking ID to receive"
           required
         />
         <button type="submit" className={primaryButtonClass} disabled={busy}>
@@ -904,6 +907,7 @@ export function ReplaceDriverForm({
           className={inputClass}
           value={driverId}
           onChange={(e) => setDriverId(e.target.value)}
+          aria-label="Replacement driver"
         >
           <option value="">Replace driver with…</option>
           {drivers
@@ -918,6 +922,7 @@ export function ReplaceDriverForm({
         <input
           className={inputClass}
           placeholder="Reason (required)"
+          aria-label="Driver replacement reason"
           value={reason}
           onChange={(e) => setReason(e.target.value)}
         />

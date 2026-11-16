@@ -77,6 +77,7 @@ export function DetailedTrackGate({ trackingId }: { trackingId: string }) {
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
           placeholder="Recipient phone, e.g. 98XXXXXXXX"
+          aria-label="Recipient phone number"
           inputMode="tel"
           required
         />

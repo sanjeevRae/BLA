@@ -239,6 +239,7 @@ export function DriverAssignmentIncidentForm({
         value={description}
         onChange={(e) => setDescription(e.target.value)}
         placeholder="What happened?"
+        aria-label="Problem description"
         required
         minLength={5}
       />
@@ -324,6 +325,7 @@ export function DriverTripIncidentForm({
         value={description}
         onChange={(e) => setDescription(e.target.value)}
         placeholder="What happened?"
+        aria-label="Problem description"
         required
         minLength={5}
       />
@@ -416,6 +418,7 @@ export function IncidentFollowUpTaskForm({
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Task title (defaults to “Follow up incident …”)"
+        aria-label="Follow-up task title (optional)"
         minLength={3}
       />
       <Feedback error={error} notice={notice} />
@@ -475,7 +478,7 @@ export function IncidentWorkflowForms({
         >
           <span className={labelClass}>Assign to</span>
           <div className="flex gap-2">
-            <select className={inputClass} value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} required>
+            <select className={inputClass} value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} required aria-label="Assign incident to">
               <option value="">Select staff…</option>
               {users.map((u) => (
                 <option key={u.id} value={u.id}>{u.fullName} ({u.roles.join(", ")})</option>
@@ -498,7 +501,7 @@ export function IncidentWorkflowForms({
           }}
         >
           <span className={labelClass}>Investigation note</span>
-          <textarea className={inputClass} rows={2} value={note} onChange={(e) => setNote(e.target.value)} required />
+          <textarea className={inputClass} rows={2} value={note} onChange={(e) => setNote(e.target.value)} required aria-label="Investigation note" />
           <label className="flex items-center gap-2 text-[13px] text-ink">
             <input type="checkbox" checked={awaiting} onChange={(e) => setAwaiting(e.target.checked)} />
             We are waiting for information from someone else
@@ -519,7 +522,7 @@ export function IncidentWorkflowForms({
         >
           <span className={labelClass}>Escalate (raises severity, notifies Admin)</span>
           <div className="flex gap-2">
-            <input className={inputClass} value={escalationReason} onChange={(e) => setEscalationReason(e.target.value)} placeholder="Why is this being escalated?" required minLength={3} />
+            <input className={inputClass} value={escalationReason} onChange={(e) => setEscalationReason(e.target.value)} placeholder="Why is this being escalated?" required minLength={3} aria-label="Escalation reason" />
             <button type="submit" className={subtleButtonClass} disabled={busy || escalationReason.trim().length < 3}>Escalate</button>
           </div>
         </form>
@@ -534,7 +537,7 @@ export function IncidentWorkflowForms({
           }}
         >
           <span className={labelClass}>Propose resolution</span>
-          <textarea className={inputClass} rows={2} value={resolution} onChange={(e) => setResolution(e.target.value)} required minLength={5} />
+          <textarea className={inputClass} rows={2} value={resolution} onChange={(e) => setResolution(e.target.value)} required minLength={5} aria-label="Proposed resolution" />
           <div>
             <button type="submit" className={subtleButtonClass} disabled={busy || resolution.trim().length < 5}>Propose resolution</button>
           </div>

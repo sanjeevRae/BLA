@@ -305,6 +305,7 @@ export function CancelAssignmentButton({ assignmentId }: { assignmentId: string 
       <input
         className={inputClass}
         placeholder="Cancel reason"
+        aria-label="Cancel reason"
         value={reason}
         onChange={(e) => setReason(e.target.value)}
       />
@@ -350,6 +351,7 @@ export function ReassignForm({
         className={inputClass}
         value={riderUserId}
         onChange={(e) => setRiderUserId(e.target.value)}
+        aria-label="Reassign to rider"
       >
         <option value="">Reassign to…</option>
         {riders.map((r) => (
@@ -422,6 +424,7 @@ export function ReassignBatchForm({
           className={inputClass}
           value={riderUserId}
           onChange={(e) => setRiderUserId(e.target.value)}
+          aria-label="Reassign whole batch to rider"
         >
           <option value="">Reassign whole batch to…</option>
           {riders
@@ -436,6 +439,7 @@ export function ReassignBatchForm({
         <input
           className={inputClass}
           placeholder="Reason (required)"
+          aria-label="Reassignment reason"
           value={reason}
           onChange={(e) => setReason(e.target.value)}
         />
@@ -818,6 +822,7 @@ export function PickupFailedForm({ assignmentId }: { assignmentId: string }) {
         <input
           className={inputClass}
           placeholder="Pickup failed — reason (sender unavailable, not ready…)"
+          aria-label="Pickup failure reason"
           value={reason}
           onChange={(e) => setReason(e.target.value)}
         />
