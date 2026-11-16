@@ -22,6 +22,7 @@ import {
   scanBackPackageAction,
 } from "@/server/actions/deliveries";
 import { PACKAGE_CONDITIONS } from "@/lib/bookings/domain";
+import { sendTrackingEventUpdate } from "@/lib/tracking/client-registry";
 import {
   DELIVERY_ATTEMPT_RESULTS,
   DELIVERY_CONTACT_OUTCOMES,
@@ -530,6 +531,7 @@ export function PickupForm({
       setError(result.error);
       return;
     }
+    sendTrackingEventUpdate();
     setCodes(result.data.taken.map((t) => ({ trackingId: t.trackingId, otpExpiresAt: t.otpExpiresAt })));
     const extra: string[] = [];
     if (result.data.shortages.length > 0) {
@@ -633,6 +635,7 @@ export function AttemptForm({ assignment }: { assignment: RiderAssignmentView })
       setError(res.error);
       return;
     }
+    sendTrackingEventUpdate();
     setNotice(
       res.data.returnRequest
         ? `Attempt ${res.data.attemptNumber} recorded. Return ${res.data.returnRequest.returnNumber} initiated — bring the package back to the warehouse.`
@@ -747,6 +750,7 @@ export function DeliverForm({ assignment }: { assignment: RiderAssignmentView })
       setError(res.error);
       return;
     }
+    sendTrackingEventUpdate();
     setNotice(
       res.data.cod
         ? `Delivered. COD ${res.data.cod.status}: collected ${formatPaisa(BigInt(res.data.cod.collectedPaisa))} of ${formatPaisa(BigInt(res.data.cod.expectedPaisa))}.`

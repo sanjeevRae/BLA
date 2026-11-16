@@ -24,6 +24,19 @@ export interface TrackingConfig {
   maxAccuracyMeters: number;
   futureTimestampToleranceSeconds: number;
   preStartToleranceSeconds: number;
+  /** Phase 4 client cadence: how often a moving rider's device
+   *  reports (spec §5.4: ~2–3 min). Consumed by the driver panel
+   *  via GET /api/tracking/session/current — the server config is
+   *  the single source of truth; the client never hardcodes it. */
+  riderMovingIntervalSeconds: number;
+  /** Phase 4 client cadence: moving line-haul driver (~3–5 min). */
+  linehaulMovingIntervalSeconds: number;
+  /** Phase 4 client cadence: stationary heartbeat (~10 min) — a
+   *  device that has not moved still proves it is alive. */
+  stationaryHeartbeatSeconds: number;
+  /** Phase 4 client cadence: minimum movement (metres) from the
+   *  last reported fix before a fix counts as "moved". */
+  movementThresholdMeters: number;
 }
 
 export const TRACKING_CONFIG_DEFAULTS: TrackingConfig = {
@@ -36,6 +49,10 @@ export const TRACKING_CONFIG_DEFAULTS: TrackingConfig = {
   maxAccuracyMeters: 10000,
   futureTimestampToleranceSeconds: 300,
   preStartToleranceSeconds: 60,
+  riderMovingIntervalSeconds: 150,
+  linehaulMovingIntervalSeconds: 240,
+  stationaryHeartbeatSeconds: 600,
+  movementThresholdMeters: 25,
 };
 
 /** Per-field sanity bounds: a stored value outside its range is
@@ -60,6 +77,13 @@ const FIELD_RULES: Readonly<
   maxAccuracyMeters: { integer: false, min: 50, max: 100000 },
   futureTimestampToleranceSeconds: { integer: true, min: 10, max: 3600 },
   preStartToleranceSeconds: { integer: true, min: 5, max: 3600 },
+  // Client cadence floors/caps: a moving interval below the
+  // server ping floor would just generate 429s, and an interval
+  // or heartbeat beyond an hour defeats live operations.
+  riderMovingIntervalSeconds: { integer: true, min: 30, max: 3600 },
+  linehaulMovingIntervalSeconds: { integer: true, min: 30, max: 3600 },
+  stationaryHeartbeatSeconds: { integer: true, min: 60, max: 3600 },
+  movementThresholdMeters: { integer: false, min: 5, max: 1000 },
 };
 
 function saneValue(
@@ -91,6 +115,34 @@ export function resolveTrackingConfig(raw: unknown): TrackingConfig {
     resolved[field] = saneValue(field, source[field], TRACKING_CONFIG_DEFAULTS[field]);
   }
   return resolved;
+}
+
+/** The subset of the tracking config the driver client needs to
+ *  pace itself. Served by GET /api/tracking/session/current so the
+ *  server stays the single source of truth for cadence. */
+export interface TrackingClientConfig {
+  minPingIntervalSeconds: number;
+  /** Moving-report interval per tracking type (seconds). */
+  movingIntervalSeconds: { PICKUP: number; DELIVERY: number; LINEHAUL: number };
+  stationaryHeartbeatSeconds: number;
+  movementThresholdMeters: number;
+  freshWithinSeconds: number;
+  delayedWithinSeconds: number;
+}
+
+export function toTrackingClientConfig(config: TrackingConfig): TrackingClientConfig {
+  return {
+    minPingIntervalSeconds: config.minPingIntervalSeconds,
+    movingIntervalSeconds: {
+      PICKUP: config.riderMovingIntervalSeconds,
+      DELIVERY: config.riderMovingIntervalSeconds,
+      LINEHAUL: config.linehaulMovingIntervalSeconds,
+    },
+    stationaryHeartbeatSeconds: config.stationaryHeartbeatSeconds,
+    movementThresholdMeters: config.movementThresholdMeters,
+    freshWithinSeconds: config.freshWithinSeconds,
+    delayedWithinSeconds: config.delayedWithinSeconds,
+  };
 }
 
 /**

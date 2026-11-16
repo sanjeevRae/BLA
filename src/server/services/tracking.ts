@@ -18,7 +18,9 @@ import {
 import {
   computeFreshness,
   resolveTrackingConfig,
+  toTrackingClientConfig,
   TRACKING_CONFIG_SETTING_KEY,
+  type TrackingClientConfig,
   type TrackingConfig,
 } from "@/lib/tracking/config";
 import {
@@ -812,6 +814,184 @@ export async function resumeTrackingSession(
     warehouseId: session.originWarehouseId,
   });
   return toTrackingSessionView(updated);
+}
+
+// ---------------------------------------------------------------------------
+// Own tracking state (Phase 4 driver panel)
+// ---------------------------------------------------------------------------
+
+/** An assignment the actor could start tracking right now. Own
+ *  data only: the assignment belongs to the actor's driver profile
+ *  by construction of the queries below. No package, recipient, or
+ *  other-driver fields are included. */
+export interface OwnTrackingAssignmentSummary {
+  kind: "TRIP" | "BATCH";
+  tripId: string | null;
+  deliveryBatchId: string | null;
+  trackingType: string;
+  label: string;
+  originWarehouseCode: string;
+  originWarehouseName: string;
+  destinationWarehouseCode: string | null;
+  destinationWarehouseName: string | null;
+  status: string;
+  packageCount: number;
+  completedCount: number | null;
+}
+
+export interface OwnTrackingLastPing {
+  recordedAt: string;
+  receivedAt: string;
+  accuracyMeters: number;
+  freshnessState: string;
+}
+
+export interface OwnTrackingState {
+  /** The actor's most recent session in any state, or null. The
+   *  panel derives its display from this plus eligibility: an
+   *  ACTIVE/PAUSED session is live; an ENDED one is shown with its
+   *  end reason unless a fresh assignment is waiting to start. */
+  session: TrackingSessionView | null;
+  /** Summary of the live (ACTIVE/PAUSED) session's own assignment,
+   *  when that assignment is still in a trackable state. */
+  sessionAssignment: OwnTrackingAssignmentSummary | null;
+  eligibleAssignments: OwnTrackingAssignmentSummary[];
+  lastPing: OwnTrackingLastPing | null;
+  clientConfig: TrackingClientConfig;
+}
+
+/**
+ * Everything the driver/rider tracking panel needs, for the actor
+ * and nobody else: identity comes from the authenticated session
+ * (actor.driverId), every query is keyed by it, and the response
+ * carries no other driver's data and no recipient PII.
+ */
+export async function getOwnTrackingState(
+  actor: ActorContext,
+): Promise<OwnTrackingState> {
+  await requirePermAudited(actor, "tracking.manage_own", "TrackingSession");
+  const config = await loadTrackingConfig();
+  const clientConfig = toTrackingClientConfig(config);
+  if (!actor.driverId) {
+    return {
+      session: null,
+      sessionAssignment: null,
+      eligibleAssignments: [],
+      lastPing: null,
+      clientConfig,
+    };
+  }
+  const driverId = actor.driverId;
+  const now = new Date();
+
+  const session = await prisma.trackingSession.findFirst({
+    where: { driverId },
+    orderBy: { startedAt: "desc" },
+  });
+  const liveSession =
+    session && (session.status === "ACTIVE" || session.status === "PAUSED")
+      ? session
+      : null;
+
+  const [trips, batches] = await Promise.all([
+    prisma.trip.findMany({
+      where: {
+        driverId,
+        status: { in: [...ACTIVE_TRIP_STATUSES_FOR_TRACKING] },
+      },
+      include: {
+        transfer: {
+          include: {
+            originWarehouse: { select: { code: true, name: true } },
+            destinationWarehouse: { select: { code: true, name: true } },
+            _count: { select: { items: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.deliveryBatch.findMany({
+      where: {
+        riderId: driverId,
+        status: { in: [...ACTIVE_BATCH_STATUSES_FOR_TRACKING] },
+      },
+      include: {
+        warehouse: { select: { code: true, name: true } },
+        assignments: { select: { completedAt: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
+  const eligibleAssignments: OwnTrackingAssignmentSummary[] = [];
+  let sessionAssignment: OwnTrackingAssignmentSummary | null = null;
+  for (const trip of trips) {
+    const summary: OwnTrackingAssignmentSummary = {
+      kind: "TRIP",
+      tripId: trip.id,
+      deliveryBatchId: null,
+      trackingType: "LINEHAUL",
+      label: trip.tripNumber,
+      originWarehouseCode: trip.transfer.originWarehouse.code,
+      originWarehouseName: trip.transfer.originWarehouse.name,
+      destinationWarehouseCode: trip.transfer.destinationWarehouse.code,
+      destinationWarehouseName: trip.transfer.destinationWarehouse.name,
+      status: trip.status,
+      packageCount: trip.transfer._count.items,
+      completedCount: null,
+    };
+    if (liveSession && liveSession.tripId === trip.id) sessionAssignment = summary;
+    else eligibleAssignments.push(summary);
+  }
+  for (const batch of batches) {
+    const summary: OwnTrackingAssignmentSummary = {
+      kind: "BATCH",
+      tripId: null,
+      deliveryBatchId: batch.id,
+      trackingType: batch.kind === "PICKUP" ? "PICKUP" : "DELIVERY",
+      label: `${batch.warehouse.code} · ${batch.batchDate.toISOString().slice(0, 10)}`,
+      originWarehouseCode: batch.warehouse.code,
+      originWarehouseName: batch.warehouse.name,
+      destinationWarehouseCode: null,
+      destinationWarehouseName: null,
+      status: batch.status,
+      packageCount: batch.assignments.length,
+      completedCount: batch.assignments.filter((a) => a.completedAt !== null).length,
+    };
+    if (liveSession && liveSession.deliveryBatchId === batch.id) {
+      sessionAssignment = summary;
+    } else {
+      eligibleAssignments.push(summary);
+    }
+  }
+
+  let lastPing: OwnTrackingLastPing | null = null;
+  if (session) {
+    const snapshot = await prisma.driverCurrentLocation.findUnique({
+      where: { driverId },
+    });
+    if (snapshot && snapshot.trackingSessionId === session.id) {
+      lastPing = {
+        recordedAt: snapshot.lastRecordedAt.toISOString(),
+        receivedAt: snapshot.lastReceivedAt.toISOString(),
+        accuracyMeters: snapshot.accuracyMeters,
+        freshnessState: computeFreshness({
+          sessionStatus: session.status,
+          lastReceivedAt: snapshot.lastReceivedAt,
+          now,
+          config,
+        }),
+      };
+    }
+  }
+
+  return {
+    session: session ? toTrackingSessionView(session) : null,
+    sessionAssignment,
+    eligibleAssignments,
+    lastPing,
+    clientConfig,
+  };
 }
 
 // ---------------------------------------------------------------------------

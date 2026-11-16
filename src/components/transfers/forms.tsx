@@ -29,6 +29,7 @@ import {
   resumeTripAction,
 } from "@/server/actions/transfers";
 import { PACKAGE_CONDITIONS } from "@/lib/bookings/domain";
+import { sendTrackingEventUpdate } from "@/lib/tracking/client-registry";
 import {
   ErrorBox,
   inputClass,
@@ -867,7 +868,13 @@ export function TripProgressForms({ tripId, status }: { tripId: string; status: 
             type="button"
             className={primaryButtonClass}
             disabled={busy}
-            onClick={() => run(() => departTripAction(tripId))}
+            onClick={() =>
+              run(async () => {
+                const r = await departTripAction(tripId);
+                if (r.success) sendTrackingEventUpdate();
+                return r;
+              })
+            }
           >
             Record departure
           </button>
@@ -877,7 +884,13 @@ export function TripProgressForms({ tripId, status }: { tripId: string; status: 
             type="button"
             className={primaryButtonClass}
             disabled={busy}
-            onClick={() => run(() => arriveTripAction(tripId))}
+            onClick={() =>
+              run(async () => {
+                const r = await arriveTripAction(tripId);
+                if (r.success) sendTrackingEventUpdate();
+                return r;
+              })
+            }
           >
             Record arrival at destination
           </button>
