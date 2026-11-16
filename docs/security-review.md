@@ -314,3 +314,84 @@ payloads carry no recipient names/phones/addresses in keys or
 values (fixture packages carried distinctive PII); the seven
 roles without `operations.live_view` get no registry item on any
 dashboard and are denied by the service on both read paths.
+
+## V2 Phase 6 — Per-role dashboards, identity surfaces, four-eyes invitations (independent review, 2026-11-16)
+
+Scope: every role home (spec §7), the Super Admin Users & Roles /
+Settings / Audit Logs surfaces, the privileged-invitation
+four-eyes flow, and the Warehouse Admin fleet + booking-create
+surfaces. The builder-independent reviewer ran 32 adversarial
+PoCs (`tests/integration/phase6-security-review.test.ts`, kept as
+a regression suite) against dashboard metric scoping, privilege
+escalation through the identity surfaces, Settings writes, the
+four-eyes flow, and vendor/customer isolation. Verdict: **no High
+findings; 5 Medium and 4 Low, all fixed in-phase, PoC suite 32/32
+after fixes.** Verified holding throughout: Users & Roles
+projections leak no secrets (a planted marker secret never
+appears), last-active-Super-Admin protection, settings writes
+gated/validated/audited, the four-eyes race resolves to exactly
+one winner with one audit row, the audit viewer resists all
+widening attempts, and warehouse/vendor/customer/rider isolation
+on the new homes.
+
+- **F1 (Medium)** — `getWarehouseHomeSummary` had no permission
+  gate; `isUnscoped()` resolves to `warehouse.read_all`, held by
+  FINANCE/SUPPORT, leaking any warehouse's operational data to
+  them. Fixed: operations gate (`inventory.read_all` or
+  `inventory.read_warehouse`, audited denial) before any read.
+- **F2 (Medium)** — `createBooking`'s dropoff scope check was
+  conditioned on a non-empty membership list, so a
+  WAREHOUSE_ADMIN-role holder with NO membership (reachable via
+  the new role-assignment surface) was treated as unscoped and
+  could drop off anywhere. Fixed together with F3.
+- **F3 (Medium)** — a RIDER_PICKUP booking's derived origin
+  (from the vendor pickup address) had no scope check, letting a
+  Warehouse Admin inject bookings into another warehouse via any
+  approved vendor. Fixed: one chokepoint in `createBookingOnce`
+  after origin resolution on all paths — non-vendor actors
+  without `booking.read_all` must hold the origin warehouse in
+  membership; denial audited; the pre-existing dropoff check is
+  kept.
+- **F4 (Medium)** — Phase 6's `listIncidents` customer branch
+  (`order.customerId`) was wider than the canonical
+  `incidentVisibleTo` rule, exposing staff-filed incidents on the
+  sender's own orders that the detail read refuses. Fixed: order
+  branch removed; package-recipient + reporter branches only.
+- **F5 (Medium, pre-existing)** — `reactivateUser` lacked
+  `suspendUser`'s Super Admin guard, so an ADMIN could
+  reactivate a suspended SUPER_ADMIN. Fixed: guard mirrored
+  exactly.
+- **F6 (Low)** — `getAdminHome` had no top-level gate; a
+  Warehouse Admin caller received the global active-driver count
+  (its own gate is only `driver.assign`, counted globally).
+  Fixed: `report.read_all` + `booking.read_all` required up
+  front with audited denials (FINANCE passes that gate but is
+  still refused overall by the daily report's finance scope
+  rule).
+- **F7 (Low, pre-existing service gap surfaced by the M-4 UI)**
+  — `assignVehicleDriver` had no warehouse scope, so a Warehouse
+  Admin could assign drivers to vehicles homed at other
+  warehouses. Fixed: for actors without `vehicle.manage`, both
+  the vehicle's and the driver's home warehouse must be in the
+  actor's memberships; denials audited.
+- **F8 (Low)** — `validateTrackingConfigPatch` used
+  `key in FIELD_RULES`, accepting Object.prototype keys
+  (`toString`, `constructor`) as known fields and storing junk
+  in the tracking config row. Fixed: `Object.hasOwn`.
+- **F9 (Low)** — the four-eyes approve/reject loader never
+  checked `expiresAt`; an invitation that expired while
+  PENDING_APPROVAL could still be approved (redemption was
+  already refused — the safety-critical half held). Fixed:
+  expired rows flip to EXPIRED and the action is refused and
+  audited.
+
+Also recorded: the Phase 6 finance/support suite's capped
+stalest-first queue assertions were made deterministic over the
+shared test DB (the suite cleans up its own fixtures in
+`beforeAll` and backdates queue-bound plants) — a test-design
+fix, no service behaviour changed. Live run-through on the
+production build: all 10 role homes render with real scoped
+data, and one privileged invitation completed the full
+four-eyes flow end to end (invite → redemption refused before
+approval → second-user approval → redemption → new Admin signs
+in through MFA enrolment to a working dashboard).
