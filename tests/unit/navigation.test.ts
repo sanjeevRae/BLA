@@ -63,6 +63,9 @@ describe("navigation registry — per-role visibility", () => {
       "/super-admin/settlements",
       "/super-admin/reports",
       "/super-admin/adjustments",
+      "/super-admin/users",
+      "/super-admin/settings",
+      "/super-admin/audit",
     ]);
   });
 
@@ -72,7 +75,10 @@ describe("navigation registry — per-role visibility", () => {
     expect(hrefs).toContain("/admin/warehouses");
     expect(hrefs).not.toContain("/admin/adjustments");
     expect(hrefs).toContain("/admin/live-operations");
-    expect(hrefs).toHaveLength(15);
+    expect(hrefs).toContain("/admin/users");
+    expect(hrefs).toContain("/admin/audit");
+    expect(hrefs).not.toContain("/admin/settings");
+    expect(hrefs).toHaveLength(17);
   });
 
   it("Warehouse Admin sees the full warehouse operations tree", () => {
@@ -92,8 +98,11 @@ describe("navigation registry — per-role visibility", () => {
       "/warehouse/supplies",
       "/warehouse/returns",
       "/warehouse/bookings",
+      "/warehouse/bookings/new",
       "/warehouse/incidents",
       "/warehouse/reports",
+      "/warehouse/drivers",
+      "/warehouse/vehicles",
     ]);
   });
 
@@ -154,11 +163,15 @@ describe("navigation registry — per-role visibility", () => {
     ]);
   });
 
-  it("Customer sees packages, tickets and notifications (notification.read_own granted in Phase 2, audit H-3)", () => {
+  it("Customer sees packages, tickets, notifications and the Phase 6 self-service pages (audit H-3, M-3)", () => {
     expect(hrefsFor("CUSTOMER")).toEqual([
       "/customer",
       "/customer/tickets",
       "/customer/notifications",
+      "/customer/incidents",
+      "/customer/incidents/new",
+      "/customer/billing",
+      "/customer/profile",
     ]);
   });
 
@@ -166,6 +179,7 @@ describe("navigation registry — per-role visibility", () => {
     const hrefs = hrefsFor("FINANCE");
     expect(hrefs).toEqual([
       "/finance",
+      "/finance/tasks",
       "/finance/notifications",
       "/finance/incidents",
       "/finance/invoices",
@@ -178,9 +192,10 @@ describe("navigation registry — per-role visibility", () => {
     expect(hrefs.some((h) => h.includes("transfers") || h.includes("inventory"))).toBe(false);
   });
 
-  it("Support sees home, notifications, tickets, incidents", () => {
+  it("Support sees home, tasks, notifications, tickets, incidents", () => {
     expect(hrefsFor("SUPPORT")).toEqual([
       "/support",
+      "/support/tasks",
       "/support/notifications",
       "/support/tickets",
       "/support/incidents",
@@ -234,6 +249,7 @@ describe("navigation registry — structural invariants", () => {
       "/warehouse/operations",
       "/warehouse/transfers/new",
       "/warehouse/deliveries/new",
+      "/warehouse/bookings/new",
     ]);
     const staff = visibleQuickActions(new Set(ROLE_PERMISSIONS.WAREHOUSE_STAFF), "staff");
     expect(staff).toEqual([]);

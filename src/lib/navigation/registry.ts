@@ -12,10 +12,11 @@ import type { RoleCode } from "@/lib/permissions/catalog";
  * server-side checks exactly as before. Hiding a link never grants or
  * removes access.
  *
- * Every `href` below names a route that exists today. Pages a later
- * phase will add (Super Admin users/settings/audit) are deliberately
- * absent — no placeholder or dead links. (Live Operations landed in
- * V2 Phase 5 and is registered below.)
+ * Every `href` below names a route that exists today — no placeholder
+ * or dead links. (Live Operations landed in V2 Phase 5; the Super
+ * Admin users/settings/audit surfaces, Warehouse Admin fleet and
+ * booking-create, Finance/Support tasks, and the Customer
+ * self-service pages landed in V2 Phase 6 and are registered below.)
  */
 
 export type DashboardId =
@@ -180,6 +181,24 @@ function adminItems(dashboard: "admin" | "super-admin"): NavItemDef[] {
       anyOf: ["finance.adjust", "finance.approve_adjustment"],
     });
   }
+  // Phase 6 (audit H-4): identity administration. Users & Roles and
+  // Audit Logs exist in both trees (both roles hold user.manage /
+  // audit.read); Settings is Super Admin only (ADMIN does not hold
+  // settings.manage and has no settings route).
+  items.push({
+    path: "/users", label: "Users & Roles", group: "administration", icon: "users",
+    anyOf: ["user.manage"],
+  });
+  if (dashboard === "super-admin") {
+    items.push({
+      path: "/settings", label: "Settings", group: "administration", icon: "sliders",
+      anyOf: ["settings.manage"],
+    });
+  }
+  items.push({
+    path: "/audit", label: "Audit Logs", group: "administration", icon: "file",
+    anyOf: ["audit.read"],
+  });
   return define(dashboard, items);
 }
 
@@ -258,6 +277,16 @@ function warehouseItems(dashboard: "warehouse" | "staff"): NavItemDef[] {
       path: "/bookings", label: "Bookings", group: "operations", icon: "package",
       anyOf: ["booking.read_warehouse"],
     },
+    ...(dashboard === "warehouse"
+      ? [
+          {
+            // Phase 6 (audit M-5): WA holds booking.create; the create
+            // page exists only in the warehouse tree, never for Staff.
+            path: "/bookings/new", label: "New booking", group: "operations", icon: "package",
+            anyOf: ["booking.create"], quickAction: true,
+          } as ItemSpec,
+        ]
+      : []),
     {
       path: "/incidents", label: "Incidents", group: "operations", icon: "alert",
       anyOf: ["incident.report", "incident.manage"],
@@ -267,6 +296,17 @@ function warehouseItems(dashboard: "warehouse" | "staff"): NavItemDef[] {
           {
             path: "/reports", label: "Reports", group: "business", icon: "chart",
             anyOf: ["report.read_warehouse"],
+          } as ItemSpec,
+          {
+            // Phase 6 (audit M-4): WA fleet surface. Warehouse tree
+            // only — Staff holds none of these grants and has no
+            // such routes.
+            path: "/drivers", label: "Drivers", group: "business", icon: "truck",
+            anyOf: ["driver.manage", "driver.assign"],
+          } as ItemSpec,
+          {
+            path: "/vehicles", label: "Vehicles", group: "business", icon: "car",
+            anyOf: ["vehicle.assign"],
           } as ItemSpec,
         ]
       : []),
@@ -361,9 +401,33 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
       path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
       anyOf: ["notification.read_own"],
     },
+    {
+      // Phase 6 (audit M-3): the customer's own incident reports,
+      // including payment disputes (PAYMENT_DISPUTE incidents).
+      path: "/incidents", label: "My incidents", group: "workspace", icon: "alert",
+      anyOf: ["incident.report", "payment.dispute.raise"],
+    },
+    {
+      path: "/incidents/new", label: "Report an incident", group: "workspace", icon: "alert",
+      anyOf: ["incident.report", "payment.dispute.raise"], quickAction: true,
+    },
+    {
+      path: "/billing", label: "My invoices", group: "business", icon: "wallet",
+      anyOf: ["invoice.read"],
+    },
+    {
+      path: "/profile", label: "Profile", group: "administration", icon: "user",
+      anyOf: ["profile.update_own"],
+    },
   ]),
   ...define("finance", [
     { path: "", label: "Overview", group: "workspace", icon: "home" },
+    {
+      // Phase 6 (audit M-2): FINANCE holds task.* — the shared task
+      // board now has a finance route.
+      path: "/tasks", label: "Tasks", group: "workspace", icon: "tasks",
+      anyOf: ["task.create", "task.assign", "task.update_own"],
+    },
     {
       path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
       anyOf: ["notification.read_own"],
@@ -399,6 +463,12 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
   ]),
   ...define("support", [
     { path: "", label: "Home", group: "workspace", icon: "home" },
+    {
+      // Phase 6 (audit M-2): SUPPORT holds task.* — the shared task
+      // board now has a support route.
+      path: "/tasks", label: "Tasks", group: "workspace", icon: "tasks",
+      anyOf: ["task.create", "task.assign", "task.update_own"],
+    },
     {
       path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
       anyOf: ["notification.read_own"],

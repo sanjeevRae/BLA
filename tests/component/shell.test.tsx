@@ -103,10 +103,18 @@ describe("ShellFrame — role navigation rendering", () => {
     expect(screen.queryByRole("link", { name: /new transfer/i })).toBeNull();
   });
 
-  it("Customer sidebar shows packages, tickets and notifications (notification.read_own granted in Phase 2, audit H-3)", () => {
+  it("Customer sidebar shows packages, tickets, notifications and the Phase 6 self-service pages (audit H-3, M-3)", () => {
     const { container } = render(<ShellFrame {...framePropsFor("CUSTOMER")} />);
     const hrefs = navLinks(container);
-    expect(hrefs).toEqual(["/customer", "/customer/tickets", "/customer/notifications"]);
+    expect(hrefs).toEqual([
+      "/customer",
+      "/customer/tickets",
+      "/customer/notifications",
+      "/customer/incidents",
+      "/customer/incidents/new",
+      "/customer/billing",
+      "/customer/profile",
+    ]);
   });
 
   it("notifications chrome (bell) renders only for actors holding notification.read_own", () => {
