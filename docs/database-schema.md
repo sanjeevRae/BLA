@@ -530,3 +530,73 @@ Transactional legacy data is demo data (audit §2: 0 orders, 0 payments, 0 COD; 
 4. **Identity cut-over.** Migrated users get `User` rows with roles/memberships and a `UserInvitation` (password-set) flow — Supabase Auth hashes cannot be extracted, so first login on the new system is a password set/reset, communicated to the 2 real-shaped accounts directly. The new `User` keeps the legacy UUID as its `id` wherever the account is confirmed real, preserving every FK relationship in migrated master data.
 5. **Phase 3c district gap — resolved in the new model.** `Warehouse.district` is a required column (not the optional afterthought that never reached production), `ServiceArea` carries district, and orders/shipments snapshot `destinationDistrict`. The district-based routing rule (same district → `LAST_MILE`, different → `INTER_WAREHOUSE`) reads these first-class fields. Backfill for the 4 warehouses: Kathmandu (WH-KTM-01), Kaski (WH-PKR-01, Pokhara), Chitwan (WH-CHT-01, Bharatpur), Lalitpur (WH-LTP-01) — to be confirmed against the warehouse addresses during the migration run.
 6. **Verification gates.** Row-count and checksum comparison for every migrated master-data table; a login + role + membership smoke test per migrated user class; warehouse-isolation tests (Warehouse A credentials cannot read Warehouse B inventory — spec §26.3) run against the migrated data before the old backend is retired (audit R2: the old backend *is* the current authorisation layer, so it is the last thing switched off, not the first).
+
+---
+
+## 14. V2 final state — regenerated model inventory (Phase 8, 2026-11-16)
+
+**Method (reproduce it, do not hand-edit this section):**
+`grep -c "^model " prisma/schema.prisma` and
+`grep "^model " prisma/schema.prisma`. **Total Prisma model count
+counted: 84.** All models live in the dedicated `app` PostgreSQL
+schema (`@@schema("app")`); the legacy `public` schema is untouched.
+The design sections above (§§1–13) predate several V2 models — this
+section is the authoritative inventory for the built schema.
+
+**All 84 models (alphabetical, as generated):**
+AuditLog, CodRemittance, CodRemittanceLine, CustodyHandover, Customer, CustomerAddress, DeliveryAssignment, DeliveryAttempt, DeliveryBatch, DeliveryCodCollection, DeliveryEvidenceBinding, Driver, DriverCapability, DriverCurrentLocation, DriverLocationPing, FinancialAccount, FinancialAdjustment, HandoverBatch, Incident, IncidentEvidence, IncidentNote, InventoryMovement, InventoryRecord, InvitationAttempt, Invoice, InvoiceLine, LedgerTransaction, LoginAttempt, Notification, NotificationPreference, Order, OrderItem, Package, PackageCustody, PackageItem, PackageLabel, Payment, PaymentAllocation, Permission, PricingRule, ProofOfDelivery, Refund, ReturnRequest, Role, RolePermission, ServiceArea, Session, Shipment, ShippingService, StockItem, StockMovement, StorageLocation, SupportTicket, SupportTicketMessage, SystemSetting, Task, TaskComment, TrackingAccessAttempt, TrackingEvent, TrackingSession, Transfer, TransferItem, TransferManifest, TransferScan, Trip, TripStop, User, UserInvitation, UserRole, Vehicle, VehicleMaintenance, Vendor, VendorAddress, VendorDocument, VendorSettlement, VendorSettlementLine, VendorUser, VendorWarehouseAssignment, VerificationToken, Warehouse, WarehouseAddress, WarehouseMembership, WarehouseOperatingHours, WarehouseZone.
+
+### 14.1 The 3 GPS models (V2 Phase 3)
+
+- `TrackingSession` — one tracking engagement: driver, exactly one
+  of trip / delivery batch, origin (+ line-haul destination)
+  warehouse, `status` (`ACTIVE` / `PAUSED` / `ENDED`), start/end
+  reasons (end reasons include `REASSIGNED` and `EXPIRED`, V2
+  Phase 7 / maintenance), `permissionAcknowledgedAt`. Design:
+  `docs/live-gps-tracking.md` §2. This trio **replaces** the
+  `GpsPing` sketch in §7 above — there is no `GpsPing` model in the
+  built schema.
+- `DriverLocationPing` — one accepted device fix (session + driver,
+  coordinates/accuracy, device `recordedAt`, server `receivedAt`,
+  `sequenceId`, `source = BROWSER`); unique
+  `(trackingSessionId, sequenceId)` makes replays idempotent.
+  Detailed pings are retained 30 days by default, then pruned.
+- `DriverCurrentLocation` — one snapshot row per driver (unique
+  `driverId`): latest accepted fix + `freshnessState`. Live views
+  read only this table.
+
+### 14.2 Phase 6 additions (V2)
+
+- Four-eyes invitation support on `UserInvitation` (approval state:
+  `PENDING_APPROVAL` → `PENDING`, approver + timestamp fields) —
+  privileged invitations need a second approver; see
+  `docs/system-architecture.md` §11.3.
+- The Phase 6 delivery set as built: `DeliveryBatch`,
+  `DeliveryAssignment`, `DeliveryAttempt`, `ProofOfDelivery`,
+  `DeliveryCodCollection` (§8 above describes the design; the built
+  models carry the vocabularies in `src/lib/deliveries/domain.ts`).
+
+### 14.3 Phase 7 additions (V2)
+
+- `DeliveryEvidenceBinding` — binds the SHA-256 hash of a POD
+  photo/signature reference to exactly one package (hash globally
+  unique across kinds); created inside the delivery transaction.
+  `ProofOfDelivery` carries `photoEvidenceHash` /
+  `signatureEvidenceHash`. See `docs/known-limitations.md` (M-10).
+- Cross-warehouse returns on `ReturnRequest`: new
+  `destinationWarehouseId` (the return warehouse = origin warehouse
+  of the package's shipment; `warehouseId` remains the first
+  receiving warehouse) and `transferId` (the normal transfer the
+  return travels on). Migration:
+  `20261116130000_phase7_returns_cross_warehouse`.
+- Tracking `REASSIGNED` end reason (no new model): trip/batch
+  driver replacement ends the outgoing driver's session in the same
+  transaction. Migration: `20261116140000_phase7_tracking_reassigned`.
+
+### 14.4 Phase 2 hardening models (V2)
+
+- `InvitationAttempt` — invitation-redemption attempt throttling
+  (migration `20261116075000_phase2_invitation_attempts`), alongside
+  the journal-balance trigger and schema-hardening migrations
+  listed in `docs/deployment-guide.md` (Production Readiness
+  Checklist).

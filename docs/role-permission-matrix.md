@@ -1,7 +1,6 @@
 # Role–Permission Matrix — BLA Logistics Platform (Next.js rebuild)
 
-**Status:** Target design for the rebuild (spec Parts 4, 20, 21). This document is the
-authoritative permission list. The Prisma schema (Phase 1) seeds `Role`, `Permission`
+**Status:** Target design for the rebuild (spec Parts 4, 20, 21) — **regenerated against the built catalog in V2 Phase 8 (2026-11-16), §7.** The code catalog (`src/lib/permissions/catalog.ts`) is now the single source of truth; §7 records the generated counts and the V2 grant changes that supersede the §3 tables where they differ. The Prisma schema (Phase 1) seeds `Role`, `Permission`
 and `RolePermission` rows from §3 of this document, and every Server Action / Route
 Handler checks a permission from this list before doing work.
 
@@ -190,7 +189,7 @@ assignment) — license/document verification is AD/SA.
 | `invoice.read` | ✓ | ✓²³ | — | — | — | — | V | O²⁴ | ✓ | — |
 | `finance.record_payment` | ✓ | — | — | — | — | — | — | — | ✓ | — |
 | `finance.adjust` (linked adjustment, never edit) | ✓ | — | — | — | — | — | — | — | ✓²⁵ | — |
-| `finance.approve_adjustment` | ✓ | — | — | — | — | — | — | — | — | — |
+| `finance.approve_adjustment` | ✓ | — | — | — | — | — | — | — | ✓³³ | — |
 | `cod.collect` (record at delivery) | — | — | — | — | A | — | — | — | — | — |
 | `cod.remit` (submit remittance) | — | — | — | — | O | — | — | — | — | — |
 | `cod.verify` (finance verifies remittance) | ✓ | — | — | — | — | — | — | — | ✓ | — |
@@ -222,7 +221,7 @@ warehouse and remittance status per rider — not amounts held by other warehous
 | `incident.manage` (triage, assign, investigate) | ✓ | ✓ | W | — | — | — | — | — | ✓³⁰ | ✓ |
 | `incident.resolve` | ✓ | ✓ | W³¹ | — | — | — | — | — | ✓³⁰ | ✓³¹ |
 | `support.ticket.manage` | ✓ | ✓ | — | — | — | — | — | — | — | ✓ |
-| `notification.read_own` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ |
+| `notification.read_own` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓³³ | ✓ | ✓ |
 | `report.read_all` | ✓ | ✓ | — | — | — | — | — | — | ✓³² | — |
 | `report.read_warehouse` | ✓ | ✓ | W | — | — | — | — | — | — | — |
 | `report.read_vendor` | — | — | — | — | — | — | V | — | — | — |
@@ -338,3 +337,76 @@ financial adjustments. Dashboards are otherwise the same operational overview.
 - Legacy RLS helper functions (`is_staff()` etc.) are retired with the old schema;
   PostgreSQL RLS may be layered later as defence-in-depth but is **not** the
   authorisation mechanism of record — the Next.js data-access layer is (spec §20.2).
+
+³³ **V2 correction (Phase 8):** the built catalog grants this
+permission — see §7. The §3 cell above has been corrected to match
+`src/lib/permissions/catalog.ts`; the footnote ²⁵ text (a *different*
+Super Admin must approve a Finance-created adjustment) describes the
+original design intent and is superseded by the service rule in §7.
+
+---
+
+## 7. V2 final state — regenerated from the catalog (Phase 8, 2026-11-16)
+
+**Method (reproduce it, do not hand-edit these numbers):** the
+counts below were generated programmatically from
+`src/lib/permissions/catalog.ts` — roles from the `ROLE_CODES` array
+/ `ROLES` definitions, permissions from the `PERMISSIONS` array
+(every `P("code", …)` entry between `PERMISSIONS` and
+`PERMISSION_CODES`), grants from `ROLE_PERMISSIONS`.
+
+- **Role count: 10** — `SUPER_ADMIN`, `ADMIN`, `WAREHOUSE_ADMIN`,
+  `WAREHOUSE_STAFF`, `RIDER`, `LINEHAUL_DRIVER`, `VENDOR`,
+  `CUSTOMER`, `FINANCE`, `SUPPORT`. (Display abbreviations in §2 —
+  SA/AD/WA/WS/DR/LD/VN/CU/FN/SP — map to these codes in that order.
+  Landing paths per role are `ROLE_LANDING_PATH` in the same file,
+  e.g. RIDER → `/rider`, LINEHAUL_DRIVER → `/transport-driver`.)
+- **Permission count: 100** — the full code list is the
+  `PERMISSIONS` array in the catalog; the seed
+  (`prisma/seed.ts`) upserts exactly these rows and rebuilds
+  `RolePermission` from `ROLE_PERMISSIONS` on every run. One
+  permission, `package.change_status`, is defined but **granted to
+  no role by design** — statuses change only as side effects of real
+  operations through the lifecycle service.
+- **Sync warning:** catalog grants reach an *existing* database
+  only when the seed's permission sync runs. Deploying new code
+  alone does not add new grants to a live database — see
+  `docs/deployment-guide.md` (Production Readiness Checklist).
+
+### 7.1 V2 grant changes (supersede §3 where they differ)
+
+- **CUSTOMER — `notification.read_own` (V2 Phase 2, audit H-3).**
+  Customers now hold `notification.read_own`, so the Customer
+  dashboard's Notifications item renders and the notification
+  service calls behind it are authorised (navigation registry,
+  `src/lib/navigation/registry.ts`). The §3.8 cell is corrected
+  above. Customer grants in full (catalog): `profile.update_own`,
+  `tracking.read_public`, `package.return_initiate`,
+  `delivery.reschedule_request`, `invoice.read`, 
+  `payment.dispute.raise`, `incident.report`,
+  `notification.read_own`.
+- **FINANCE — `finance.approve_adjustment` (V2 Phase 2).** The
+  catalog grants FINANCE both `finance.adjust` (create) and
+  `finance.approve_adjustment` (approve). The §3.7 cell is
+  corrected above. Separation of duties is preserved at the
+  *service* layer, not by withholding the permission: an adjustment
+  must be approved by a **different user** than its creator
+  (self-approval is refused), which is the four-eyes rule the
+  finance workflow enforces for adjustments and refunds.
+  SUPER_ADMIN also holds both permissions.
+- **WAREHOUSE_ADMIN — `cod.read` note.** Warehouse Admin holds
+  `cod.read` (scoped to own warehouse: COD expected on packages
+  from own warehouse and remittance status per rider — footnote
+  ²⁶), but does **not** hold `finance.read`. Consequence beyond the
+  COD screens: on the Live Operations board, a batch item carries
+  `codCollectedPaisa` when the actor holds `finance.read` **or**
+  `cod.read` — so a Warehouse Admin sees COD collected on movements
+  in their scope, while actors with neither permission (e.g. a
+  viewer granted only `operations.live_view` outside these roles)
+  receive payloads with the field absent entirely. See
+  `docs/live-gps-tracking.md` §3.
+- **GPS-era grants (V2 Phases 3–5), for completeness:**
+  `tracking.manage_own` is held by RIDER and LINEHAUL_DRIVER only;
+  `operations.live_view` by SUPER_ADMIN, ADMIN and
+  WAREHOUSE_ADMIN only. No other role can start a session or open
+  the live board, and the APIs deny them regardless of the UI.

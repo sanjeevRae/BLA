@@ -1,6 +1,6 @@
 # System Architecture — BLA Logistics Platform (Next.js Rebuild)
 
-**Status:** Phase 0 design document · 2026-11-15
+**Status:** Phase 0 design document · 2026-11-15 — **updated to V2 final state in Phase 8 (2026-11-16), §11.** Sections 1–10 are the original design record; where the built system differs (GPS, maps, realtime), §11 governs.
 **Sources:** master specification (Parts 3, 20, 22, 24, 25), `BLA-audit/backend-audit.md`,
 `BLA-audit/frontend-audit.md`, `BLA-audit/database-audit.md`
 **Companion documents:** `database-schema.md`, `entity-relationships.md`,
@@ -384,3 +384,94 @@ The pattern that already works operationally is kept and hardened:
   behaviour are consistent.
 - **Environments:** `development` (local Postgres or the Supabase dev branch) and
   `production`. There is no auth-disabled environment at any level.
+
+---
+
+## 11. V2 final state (Phase 8 addendum — what was actually built)
+
+This addendum records the V2 deltas against the design above. It does
+not rewrite §§1–10; it corrects them where the build diverged.
+
+### 11.1 GPS tracking subsystem (V2 Phases 3–5) — new, replaces §5's GPS design
+
+§5 above describes the *V1-era* design (Supabase Realtime fan-out,
+`POST /api/drivers/me/gps`, 5-minute pings, MapTiler maps). **None of
+that is the built system.** The built GPS subsystem is:
+
+- **Three models** in the `app` schema: `TrackingSession` (one
+  engagement per driver/assignment; at most one ACTIVE session per
+  driver), `DriverLocationPing` (the accepted-fix ledger,
+  idempotent on `(trackingSessionId, sequenceId)`), and
+  `DriverCurrentLocation` (one snapshot row per driver — the only
+  table live views read). Vocabulary: `src/lib/tracking/domain.ts`;
+  config: `src/lib/tracking/config.ts`.
+- **One write path:** the driver's browser posts fixes to
+  `POST /api/tracking/location` inside a transaction that locks the
+  session row, re-validates the assignment, rate-limits (30 s server
+  floor), and conditionally upserts the snapshot so an older fix
+  never moves the marker backwards. Session control:
+  `POST /api/tracking/session/start|pause|resume|stop` and
+  `GET /api/tracking/session/current` (all `tracking.manage_own`;
+  supervisor stop via `operations.live_view`).
+- **Polling, no websockets.** There is no Supabase Realtime, no
+  socket layer, and no server push anywhere in the built app. The
+  driver panel polls `session/current` (~30 s while active); the
+  Live Operations board polls `GET /api/live-operations` every 50 s
+  while the document is visible. Freshness (`FRESH` / `DELAYED` /
+  `STALE` / `OFFLINE`) is computed at read time from the snapshot's
+  server receive time — a stale marker is never presented as live.
+- **Foreground-only browser Geolocation** (`watchPosition`): updates
+  stop when the app is backgrounded, the screen locks, or the tab
+  is suspended. There is no background tracking. Full design:
+  `docs/live-gps-tracking.md`; policy: `docs/gps-privacy-and-retention.md`.
+
+### 11.2 Live Operations map (V2 Phase 5)
+
+Pages `/admin/live-operations`, `/super-admin/live-operations`,
+`/warehouse/live-operations` render one shared board
+(`src/components/live-operations/`) over the two endpoints above,
+gated on `operations.live_view` and warehouse-scoped for Warehouse
+Admins (origin **or** destination membership). The map is Leaflet +
+OpenStreetMap public tiles (tile URL/attribution in exactly one
+place, `src/lib/maps/config.ts`) — **not** the MapTiler SDK named
+in §§1/7/10. Markers encode movement type and freshness; the detail
+view shows tracking IDs and statuses only (no recipient PII), and
+COD totals only for actors already holding `finance.read` /
+`cod.read`. There are no road routes and no ETAs.
+
+### 11.3 Four-eyes invitations (V2 Phase 6)
+
+Privileged-role invitations are **four-eyes**: an invitation for a
+privileged role is created in `PENDING_APPROVAL` and becomes a
+redeemable `PENDING` invitation only when a *second* eligible
+approver approves it (`src/server/services/invitations.ts`). The
+inviter can never approve/reject their own invitation (refused and
+audit-logged), a Super Admin invitation can only be approved by a
+Super Admin, an expired invitation can no longer be decided, and
+the approve/reject transition is a conditional update so two racing
+approvers cannot both succeed. Non-privileged invitations follow
+the ordinary single-step flow. Supporting models: `UserInvitation`
+(approval fields) and `InvitationAttempt` (redemption throttling,
+V2 Phase 2).
+
+### 11.4 Other corrections to the design record
+
+- **Maps/routing:** no MapTiler or OpenRouteService call exists on
+  the built critical path; routing output, where shown, is a
+  suggested order only. See `docs/free-technology-stack.md`.
+- **File storage / FileAsset:** no object-storage provider is wired
+  and there is **no `FileAsset` model** in the built schema. POD
+  evidence is a reference string made tamper-evident by Phase 7
+  hash-binding (`DeliveryEvidenceBinding`) — see
+  `docs/known-limitations.md` (M-10) and
+  `docs/delivery-operations.md` §6.
+- **Background jobs:** no `JobRecord`-driven queue is scheduled in
+  the app. Scheduled work is external-cron-invoked scripts: the
+  daily operations summary (`scripts/daily-ops-summary.ts`) and the
+  tracking maintenance sweeps (hourly expiry / daily prune via
+  `scripts/tracking-maintenance.ts`, wrapping
+  `src/server/services/tracking.ts`).
+- **Counts at V2 final state** (generated, Phase 8): 84 Prisma
+  models, 10 roles, 100 permissions, 98 API Route Handler files —
+  see `docs/database-schema.md`, `docs/role-permission-matrix.md`
+  and `docs/api-reference.md` for the generated lists.
