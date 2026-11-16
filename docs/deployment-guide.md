@@ -255,17 +255,20 @@ Their replacements:
   the Next.js virtual `server-only` module to a stub so the service
   layer can run outside the Next bundler.) `--dry-run` prints the
   composed summary without writing.
-- **GPS / trip-checkpoint retention — accepted disposition.** The
-  legacy `gps_tracking` table (high-frequency pings) and its
-  cleanup cron have no counterpart in the new platform: the app
+- **Trip-checkpoint retention — accepted disposition.** The app
   records **TripStop** checkpoint rows (discrete operational
   events, not a ping stream), whose volume is bounded by trip
   activity and which form part of the trip audit record. No
-  retention job is implemented; TripStops are retained with their
+  retention job prunes TripStops; they are retained with their
   trips. *Revisit if* checkpoint volume ever becomes a storage
-  concern — the job would archive TripStops of COMPLETED trips
-  older than a policy threshold, and the threshold is a policy
-  decision for Meena at that time. See docs/known-limitations.md.
+  concern — the threshold is a policy decision for Meena at that
+  time. See docs/known-limitations.md.
+- **V2 GPS tracking maintenance (Phase 8).** The V2 location
+  pings (`DriverLocationPing`) are a separate, newer data set from
+  TripStops and **do** have retention: hourly abandoned-session
+  expiry + daily ping prune (30-day default) via
+  `scripts/tracking-maintenance.ts` — see §10(d) below and
+  docs/live-gps-tracking.md §11.
 
 ## 9. Go-live checklist
 
@@ -284,3 +287,195 @@ Their replacements:
 - [ ] Smoke checks (§6 step 4) pass on the production URL
 - [ ] Daily ops summary scheduled (§8)
 - [ ] Observation window + decommissioning dates agreed (§6)
+
+---
+
+## 10. Production Readiness Checklist (V2 Phase 8)
+
+*This section is the V2 go-live gate. It supplements §9 (which
+covers the V1 cutover); where the two differ for V2 items, this
+section governs. Nothing here is checked off by writing it down —
+each item is verified in the production environment at go-live.*
+
+> **Live-database route — read first.** The `LIVE_DATABASE_URL`
+> stored in Muse's clone `.env` is **stale**: Meena reset the
+> database password himself in the Supabase dashboard on
+> 2026-11-16, so the stored value no longer connects. All live
+> work below goes **via the Supabase Management API**, or via a
+> **fresh connection URL supplied by Meena** at go-live time. Do
+> not attempt live migrations with the stored URL.
+
+### (a) Required environment variables (NAMES only)
+
+Authoritative source: `.env.example` in the repo root. Set values
+in the hosting dashboard / gitignored env only — never commit a
+value, never print one. The running application reads:
+
+- **Required — database:** `DATABASE_URL` (runtime, pooler),
+  `DIRECT_URL` (Prisma Migrate, direct/session connection)
+- **Required — auth & security:** `AUTH_SECRET`, `AUTH_URL`
+  (must be the production **HTTPS** URL — Geolocation and the
+  Secure session cookie depend on it), `MFA_SECRET_ENCRYPTION_KEY`
+- **Proxy (see (e)):** `TRUSTED_IP_HEADER` (optional; defaults to
+  `x-forwarded-for` in code)
+- **Supabase server-side (where used):** `SUPABASE_URL`,
+  `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY`; operations scripts
+  additionally use `SUPABASE_ACCESS_TOKEN` (Management API)
+- **Optional providers (app runs fully without them):**
+  `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`,
+  `CLOUDINARY_API_SECRET`, `MAPTILER_API_KEY`,
+  `OPENROUTESERVICE_API_KEY`, `EMAILJS_SERVICE_ID`,
+  `EMAILJS_TEMPLATE_ID`, `EMAILJS_USER_ID`, `EMAILJS_PRIVATE_KEY`,
+  `TEXTLOCAL_API_KEY`, `TEXTLOCAL_SENDER`
+- **Local seed only (never used by the running app, never set in
+  production):** `SEED_SUPER_ADMIN_EMAIL`,
+  `SEED_SUPER_ADMIN_PASSWORD`, `SEED_SUPER_ADMIN_NAME`,
+  `SEED_TEST_WA_PASSWORD`
+
+### (b) Migrations to apply to live — the exact 10, in order
+
+These are the V2 migrations. They are applied to live **in this
+order and no other** (via the Management API route in the note
+above, or `prisma migrate deploy` with a fresh direct URL from
+Meena), after the §4.1 backup step:
+
+1. `20261116074456_phase2_v2_schema_hardening`
+2. `20261116074600_phase2_journal_balance_trigger`
+3. `20261116075000_phase2_invitation_attempts`
+4. `20261116084000_phase3_gps_tracking`
+5. `20261116084028_phase3_gps_hardening`
+6. `20261116104945_phase6_four_eyes_invitations`
+7. `20261116105004_phase6_invitation_status_check`
+8. `20261116130000_phase7_returns_cross_warehouse`
+9. `20261116140000_phase7_tracking_reassigned`
+10. `20261116155429_phase7_pod_evidence_binding`
+
+- [ ] Verified `pg_dump` taken before applying (§4.1 step 1)
+- [ ] All 10 applied in order; `prisma migrate status` (or the
+      Management API equivalent) confirms no pending/drift
+- [ ] Post-apply spot checks: GPS tables present
+      (`TrackingSession` / `DriverLocationPing` /
+      `DriverCurrentLocation`), `ReturnRequest.destinationWarehouseId`
+      + `transferId` present, `DeliveryEvidenceBinding` present
+
+### (c) Permission sync — required step, stated plainly
+
+**Catalog grants reach an existing database only when the seed's
+permission sync runs.** Deploying new code does **not** add new
+roles, permissions, or grants to a live database: `prisma/seed.ts`
+upserts the catalog from `src/lib/permissions/catalog.ts`
+(10 roles, 100 permissions — Phase 8 generated counts) and rebuilds
+`RolePermission` from `ROLE_PERMISSIONS` on every run. The V2
+grants (e.g. CUSTOMER `notification.read_own`, FINANCE
+`finance.approve_adjustment`, `tracking.manage_own`,
+`operations.live_view`) are **absent in live until this sync runs**
+against live, under the §4.2 seed rules (reference data only
+against a non-local database; the test-account guard must refuse).
+
+- [ ] Permission sync run against live after (b); row counts for
+      `Role` (10) and `Permission` (100) verified
+- [ ] Spot check: a CUSTOMER test login sees Notifications; a
+      FINANCE login can approve an adjustment created by another user
+
+### (d) Tracking maintenance scheduling
+
+The tracking sweeps in `src/server/services/tracking.ts` must be
+scheduled in production via `scripts/tracking-maintenance.ts`
+(external scheduler / cron on the host — no in-app scheduler):
+
+- **Hourly:** abandoned-session expiry
+  (`expireAbandonedTrackingSessions` — ends ACTIVE/PAUSED sessions
+  past the abandonment window or on terminal assignments,
+  `endReason = EXPIRED`)
+- **Daily:** ping prune (`pruneExpiredLocationPings` — deletes
+  `DriverLocationPing` rows older than the retention window,
+  **30 days by default**, `tracking.config` → `retentionDays`)
+
+- [ ] Both schedules created in the production environment
+- [ ] First runs observed in logs; a stale test session expires
+      and an out-of-window test ping is pruned
+
+### (e) Trusted-proxy requirement (Phase 2, F-3 acceptance)
+
+Client IP (login throttling, audit records, public-tracking
+per-IP limit) is read from the header named by
+`TRUSTED_IP_HEADER` (default `x-forwarded-for`, see
+`src/lib/auth/client-ip.ts`). **`X-Forwarded-For` may only be
+trusted when it comes from a trusted proxy** — i.e. the deployment
+must sit behind a proxy/platform that **overwrites** the header
+with the real peer address (Vercel does). On any topology where
+clients can set the header themselves, per-IP limits are
+best-effort and recorded IPs are untrusted, and that topology
+must not be relied on for throttling or forensics.
+
+- [ ] Production topology confirmed: a trusted proxy overwrites
+      the client-IP header before requests reach the app
+
+### (f) OSM tile note
+
+The Live Operations map uses OpenStreetMap **public tiles** —
+acceptable **for the pilot** under the OSM tile usage policy, with
+the attribution "© OpenStreetMap contributors" visible on the map
+at all times and **no bulk downloading / prefetching / offline
+caching**. There are no per-request API fees for this use.
+**Self-host evaluation trigger:** if map usage grows beyond a
+low-volume pilot (sustained tile volume, more concurrent viewers,
+or any policy doubt), evaluate self-hosted tiles or a contracted
+provider **before** scaling further — never silently scale up on
+the public service. The tile provider is one config constant
+(`src/lib/maps/config.ts`), so the switch touches no components.
+See `docs/free-technology-stack.md` §2.
+
+- [ ] Attribution verified visible on the production map
+- [ ] Self-host trigger owner named (see open decisions)
+
+### (g) OPEN DECISIONS FOR MEENA — listed, not decided
+
+No default has been taken on any of these. Each blocks or shapes
+the named part of go-live:
+
+1. **F12c — settlement approval threshold value.** No monetary
+   threshold is implemented (see `docs/known-limitations.md`).
+   Meena to set the value (or confirm none); it then lands as a
+   SystemSetting + one check in settlement approval.
+2. **`settlement.approve` grant for FINANCE.** Currently FINANCE
+   prepares and pays but cannot approve; ADMIN approves but can
+   neither prepare nor pay; only SUPER_ADMIN holds all three.
+   Meena to decide whether FINANCE should also hold
+   `settlement.approve`.
+3. **FileAsset storage provider (M-10).** POD evidence is a
+   hash-bound reference string until an object-storage provider
+   is chosen. Meena to choose the provider (or defer explicitly).
+4. **Credential rotation.** Outstanding: rotate the service key
+   first, then the account-level token. (Separately, the DB
+   password was already reset by Meena on 2026-11-16 — see the
+   stale-URL note at the top of this section.)
+5. **Real driver licence dates.** Migrated driver profiles carry
+   the sentinel expiry **1970-01-01**, which **blocks assignment**.
+   Real dates must be entered per driver before those drivers can
+   be assigned work.
+6. **Nepal Privacy Act 2075 legal review before production GPS.**
+   Driver notice/acknowledgement text, 30-day retention, and
+   access expectations must complete legal/operational review
+   before GPS is enabled in production
+   (`docs/gps-privacy-and-retention.md` §6). **GPS stays off in
+   production until this is done.**
+7. **OSM self-host trigger point.** Meena to set/confirm the
+   usage point at which the (f) evaluation happens.
+8. **Real-device GPS checklist completion.** The checklist in
+   `docs/known-limitations.md` (Android Chrome background /
+   screen-lock, iOS Safari `watchPosition` + permission UX, real
+   fix cadence/jitter, per-browser permission re-enable flows,
+   panel pixel checks at 390/768/1440, OSM tiles on a real
+   network) is **not yet verified** on any item. Meena to confirm
+   when device testing is done / accepted as a pilot risk.
+
+### Final V2 sign-off checks
+
+- [ ] §9 checklist items still applicable are re-verified (backup,
+      Super Admin designation + MFA, smoke checks on the
+      production URL)
+- [ ] Daily operations summary scheduled (§8)
+- [ ] §10(a)–(f) verified in the production environment
+- [ ] §10(g) decisions recorded — decided, or explicitly deferred
+      with GPS / the affected feature held off where noted
