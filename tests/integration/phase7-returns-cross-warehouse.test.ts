@@ -757,6 +757,22 @@ describe("cross-warehouse returns (Phase 7)", () => {
     await transfersSvc.cancelTransfer(waPkrActor, wrong.id, "test cleanup");
   });
 
+  it("(vi) offers the received return in the transfer picker only toward its return warehouse", async () => {
+    const { packageId } = await receivedReturnAtPkr();
+    const towardReturn = await transfersSvc.listEligiblePackages(
+      waPkrActor,
+      fx.whPkr,
+      fx.whKtm,
+    );
+    expect(towardReturn.map((p) => p.id)).toContain(packageId);
+    const towardThird = await transfersSvc.listEligiblePackages(
+      waPkrActor,
+      fx.whPkr,
+      fx.whThird,
+    );
+    expect(towardThird.map((p) => p.id)).not.toContain(packageId);
+  });
+
   it("(iii) refuses to manifest a return that is still REQUESTED", async () => {
     const { packageId, trackingId, batch, returnId } = await refusedReturnAtPkr();
     const transfer = await transfersSvc.createTransfer(waPkrActor, {

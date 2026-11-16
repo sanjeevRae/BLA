@@ -2518,17 +2518,45 @@ export async function listEligiblePackages(
       },
     },
   ];
+  // Phase 7 run-through fix: cross-warehouse return packages must be
+  // pickable too — a RECEIVED return travels to its return destination
+  // (ReturnRequest.destinationWarehouseId), not to the shipment's
+  // destination, and sits at READY_FOR_DELIVERY rather than
+  // READY_FOR_DISPATCH. Without this branch the returns flow is
+  // service-complete but unreachable from the transfer UI.
+  // addTransferItems remains the authoritative gate (the return
+  // travel hook re-validates status + destination there).
+  const returnConditions: Prisma.PackageWhereInput[] = [
+    {
+      returnRequests: {
+        some: { status: "RECEIVED", destinationWarehouseId },
+      },
+    },
+    { currentWarehouseId: originWarehouseId },
+    {
+      inventoryRecords: {
+        some: { warehouseId: originWarehouseId, releasedAt: null },
+      },
+    },
+    {
+      transferItems: {
+        none: { transfer: { status: { in: [...OPEN_TRANSFER_STATUSES] } } },
+      },
+    },
+  ];
   const term = search?.trim();
   if (term) {
-    conditions.push({
+    const termCondition: Prisma.PackageWhereInput = {
       OR: [
         { trackingId: { contains: term, mode: "insensitive" } },
         { recipientName: { contains: term, mode: "insensitive" } },
       ],
-    });
+    };
+    conditions.push(termCondition);
+    returnConditions.push(termCondition);
   }
   const rows = await prisma.package.findMany({
-    where: { AND: conditions },
+    where: { OR: [{ AND: conditions }, { AND: returnConditions }] },
     select: {
       id: true,
       trackingId: true,
