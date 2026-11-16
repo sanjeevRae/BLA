@@ -16,7 +16,7 @@ export async function POST(
   try {
     requireAccessGranted(actor);
     const { id } = await params;
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     return NextResponse.json(await requestAddressCorrection(actor, id, body));
   } catch (error) {
     const response = apiErrorResponse(error);

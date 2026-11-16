@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   if (!actor) return unauthenticatedResponse();
   try {
     requireAccessGranted(actor); // P2-3 gate
-    const body = (await request.json()) as InitiateHandoverInput;
+    const body = (await request.json().catch(() => ({}))) as InitiateHandoverInput;
     const batch = await initiateHandover(actor, body);
     return NextResponse.json(batch, { status: 201 });
   } catch (error) {

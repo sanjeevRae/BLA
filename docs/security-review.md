@@ -507,3 +507,42 @@ Compensating controls (all verified in code at Phase 8):
 
 Re-open this only if vehicles gain a true ownership/custody model or
 vehicle records start carrying sensitive data.
+
+## V2 Phase 8 — open-item disposition: PICKUP batch permission gate
+
+**Disposition: FIXED.** The Phase 7 minor is closed.
+`createDeliveryBatch` (`src/server/services/deliveries.ts`) now
+resolves the batch kind from the parsed input first, then requires
+the kind-appropriate permission via `requirePermAudited`:
+`pickup.assign` for PICKUP batches, `delivery.assign` for DELIVERY
+batches (MIXED follows the delivery gate, matching the existing
+split in `addBatchPackages`). The catalog already carried
+`pickup.assign` (held today by exactly the roles that also hold
+`delivery.assign`, so no existing flow changes); a future
+pickup-only role can now be created without also granting delivery
+assignment. Evidence:
+`tests/integration/phase8-pickup-batch-permission.test.ts` —
+single-permission actors prove pickup-only creates PICKUP but is
+refused DELIVERY (and the no-kind default) with no batch row
+written, delivery-only the mirror image, and the full
+WAREHOUSE_ADMIN role unaffected. Scope was creation only: mutations
+of an existing batch keep their existing gates, since the batch's
+kind — and therefore the authority under which it was created — is
+fixed at creation.
+
+## V2 Phase 8 — malformed-JSON sweep
+
+The Phase 8 API-validation work found that routes parsing bodies
+with a bare `await request.json()` throw a raw `SyntaxError` on a
+malformed body (500 in production) instead of answering 400 from
+schema validation. The three V2 routes (bookings, bookings/bulk,
+incidents) were fixed by that work; Phase 8 then swept the remaining
+eight files of the same class — operations/handovers,
+operations/handovers/[id]/confirm, operations/receive, tasks,
+support/tickets and its request-redelivery /
+request-address-correction sub-routes, and the public
+track/[trackingId]/complaint route — to the repo-standard
+`request.json().catch(() => ({}))` form used by the other routes.
+No route in `src/app/api` now parses a body without the catch.
+Behaviour for valid bodies is unchanged; malformed bodies now reach
+service validation and answer 400.

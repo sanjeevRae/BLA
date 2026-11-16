@@ -16,7 +16,7 @@ export async function POST(
 ) {
   const { trackingId } = await params;
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     return NextResponse.json(
       await raiseTrackingComplaint(trackingId, body, {
         ipAddress: getClientIp(request.headers),

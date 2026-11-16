@@ -19,7 +19,7 @@ export async function POST(request: Request) {
   if (!actor) return unauthenticatedResponse();
   try {
     requireAccessGranted(actor); // P2-3 gate
-    const body = (await request.json()) as ReceivePackageInput;
+    const body = (await request.json().catch(() => ({}))) as ReceivePackageInput;
     const result = await receivePackage(actor, body);
     const status = result.alreadyReceived || result.misrouted ? 200 : 201;
     return NextResponse.json(result, { status });

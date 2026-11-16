@@ -18,7 +18,7 @@ export async function POST(
   const { id } = await params;
   try {
     requireAccessGranted(actor); // P2-3 gate
-    const body = (await request.json()) as {
+    const body = (await request.json().catch(() => ({}))) as {
       packageId: string;
       condition?: "GOOD" | "DAMAGED";
     };
