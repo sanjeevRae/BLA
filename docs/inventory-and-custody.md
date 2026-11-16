@@ -162,3 +162,38 @@ operators execute.
 | Staff member suspended while holding custody | Custody list for that user is surfaced to WA/AD; every item must be handed over to a named receiver before the account fully closes (Scenario 17) |
 | Package found in a location that contradicts its record | WS records an `inventory_correction` movement from the recorded location to the found location with reason; repeated corrections at one warehouse surface in warehouse reports |
 | Handover offered but never confirmed (e.g. driver left) | After a configured timeout the handover shows as *unconfirmed* on both dashboards; WA can escalate to an incident; custody remains with the giver until a human resolves it — the system never auto-confirms |
+
+---
+
+## 8. V2 final state (Phase 8 addendum)
+
+- **Custody on reassignment (Phase 7).** Reassignment never edits a
+  custodian field (invariant I4 applies unchanged); it *moves*
+  custody through recorded paths, and the tracking layer follows:
+  - *Delivery batch reassignment:* the old assignments close as
+    `REASSIGNED`, new assignments chain to them, packages change
+    hands only via warehouse return + re-handout or a scanned
+    rider-to-rider handover, and any live tracking session bound
+    to the old batch ends in the same transaction with
+    `endReason = REASSIGNED`.
+  - *Trip driver replacement:* the load changes hands through a
+    recorded custody handover (package-by-package scan where
+    feasible, or count-verified bulk handover with both drivers
+    confirming); the outgoing driver's session on the trip ends
+    `REASSIGNED` in the same transaction.
+  In both cases the custody chain has no gap: the outgoing holder
+  remains accountable until the recorded handover confirms.
+- **Returns cross-warehouse (Phase 7).** A return held in inventory
+  at the receiving warehouse whose return warehouse is elsewhere
+  leaves that inventory through the normal transfer path
+  (manifested return package — `docs/warehouse-transfers.md` §7):
+  inventory closes at dispatch with release reason `RETURN` /
+  transfer movement, and a new stay opens at the return warehouse
+  on receiving completion. The two stays are separate
+  `InventoryRecord`s, as I1/I3 require — the package is never in
+  two warehouses' stock at once, and never in none while in the
+  network.
+- **Evidence binding is delivery-side.** Phase 7's POD
+  hash-binding affects proof records, not inventory or custody;
+  it is recorded here only to prevent it being looked for in this
+  layer. See `docs/delivery-operations.md` §6.

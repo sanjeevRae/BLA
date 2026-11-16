@@ -1,9 +1,6 @@
 # Live GPS Tracking — Architecture and Operations
 
-**Phase:** V2 Phase 3 (backend) · **Status:** implemented, local
-migrations only (`20261116084000_phase3_gps_tracking`,
-`20261116084028_phase3_gps_hardening`) · **Consumers:** Phase 4
-(driver/rider tracking UI) and Phase 5 (Live Operations map).
+**Phase:** V2 Phase 3 (backend), Phase 4 (driver UI), Phase 5 (Live Operations map), Phase 7 (`REASSIGNED` session end) · **Status:** implemented; V2 final state confirmed in Phase 8 (2026-11-16), including the maintenance schedule in §11. Local migrations: `20261116084000_phase3_gps_tracking`, `20261116084028_phase3_gps_hardening`, `20261116140000_phase7_tracking_reassigned`.
 
 Minimal, honest, free-first location tracking: the system records
 the periodic position of a driver/rider's device **only while that
@@ -415,3 +412,31 @@ low-volume pilot on the public tile service):
 (MIT/BSD open source), OSM public tiles under the policy above,
 browser Geolocation, and the existing Postgres behind a polling
 endpoint.
+
+---
+
+## 11. Maintenance schedule (Phase 8 — the sweeps are now scheduled)
+
+§6 previously said the expiry sweep "is invoked operationally".
+That is superseded: the two maintenance functions in
+`src/server/services/tracking.ts` are run on a fixed schedule via
+`scripts/tracking-maintenance.ts` (scheduled by the deployment's
+external scheduler — see `docs/deployment-guide.md`, Production
+Readiness Checklist):
+
+| Job | Cadence | Function | Effect |
+|---|---|---|---|
+| Abandoned-session expiry | **Hourly** | `expireAbandonedTrackingSessions()` | Ends `ACTIVE` / `PAUSED` sessions whose assignment is terminal, or whose last activity (start, latest ping, snapshot) is older than the abandonment window (default 120 min, `abandonedSessionMinutes`), with `endReason = EXPIRED`, the snapshot marked offline, and a system audit row (`tracking.session_expired`, actor null) per session. |
+| Ping retention prune | **Daily** | `pruneExpiredLocationPings()` | Deletes `DriverLocationPing` rows whose server receive time is older than the retention window — **30 days by default** (`retentionDays` in `tracking.config`). Sessions and snapshots are never touched by the prune. |
+
+Both jobs are idempotent and safe to re-run. Until the schedule is
+verified running in the production environment, an operator runs
+the same script manually — the checklist in the deployment guide
+carries the verification item. Retention policy and its rationale:
+`docs/gps-privacy-and-retention.md` §4.
+
+**Foreground-only limitation — restated for operations staff:**
+nothing in this schedule changes the browser limitation in §1.
+Maintenance expires and prunes data the browser already sent; it
+cannot recover positions from a backgrounded, locked, or closed
+app, and no report may treat a gap as a tracked interval.

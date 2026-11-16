@@ -164,3 +164,36 @@ cause a payment transition (role-permission-matrix.md §4.5).
 | Package scanned at the wrong warehouse | Scan accepted as an *arrival observation* only: package goes to `exceptionStatus = misrouted`, is quarantined, and does **not** enter that warehouse's inventory (Scenario 2) |
 | Proof missing at delivery confirmation | Transition rejected listing exactly which proof element is missing; attempt may still be recorded as failed |
 | Offline rider action syncs late | Accepted with original `occurredAt` if the transition is still valid against current state; if state has moved on (e.g. package reassigned), the event is stored as a conflicting observation and an incident is raised for dispatcher review — never silently applied, never fabricated as confirmed (Scenario 10) |
+
+---
+
+## 9. V2 final state (Phase 8 addendum)
+
+The transition allow-list in code (`src/lib/bookings/lifecycle.ts`,
+`OPERATIONAL_STATUSES`: 22 values — the 20-state chain plus `DRAFT`
+and `CANCELLED`) is the authority; the prose table in §3 uses the
+V1 naming for two states (`delivery_rider_assigned` in §3 is
+`DELIVERY_ASSIGNED` in code). Phase 7 added / confirmed these edges:
+
+- **Cross-warehouse return travel (Phase 7).** A return received
+  back into the delivery warehouse (`READY_FOR_DELIVERY` after the
+  scan-back) that must travel to its return warehouse is readied
+  with the new edge `READY_FOR_DELIVERY → READY_FOR_DISPATCH`
+  (`return_ready_for_dispatch`, permission `transfer.prepare`),
+  then joins a normal transfer as a manifested return package
+  (`TRANSFER_ASSIGNED` … — see `docs/warehouse-transfers.md` §7).
+  The return record, not the package lifecycle, tracks the return's
+  own `RECEIVED → IN_TRANSIT → RECEIVED` movement; first-receipt
+  stamps are preserved.
+- **Evidence binding is delivery-side, not a lifecycle change.**
+  Phase 7's POD hash-binding (`DeliveryEvidenceBinding`) runs
+  inside the existing `confirm_delivery` transition's transaction
+  — it adds integrity to rule T7's proof requirement and changes
+  no state edge. See `docs/delivery-operations.md` §6.
+- **Pre-pickup / pre-custody release edges** (already in the built
+  table): `DELIVERY_ASSIGNED → READY_FOR_DELIVERY`
+  (`release_delivery_assignment`) and the warehouse return scan
+  `OUT_FOR_DELIVERY / DELIVERY_ATTEMPTED → READY_FOR_DELIVERY`
+  (`delivery_return_scan`) — both are defined T10 release paths
+  that exist only before/around custody, never backwards edits of
+  delivered history.

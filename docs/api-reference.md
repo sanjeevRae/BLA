@@ -1,7 +1,6 @@
 # API Reference — BLA Logistics Platform (Next.js Rebuild)
 
-**Status:** Phase 0 design document · 2026-11-15 — the **planned** API surface of the
-new application. Nothing here exists until its implementation phase lands.
+**Status:** Phase 0 design document · 2026-11-15 — the **planned** API surface. **Superseded for the built surface by §21 (V2 Phase 8, 2026-11-16)**, which is generated from the actual Route Handler files. Sections 1–20 remain the design record; where a planned operation was never built (or was built differently), §21 governs.
 **Sources:** master specification Parts 19–22, `BLA-audit/backend-audit.md` (§2 endpoint
 inventory, §8 responsibilities map), `BLA-audit/frontend-audit.md` (§5.3 API client),
 `BLA-audit/database-audit.md`
@@ -282,3 +281,144 @@ endpoints superseded by §5 (`PUT/DELETE /orders…`) · `POST /warehouse-intake
 (§16) · `GET /payments/config` (gateway publishable key is delivered by
 `POST /api/finance/payments/online-session` responses) · the driver-app's direct
 Supabase table writes (§9 GPS) · FastAPI `/docs` (not exposed in production).
+
+---
+
+## 21. V2 final state — the built API surface (Phase 8, generated)
+
+**Method (reproduce it, do not hand-edit this section):** the table
+below was generated from the Route Handler files themselves —
+`find src/app/api -name route.ts` for the paths, and the exported
+`GET` / `POST` / … functions in each file for the methods.
+**API Route Handler count: 98 files.** Dashboard mutations that are
+not in this table are Server Actions over the same service layer
+(the §1 convention); this section lists only real Route Handlers.
+
+**V2 additions since the design above** (all in the table):
+
+- **Tracking (Phase 3/4):** `POST /api/tracking/session/start`,
+  `POST /api/tracking/session/pause`,
+  `POST /api/tracking/session/resume`,
+  `POST /api/tracking/session/stop`,
+  `GET /api/tracking/session/current`,
+  `POST /api/tracking/location`.
+- **Live Operations (Phase 5):** `GET /api/live-operations`,
+  `GET /api/live-operations/[trackingSessionId]`
+  (`operations.live_view`, warehouse-scoped).
+- **Bookings bulk (Phase 7):** `POST /api/bookings/bulk` — 1–50
+  bookings, all-or-nothing in one transaction.
+- **Driver incidents (Phase 7 surface over the Phase 8-operations
+  service):** `GET/POST /api/incidents`, `GET /api/incidents/[id]`
+  (`incident.report` to create; scope composed server-side).
+- Also built and listed below: delivery batch
+  `pickup` / `collect` / `reassign` / `close`, assignment
+  `pickup-attempt` / `attempt` / `deliver` / `regenerate-otp`,
+  `POST /api/deliveries/scan-back`, transfer
+  `load` / `dispatch` / `receive` / `finish-receiving` /
+  `complete-receiving` / `reconcile`, returns
+  `approve` / `inspect` / `complete` / `reject`, and the finance /
+  reports / support sets. Planned operations with **no** Route
+  Handler (e.g. §18 files upload, §19 cron endpoints, §3 user CRUD)
+  are delivered as Server Actions / pages or not at all — absence
+  from this table is the accurate statement.
+
+| Route | Methods | Source file |
+|---|---|---|
+| `/api/auth/[...nextauth]` | — | `src/app/api/auth/[...nextauth]/route.ts` |
+| `/api/bookings/[id]` | GET | `src/app/api/bookings/[id]/route.ts` |
+| `/api/bookings/bulk` | POST | `src/app/api/bookings/bulk/route.ts` |
+| `/api/bookings` | GET, POST | `src/app/api/bookings/route.ts` |
+| `/api/deliveries/assignments/[id]/attempt` | POST | `src/app/api/deliveries/assignments/[id]/attempt/route.ts` |
+| `/api/deliveries/assignments/[id]/deliver` | POST | `src/app/api/deliveries/assignments/[id]/deliver/route.ts` |
+| `/api/deliveries/assignments/[id]/pickup-attempt` | POST | `src/app/api/deliveries/assignments/[id]/pickup-attempt/route.ts` |
+| `/api/deliveries/assignments/[id]/regenerate-otp` | POST | `src/app/api/deliveries/assignments/[id]/regenerate-otp/route.ts` |
+| `/api/deliveries/batches/[id]/assignments` | POST | `src/app/api/deliveries/batches/[id]/assignments/route.ts` |
+| `/api/deliveries/batches/[id]/close` | POST | `src/app/api/deliveries/batches/[id]/close/route.ts` |
+| `/api/deliveries/batches/[id]/collect` | POST | `src/app/api/deliveries/batches/[id]/collect/route.ts` |
+| `/api/deliveries/batches/[id]/pickup` | POST | `src/app/api/deliveries/batches/[id]/pickup/route.ts` |
+| `/api/deliveries/batches/[id]/reassign` | POST | `src/app/api/deliveries/batches/[id]/reassign/route.ts` |
+| `/api/deliveries/batches/[id]` | GET | `src/app/api/deliveries/batches/[id]/route.ts` |
+| `/api/deliveries/batches` | GET, POST | `src/app/api/deliveries/batches/route.ts` |
+| `/api/deliveries/scan-back` | POST | `src/app/api/deliveries/scan-back/route.ts` |
+| `/api/finance/accounts` | GET | `src/app/api/finance/accounts/route.ts` |
+| `/api/finance/adjustments/[id]/approve` | POST | `src/app/api/finance/adjustments/[id]/approve/route.ts` |
+| `/api/finance/adjustments/[id]/reject` | POST | `src/app/api/finance/adjustments/[id]/reject/route.ts` |
+| `/api/finance/adjustments` | GET, POST | `src/app/api/finance/adjustments/route.ts` |
+| `/api/finance/cod-position` | GET | `src/app/api/finance/cod-position/route.ts` |
+| `/api/finance/invoices/[id]/payments` | POST | `src/app/api/finance/invoices/[id]/payments/route.ts` |
+| `/api/finance/invoices/[id]` | GET | `src/app/api/finance/invoices/[id]/route.ts` |
+| `/api/finance/invoices/[id]/void` | POST | `src/app/api/finance/invoices/[id]/void/route.ts` |
+| `/api/finance/invoices` | GET, POST | `src/app/api/finance/invoices/route.ts` |
+| `/api/finance/ledger` | GET | `src/app/api/finance/ledger/route.ts` |
+| `/api/finance/overview` | GET | `src/app/api/finance/overview/route.ts` |
+| `/api/finance/refunds/[id]/approve` | POST | `src/app/api/finance/refunds/[id]/approve/route.ts` |
+| `/api/finance/refunds/[id]/process` | POST | `src/app/api/finance/refunds/[id]/process/route.ts` |
+| `/api/finance/refunds/[id]/reject` | POST | `src/app/api/finance/refunds/[id]/reject/route.ts` |
+| `/api/finance/refunds` | GET, POST | `src/app/api/finance/refunds/route.ts` |
+| `/api/finance/remittances/[id]/resolve` | POST | `src/app/api/finance/remittances/[id]/resolve/route.ts` |
+| `/api/finance/remittances/[id]` | GET | `src/app/api/finance/remittances/[id]/route.ts` |
+| `/api/finance/remittances/[id]/verify` | POST | `src/app/api/finance/remittances/[id]/verify/route.ts` |
+| `/api/finance/remittances` | GET, POST | `src/app/api/finance/remittances/route.ts` |
+| `/api/finance/settlements/[id]/approve` | POST | `src/app/api/finance/settlements/[id]/approve/route.ts` |
+| `/api/finance/settlements/[id]/cancel` | POST | `src/app/api/finance/settlements/[id]/cancel/route.ts` |
+| `/api/finance/settlements/[id]/pay` | POST | `src/app/api/finance/settlements/[id]/pay/route.ts` |
+| `/api/finance/settlements/[id]` | GET | `src/app/api/finance/settlements/[id]/route.ts` |
+| `/api/finance/settlements` | GET, POST | `src/app/api/finance/settlements/route.ts` |
+| `/api/finance/vendor-statement` | GET | `src/app/api/finance/vendor-statement/route.ts` |
+| `/api/incidents/[id]` | GET | `src/app/api/incidents/[id]/route.ts` |
+| `/api/incidents` | GET, POST | `src/app/api/incidents/route.ts` |
+| `/api/live-operations/[trackingSessionId]` | GET | `src/app/api/live-operations/[trackingSessionId]/route.ts` |
+| `/api/live-operations` | GET | `src/app/api/live-operations/route.ts` |
+| `/api/me` | GET | `src/app/api/me/route.ts` |
+| `/api/notifications` | GET, POST | `src/app/api/notifications/route.ts` |
+| `/api/notifications/unread-count` | GET | `src/app/api/notifications/unread-count/route.ts` |
+| `/api/operations/custody` | GET | `src/app/api/operations/custody/route.ts` |
+| `/api/operations/handovers/[id]/close` | POST | `src/app/api/operations/handovers/[id]/close/route.ts` |
+| `/api/operations/handovers/[id]/confirm` | POST | `src/app/api/operations/handovers/[id]/confirm/route.ts` |
+| `/api/operations/handovers` | POST | `src/app/api/operations/handovers/route.ts` |
+| `/api/operations/inventory` | GET | `src/app/api/operations/inventory/route.ts` |
+| `/api/operations/receive` | POST | `src/app/api/operations/receive/route.ts` |
+| `/api/packages/[id]` | GET | `src/app/api/packages/[id]/route.ts` |
+| `/api/public/track/[trackingId]/complaint` | POST | `src/app/api/public/track/[trackingId]/complaint/route.ts` |
+| `/api/reports/[name]/export` | GET | `src/app/api/reports/[name]/export/route.ts` |
+| `/api/reports/cod` | GET | `src/app/api/reports/cod/route.ts` |
+| `/api/reports/daily` | GET | `src/app/api/reports/daily/route.ts` |
+| `/api/reports/drivers` | GET | `src/app/api/reports/drivers/route.ts` |
+| `/api/reports/drivers/self` | GET | `src/app/api/reports/drivers/self/route.ts` |
+| `/api/reports/finance` | GET | `src/app/api/reports/finance/route.ts` |
+| `/api/reports/overview` | GET | `src/app/api/reports/overview/route.ts` |
+| `/api/reports/transfers` | GET | `src/app/api/reports/transfers/route.ts` |
+| `/api/reports/vendors` | GET | `src/app/api/reports/vendors/route.ts` |
+| `/api/reports/warehouses` | GET | `src/app/api/reports/warehouses/route.ts` |
+| `/api/returns/[id]/approve` | POST | `src/app/api/returns/[id]/approve/route.ts` |
+| `/api/returns/[id]/complete` | POST | `src/app/api/returns/[id]/complete/route.ts` |
+| `/api/returns/[id]/inspect` | POST | `src/app/api/returns/[id]/inspect/route.ts` |
+| `/api/returns/[id]/reject` | POST | `src/app/api/returns/[id]/reject/route.ts` |
+| `/api/returns` | GET, POST | `src/app/api/returns/route.ts` |
+| `/api/support/tickets/[id]/request-address-correction` | POST | `src/app/api/support/tickets/[id]/request-address-correction/route.ts` |
+| `/api/support/tickets/[id]/request-redelivery` | POST | `src/app/api/support/tickets/[id]/request-redelivery/route.ts` |
+| `/api/support/tickets/[id]` | GET | `src/app/api/support/tickets/[id]/route.ts` |
+| `/api/support/tickets` | GET, POST | `src/app/api/support/tickets/route.ts` |
+| `/api/tasks/[id]` | GET | `src/app/api/tasks/[id]/route.ts` |
+| `/api/tasks` | GET, POST | `src/app/api/tasks/route.ts` |
+| `/api/track/[trackingId]/details` | POST | `src/app/api/track/[trackingId]/details/route.ts` |
+| `/api/track/[trackingId]` | GET | `src/app/api/track/[trackingId]/route.ts` |
+| `/api/tracking/location` | POST | `src/app/api/tracking/location/route.ts` |
+| `/api/tracking/session/current` | GET | `src/app/api/tracking/session/current/route.ts` |
+| `/api/tracking/session/pause` | POST | `src/app/api/tracking/session/pause/route.ts` |
+| `/api/tracking/session/resume` | POST | `src/app/api/tracking/session/resume/route.ts` |
+| `/api/tracking/session/start` | POST | `src/app/api/tracking/session/start/route.ts` |
+| `/api/tracking/session/stop` | POST | `src/app/api/tracking/session/stop/route.ts` |
+| `/api/transfers/[id]/complete-receiving` | POST | `src/app/api/transfers/[id]/complete-receiving/route.ts` |
+| `/api/transfers/[id]/dispatch` | POST | `src/app/api/transfers/[id]/dispatch/route.ts` |
+| `/api/transfers/[id]/finish-receiving` | POST | `src/app/api/transfers/[id]/finish-receiving/route.ts` |
+| `/api/transfers/[id]/load` | POST | `src/app/api/transfers/[id]/load/route.ts` |
+| `/api/transfers/[id]/receive` | POST | `src/app/api/transfers/[id]/receive/route.ts` |
+| `/api/transfers/[id]/reconcile` | POST | `src/app/api/transfers/[id]/reconcile/route.ts` |
+| `/api/transfers/[id]` | GET | `src/app/api/transfers/[id]/route.ts` |
+| `/api/transfers` | GET, POST | `src/app/api/transfers/route.ts` |
+| `/api/trips/[id]/arrive` | POST | `src/app/api/trips/[id]/arrive/route.ts` |
+| `/api/trips/[id]/depart` | POST | `src/app/api/trips/[id]/depart/route.ts` |
+| `/api/vendors` | GET | `src/app/api/vendors/route.ts` |
+| `/api/warehouses/[id]` | GET | `src/app/api/warehouses/[id]/route.ts` |
+| `/api/warehouses` | GET | `src/app/api/warehouses/route.ts` |

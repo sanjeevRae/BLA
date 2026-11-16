@@ -67,9 +67,11 @@ under a foreign driver identity.
 - **Detailed pings (`DriverLocationPing`): 30 days** by default
   (configurable, `retentionDays` in the `tracking.config`
   SystemSetting). `pruneExpiredLocationPings()` deletes ping rows
-  whose server receive time is older than the window. Phase 8
-  wires the prune to a schedule; until then it is run
-  operationally. The prune never touches sessions, snapshots,
+  whose server receive time is older than the window. **Phase 8
+  schedule (now wired): the prune runs daily and the
+  abandoned-session expiry sweep runs hourly, both via
+  `scripts/tracking-maintenance.ts`** (see
+  `docs/live-gps-tracking.md` §11). The prune never touches sessions, snapshots,
   custody records, tracking events, or financial records.
 - **Sessions (`TrackingSession`)**: kept as operational records
   (who was tracked, for which assignment, when, and why the
@@ -105,3 +107,28 @@ needs, access logging expectations, and the process for a driver
 to see or challenge their own location records. **This item is
 open and is a production gate** — it is recorded here and in
 `docs/known-limitations.md` so it cannot be silently forgotten.
+
+---
+
+## 7. Phase 8 confirmation (2026-11-16)
+
+- **Foreground-only limitation — explicit.** Location collection
+  depends on the Browser Geolocation API in the signed-in web app.
+  Collection happens **only while the tracking app is in the
+  foreground** on the driver's device. Screen lock, browser close,
+  tab suspension, or OS background-kill all stop updates, and the
+  system records that honestly as degrading freshness
+  (`DELAYED` / `STALE` / `OFFLINE`) — never as continued tracking.
+  No background collection exists, none is claimed to drivers or
+  managers, and no disciplinary or operational conclusion may
+  assume coverage during a gap.
+- **Maintenance schedule.** Hourly: abandoned-session expiry
+  (`expireAbandonedTrackingSessions`, `endReason = EXPIRED`).
+  Daily: detailed-ping prune (`pruneExpiredLocationPings`) at the
+  **30-day default retention** above. Both run via
+  `scripts/tracking-maintenance.ts`; see
+  `docs/live-gps-tracking.md` §11.
+- **Production gate unchanged.** §6's Nepal Privacy Act 2075 legal
+  review remains **open and blocking** for enabling GPS in
+  production; it is carried as an open decision in
+  `docs/deployment-guide.md` (Production Readiness Checklist).
