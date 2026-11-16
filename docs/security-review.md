@@ -546,3 +546,123 @@ track/[trackingId]/complaint route — to the repo-standard
 No route in `src/app/api` now parses a body without the catch.
 Behaviour for valid bodies is unchanged; malformed bodies now reach
 service validation and answer 400.
+
+## V2 Phase 8 — FINAL independent security review (2026-11-16)
+
+Scope: the whole V2 surface at HEAD `b44919a` — the GPS stack,
+Live Operations, the admin surfaces (Users & Roles / Settings /
+Audit Logs), the four-eyes invitation flow, every Phase 7 surface,
+the Phase 8 additions, and a V1 High-class IDOR sweep over the new
+`[id]` routes. The reviewer built none of V2. Method: live
+proof-of-concept attacks as a vitest suite against the local test
+database (`tests/integration/phase8-final-review.test.ts`, 31
+tests), each asserting the refusal AND unchanged state on denial.
+The coordinator's full-suite run at the same HEAD stood at 873/873
+before this suite; this suite adds 31 more.
+
+**Verdict: PASS — no findings at any severity.** Every attack was
+repelled on first run. The one initial failure was a test-fixture
+defect (a free-text return `reason` violating the column's CHECK
+constraint), not a product defect; corrected to the enum value and
+the suite passes 31/31.
+
+### Attacks attempted, per area
+
+- **1 · GPS stack (6 tests)** — ping for another driver with the
+  body `driverId` spoofed to the session owner (refused, audited,
+  zero pings written; identity comes from the session only); ping
+  after session end; ping after the batch went terminal behind the
+  session's back (in-transaction re-check refuses); session start
+  for a batch and for a trip the driver does not hold; pause /
+  resume / stop of another driver's session (session survives
+  ACTIVE); supervisor stop scope — Warehouse Admins of both an
+  unrelated warehouse and the driver's non-session warehouse are
+  refused, the session warehouse's WA stops it as SUPERVISOR.
+- **2 · Live Operations (4 tests)** — a WA cannot widen scope via
+  the `warehouseId` filter, via search (including an exact foreign
+  tracking-id search), or at all in the plain list; the six roles
+  without `operations.live_view` (rider, vendor, customer,
+  warehouse staff, finance, support) are refused on BOTH list and
+  detail; the COD field is *absent* (not null) for a live-view
+  holder stripped of `cod.read`/`finance.read`, and present for a
+  COD-holding WA as control; detail payloads contain the package
+  tracking id but none of the planted recipient name / phone /
+  address.
+- **3 · Admin surfaces (5 tests)** — Users & Roles escalation
+  boundary verified as the service actually enforces it:
+  `setUserRoles` requires `role.manage` (Super Admin only in the
+  catalog), so ADMIN and Warehouse Admin actors are refused for
+  every grant including SUPER_ADMIN, a Super Admin cannot edit
+  their own roles, and a Super Admin granting SUPER_ADMIN succeeds
+  (the documented boundary — no lesser actor can); membership
+  edits outside scope (WA assigning into another warehouse, or
+  appointing a Warehouse Admin in their own) refused with zero
+  rows written, staff assignment in own warehouse works; Settings
+  writes by ADMIN / WA / FINANCE refused and nothing stored;
+  `tracking.config` patches below floors (`minPingIntervalSeconds: 1`,
+  `futureTimestampToleranceSeconds: 5`) and above caps
+  (`retentionDays: 99999`), and idle-timeout values 0 / 169, are
+  rejected whole with the stored row byte-identical; the Audit
+  Logs viewer stays warehouse-scoped under `warehouseId`,
+  entity-type and `actorSearch` filter combinations, while the
+  global reader sees both planted rows.
+- **4 · Four-eyes invitations (4 tests)** — self-approval refused
+  and audit-logged (`invitation_self_approval`); approval by
+  non-privileged actors (WA, FINANCE) refused; redemption before
+  approval refused with the generic message and the row stays
+  PENDING_APPROVAL; a second Super Admin's approval makes the
+  token redeemable exactly once; a REJECTED invitation can never
+  be redeemed; an invitation that expired while PENDING_APPROVAL
+  cannot be approved (flips to EXPIRED) and cannot be redeemed.
+- **5 · Phase 7 surfaces (9 tests)** — driver incident scope (a
+  rider cannot link another driver's assignment or package, and
+  cannot read the other's incident in detail or list); bulk
+  booking (a cross-vendor row refuses the whole bulk with zero
+  orders; an in-transaction failure on row 2 rolls back row 1);
+  batch reassignment custody (exactly one open custody record,
+  held by the new rider; the old rider is refused on the moved
+  assignment); trip driver replacement en route (custody and trip
+  move, the old driver's session ends REASSIGNED and their pings
+  then fail) and its pre-departure refusal; returns inspect /
+  complete keyed to the package's physical warehouse (WA of the
+  return's origin warehouse refused on both, WA of the physical
+  warehouse inspects); POD evidence reuse regression (the same
+  reference bound to a second package — cross-kind included — is
+  refused inside the transaction, exactly one binding survives);
+  driver profile (out-of-scope read denied and audited; the `gps`
+  key is absent for an actor without `operations.live_view` and
+  present with it).
+- **6 · Phase 8 additions (3 tests)** — `createDeliveryBatch`
+  kind gate (pickup-only actor refused a DELIVERY batch,
+  delivery-only refused a PICKUP batch, no batch rows written on
+  refusal, pickup-only PICKUP creation works); tracking
+  maintenance functions (`runTrackingMaintenance`,
+  `expireAbandonedTrackingSessions`, `pruneExpiredLocationPings`)
+  are exposed by NO route under `src/app/api` (whole-tree grep
+  asserted in the suite; the only caller is the CLI script);
+  malformed JSON at the handler level answers 400, not 500, on
+  three swept routes (tasks, operations/handovers,
+  operations/receive).
+- **7 · IDOR sweep on the new `[id]` routes** — folded into the
+  areas above: Live Operations detail with a foreign session id
+  (refused + audited, no data returned), driver-profile detail
+  with a foreign driver id (denied + audited), and incident
+  detail with another driver's incident id (refused, absent from
+  list). No `[id]` substitution returned another scope's data.
+
+### Findings
+
+None. No High, Medium, Low or Informational findings were raised
+by this review; no production code was changed by the reviewer.
+
+### Regression coverage
+
+`tests/integration/phase8-final-review.test.ts` (31 tests) is
+committed as the permanent regression suite for this review. It
+complements, and does not duplicate, the per-phase reviewer suites
+it re-attacks from a fresh angle: `phase3-security-review.test.ts`
+(GPS races/replay/config abuse), `phase5-security-review.test.ts`
+(live-operations search composition), `phase6-security-review.test.ts`
+(admin surfaces and four-eyes races), `phase7-security-review.test.ts`
+(Phase 7 surfaces, 37 PoCs) and `phase8-api-validation.test.ts`
+(handler-level validation on the V2 routes).
