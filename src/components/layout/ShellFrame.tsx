@@ -27,7 +27,9 @@ export interface ShellFrameProps {
   canSelectAllWarehouses: boolean;
   userName: string;
   userEmail: string;
-  notificationsHref: string;
+  /** Null when the actor lacks notification.read_own — the bell and
+   *  the profile-menu inbox link are then not rendered at all. */
+  notificationsHref: string | null;
   signOut: ReactNode;
   children: ReactNode;
 }
@@ -190,7 +192,7 @@ export function ShellFrame(props: ShellFrameProps) {
                 canSelectAll={props.canSelectAllWarehouses}
               />
             ) : null}
-            <NotificationsBell />
+            {props.notificationsHref ? <NotificationsBell /> : null}
             <ProfileMenu
               name={props.userName}
               email={props.userEmail}

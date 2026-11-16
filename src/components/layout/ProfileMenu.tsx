@@ -20,7 +20,7 @@ export function ProfileMenu({
   name: string;
   email: string;
   roleLabel: string;
-  notificationsHref: string;
+  notificationsHref: string | null;
   signOut: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -88,9 +88,11 @@ export function ProfileMenu({
               {roleLabel}
             </div>
           </div>
-          <Link role="menuitem" className={linkClass} href={notificationsHref} onClick={() => setOpen(false)}>
-            Notifications
-          </Link>
+          {notificationsHref ? (
+            <Link role="menuitem" className={linkClass} href={notificationsHref} onClick={() => setOpen(false)}>
+              Notifications
+            </Link>
+          ) : null}
           <Link role="menuitem" className={linkClass} href="/mfa-setup" onClick={() => setOpen(false)}>
             Security &amp; MFA
           </Link>

@@ -81,7 +81,9 @@ export async function DashboardShell({
       canSelectAllWarehouses={canSelectAllWarehouses}
       userName={actor.fullName}
       userEmail={actor.email}
-      notificationsHref={`/${dashboard}/notifications`}
+      notificationsHref={
+        actor.permissions.has("notification.read_own") ? `/${dashboard}/notifications` : null
+      }
       signOut={<SignOutButton />}
     >
       {children}

@@ -57,7 +57,9 @@ function framePropsFor(role: RoleCode): ShellFrameProps {
     canSelectAllWarehouses: false,
     userName: "Test User",
     userEmail: "test@bla.test",
-    notificationsHref: `/${dashboard}/notifications`,
+    notificationsHref: permissions.has("notification.read_own")
+      ? `/${dashboard}/notifications`
+      : null,
     signOut: <button type="button">Sign out</button>,
     children: <p>Page body</p>,
   };
@@ -104,6 +106,14 @@ describe("ShellFrame — role navigation rendering", () => {
     const { container } = render(<ShellFrame {...framePropsFor("CUSTOMER")} />);
     const hrefs = navLinks(container);
     expect(hrefs).toEqual(["/customer", "/customer/tickets"]);
+  });
+
+  it("notifications chrome (bell) renders only for roles holding notification.read_own", () => {
+    render(<ShellFrame {...framePropsFor("CUSTOMER")} />);
+    expect(screen.queryByRole("button", { name: "Notifications" })).toBeNull();
+    cleanup();
+    render(<ShellFrame {...framePropsFor("FINANCE")} />);
+    expect(screen.getByRole("button", { name: "Notifications" })).toBeTruthy();
   });
 
   it("the current route's nav item is marked aria-current", () => {

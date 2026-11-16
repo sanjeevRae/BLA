@@ -2,6 +2,7 @@
 
 import { cookies } from "next/headers";
 
+import { requireAccessGranted } from "@/lib/auth/actor";
 import { getActorContext } from "@/lib/auth/permissions";
 import { WAREHOUSE_SCOPE_COOKIE } from "@/lib/navigation/scope";
 
@@ -18,6 +19,14 @@ import { WAREHOUSE_SCOPE_COOKIE } from "@/lib/navigation/scope";
 export async function setWarehouseScopeAction(warehouseId: string | null): Promise<void> {
   const actor = await getActorContext();
   if (!actor) return;
+  // Same P2-3 gate every other server action enforces: flagged
+  // (mustChangePassword) or MFA-pending sessions may not invoke this
+  // endpoint directly, even though the layout would redirect them.
+  try {
+    requireAccessGranted(actor);
+  } catch {
+    return;
+  }
 
   const store = await cookies();
   if (!warehouseId) {
@@ -34,6 +43,9 @@ export async function setWarehouseScopeAction(warehouseId: string | null): Promi
     httpOnly: true,
     sameSite: "lax",
     path: "/",
+    // Mirror the session cookie: Secure whenever the app is served
+    // over HTTPS (AUTH_URL), plain on local http.
+    secure: (process.env.AUTH_URL ?? "").startsWith("https://"),
     maxAge: 60 * 60 * 24 * 30,
   });
 }
