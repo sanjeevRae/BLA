@@ -318,3 +318,100 @@ iOS Safari, Android Chrome) is a Phase 8 verification item.
 Zero paid services: browser Geolocation + the existing Postgres +
 polling. OpenStreetMap tiles are a Phase 5 (map UI) concern and
 follow the OSM tile policy; the backend adds no external calls.
+
+## 10. The Live Operations map (Phase 5)
+
+Pages: `/admin/live-operations`, `/super-admin/live-operations`,
+`/warehouse/live-operations` — thin wrappers over one shared board
+(`src/components/live-operations/`), registered in the Phase 1
+navigation registry under Operations and gated on
+`operations.live_view`. Warehouse Staff, riders, drivers, vendors
+and customers have no page and no nav item; the API denies them
+regardless (§3). The map itself is a client-only island
+(`LiveMap.tsx`, loaded with `next/dynamic`, `ssr: false` — Leaflet
+needs the DOM) inside the client board.
+
+**Data behaviour.** The board polls `GET /api/live-operations`
+every 50 s (inside the spec's 45–60 s band) **only while the
+document is visible** — the Page Visibility API pauses polling in
+a hidden tab and returning to the tab refetches immediately. A
+manual Refresh button does the same on demand. The header shows
+when the board last refreshed, the server's latest received
+location time across the returned movements (`latestReceivedAt`),
+and the board's server generation time (`generatedAt`). Poll
+results replace list/marker state in place: the page never
+reloads and the Leaflet instance is never remounted (one
+`MapContainer` with constant props; markers are keyed children;
+the view only re-fits when the *set* of located movements
+changes, so polling never yanks a user's pan). A failed fetch
+keeps the last good data on screen, flags it as possibly stale,
+and offers Retry.
+
+**Search is server-side.** The search box and the warehouse
+selector are query parameters of the list endpoint, composed
+inside the service with the actor's scope — search narrows, it
+never widens (Phase 5 integration tests prove a Warehouse Admin
+searching a foreign warehouse's package tracking ID gets an
+empty board). Search matches driver name, trip number, transfer
+number, batch id prefix, and package tracking IDs (a tracking-ID
+search resolves to the movement carrying that package). The
+filter chips (All / Warehouse transfers / Pickups / Deliveries /
+Active / Delayed / Stale) filter the fetched list client-side;
+Active = FRESH or DELAYED, Stale = STALE or OFFLINE.
+
+**The map.** OpenStreetMap standard tiles; the tile URL and
+attribution live in exactly one place (`src/lib/maps/config.ts`)
+so the provider can be swapped without touching components.
+Markers are `divIcon` pins (no Leaflet default icon assets):
+shape/letter by movement type (line-haul / pickup / delivery),
+colour and opacity by freshness — a stale or offline pin is
+visually muted and never looks live. A movement with no accepted
+fix yet has **no marker**; its list row says "Waiting for first
+location". The selected movement additionally shows its origin
+and destination warehouse markers (only where the warehouse's
+primary address carries coordinates — none are invented) and an
+accuracy circle of the fix's `accuracyMeters`. Controls: zoom,
+Fit active drivers, My warehouse (when a warehouse filter is
+set), Show all authorized. There are **no road routes and no
+ETAs**. The single line ever drawn is a dashed, muted
+straight-line connector from the selected driver's position to
+the destination warehouse, labelled in the detail panel
+"Straight-line connection — not a road route".
+
+**Side list + detail.** Each row: driver, movement type, trip /
+batch reference, origin → destination, package count, current
+activity, last update in relative time, and a freshness badge
+(Fresh green, Delayed amber, Stale red, Offline gray) — freshness
+is always paired with its last-update time (§5). Selecting a row
+or a marker selects the movement in both and opens the detail
+panel (`GET /api/live-operations/[id]`): driver, vehicle
+(line-haul), trip/batch, route, package count, delivered /
+remaining for batches, COD collected **only when the payload
+carries it** (the server includes `codCollectedPaisa` only for
+`finance.read` / `cod.read` actors — the panel renders nothing
+about COD otherwise), last GPS update with accuracy in metres,
+freshness, and the authorized package list (tracking IDs +
+statuses only, linking to the public milestone page). Action
+links appear only where the route exists in that dashboard and
+the actor holds the permission: View trip / View manifest /
+View batch exist only in the warehouse dashboard (the admin
+trees have no transfers/deliveries routes). No "View driver"
+action exists — there is no driver-detail route in any
+dashboard, and a list page is not a driver view.
+
+**OpenStreetMap tile-policy obligations** (this deployment is a
+low-volume pilot on the public tile service):
+- Tiles load from the standard HTTPS endpoint with the
+  attribution "© OpenStreetMap contributors" visible on the map
+  at all times.
+- No bulk downloading, prefetching, or offline caching of tiles;
+  the browser's normal HTTP cache honours OSM's caching headers.
+- The tile provider is one config constant: if usage grows
+  beyond a low-volume pilot, production must move to self-hosted
+  tiles or a contracted provider — that evaluation is a Phase 8
+  deployment item, not a silent scale-up of the public service.
+
+**Cost.** Still zero paid services: Leaflet + react-leaflet
+(MIT/BSD open source), OSM public tiles under the policy above,
+browser Geolocation, and the existing Postgres behind a polling
+endpoint.
