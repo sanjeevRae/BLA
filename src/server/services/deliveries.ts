@@ -492,13 +492,22 @@ export async function createDeliveryBatch(
   input: CreateDeliveryBatchInput,
 ): Promise<DeliveryBatchView> {
   const data = parse(createDeliveryBatchSchema, input);
-  await requirePermAudited(actor, "delivery.assign", "DeliveryBatch");
+  // Gate by batch kind (Phase 8, closing the Phase 7 minor): kind is
+  // resolved from the parsed input FIRST, then the matching assign
+  // permission is required — PICKUP batches need pickup.assign, all
+  // other kinds (DELIVERY default, MIXED) need delivery.assign, the
+  // same split addBatchPackages already applies.
+  const kind = data.kind ?? "DELIVERY";
+  await requirePermAudited(
+    actor,
+    kind === "PICKUP" ? "pickup.assign" : "delivery.assign",
+    "DeliveryBatch",
+  );
   const warehouse = await loadWarehouseOr404(data.warehouseId);
   await assertWarehouseScope(actor, warehouse.id, "DeliveryBatch");
   if (warehouse.status !== "ACTIVE") {
     throw new DomainValidationError("Warehouse is not ACTIVE");
   }
-  const kind = data.kind ?? "DELIVERY";
   const rider = await loadEligibleRider(prisma, data.riderUserId, warehouse.id, kind);
   if (data.serviceAreaId) {
     const area = await prisma.serviceArea.findUnique({
