@@ -287,3 +287,27 @@ Using `https://tile.openstreetmap.org/{z}/{x}/{y}.png` obliges us to: display **
 - Baseline commands run locally on 2026-11-16 against `main` @ `84f3f00`; local Postgres rebuilt (role/DBs/migrations/seed) before the valid test run, as recorded in §1.
 - Live snapshot method: Supabase Management API, `information_schema`/`pg_indexes` SELECTs only; snapshot file lives in the V2 goal workspace (`hidden_files/`), never in the repo.
 - This document is the Phase 0 deliverable. Phase 1 (UI/UX foundation) starts from defects H-1, M-11, L-3/L-4; Phase 2 from H-3, M-1, M-7, M-8 (tests), M-9, L-1, L-2.
+
+## Appendix C — Independent AI review synthesis (spec §3.1) — RUN 2026-11-16
+
+Both question sets from Appendix A were run independently by the parent agent: ChatGPT (web, Free plan) and Gemini (web, free tier), 2026-11-16. No credentials, keys, or customer data were shared — architecture and code-structure questions only. Every suggestion below was validated against the actual V1 design and the V2 spec before adoption; the full reviews and per-item validation notes are kept in the V2 goal workspace.
+
+**Convergent verdict (both models):** the V1 architecture is fundamentally sound — keep Order → Shipment → Package, the single-writer lifecycle service, the five status domains as strings + CHECK + transition table, service-layer warehouse authorisation, append-only balanced journal, manifest transfers, and the snapshot-based GPS design. Neither model recommends replacing any of it. The residual risks both name are concurrency, atomicity, and cross-resource authorisation details — which is where the items below land.
+
+**Adopted — Phase 2 (core validation):**
+- Cross-resource IDOR discipline: validate parent and child resources together; bulk operations all-or-nothing; exports and background jobs under the same scope policy as interactive reads/writes.
+- Cross-domain status invariants: a delivered package must have a completion record; a refund must reference a valid original payment; an unresolved missing-package incident must not be silently cleared by a normal status update.
+- Lifecycle concurrency: transitions must be state-guarded so two simultaneous requests cannot both succeed.
+- Journal balance as a database-enforced posting invariant (deferred constraint/trigger), not service-level only.
+- Payment idempotency: database UNIQUE index on the idempotency key, a stored request fingerprint (same key + different payload ⇒ reject), and business-level uniqueness so one COD obligation can never be settled beyond its outstanding amount.
+- Invitation hardening checks: atomic token consumption, rate limiting on the redemption endpoint; four-eyes approval for privileged-role invitations as a small candidate item.
+
+**Adopted — Phase 3 (GPS backend):**
+- Session validation atomic with the write: the TrackingSession row is locked inside the same transaction that inserts the ping and updates the snapshot; session stop takes the same lock (closes the validate-then-close race both models walked).
+- Conditional snapshot upsert: an older recordedAt/sequence must never overwrite a newer snapshot.
+- Indexes: TrackingSession(driverId, status); partial unique index for one ACTIVE session per driver; DriverLocationPing(trackingSessionId, recordedAt DESC); DriverCurrentLocation unique per driver.
+- Ping validation: coordinate/accuracy/timestamp ranges, implausible future timestamps rejected, abandoned sessions expired server-side.
+
+**Adopted — Phases 1/5/6 (UI):** navigation grouped by operations with contextual actions on the work queues themselves; urgency never visually quiet (failed scans get unmistakable feedback, not vanishing toasts); quick actions as a compact permission-filtered toolbar rather than card walls; rider targets 44–48px and few-tap flows; a GPS indicator must never look active when permission is revoked or tracking is paused; the live map leads with freshness, synchronises marker↔list selection, and never shows historical pings, phone numbers, or financial data.
+
+**Considered and rejected (with reason):** ShipmentLeg/PackageRelation lineage entities (not in the V2 spec; the Transfer/Trip model covers movements — future consideration only); PostgreSQL row-level security (fragile with Prisma + pooled connections; service scoping + adversarial tests are the V2 control); offline/local-first rider queues and device attestation (impossible or out of scope for a foreground, online-by-design browser app — GPS and delivery evidence stay indicative, never proof, per spec §5.2); removing Recent Activity from dashboards (conflicts with spec §10.4); hash-chained audit logs (disproportionate here). Points where a reviewer assumed a missing structure that already exists (PackageItem junction, returns flow, transactional notifications, atomic transfer transactions) were verified against the schema and are re-verification items in Phases 2/7, not rebuilds.
