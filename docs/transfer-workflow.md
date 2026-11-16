@@ -1,3 +1,5 @@
+> **Canonical V2 doc:** `docs/warehouse-transfers.md` supersedes this V1 workflow for the built system. This file is retained for design history only.
+
 # Inter-Warehouse Transfer Workflow — BLA Logistics Platform
 
 **Purpose.** A transfer moves packages between two warehouses under a manifest,

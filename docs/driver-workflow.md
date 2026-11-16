@@ -1,3 +1,5 @@
+> **Canonical V2 doc:** `docs/driver-operations.md` supersedes this V1 workflow for the built system. This file is retained for design history only.
+
 # Driver, Vehicle and Trip Workflow — BLA Logistics Platform
 
 **Purpose.** Drivers move packages in two distinct jobs: riders do pickup and

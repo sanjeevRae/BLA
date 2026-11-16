@@ -1,3 +1,5 @@
+> **Canonical V2 doc:** `docs/delivery-operations.md` supersedes this V1 workflow for the built system. This file is retained for design history only.
+
 # Delivery Workflow (Pickup and Final-Mile) — BLA Logistics Platform
 
 **Purpose.** The last mile is where the company meets the customer: pickups
