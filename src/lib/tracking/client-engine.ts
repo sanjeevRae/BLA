@@ -90,6 +90,15 @@ export interface EngineDeps {
   now?: () => number;
   storage?: SequenceStorage;
   onEvent?: (event: EngineEvent) => void;
+  /** Decision-tick period (default 15 s). The tick re-evaluates
+   *  the latest fix against the cadence rules so a send matures
+   *  on schedule even when the platform delivers fixes sparsely
+   *  (a stationary phone may not produce a new fix for minutes —
+   *  without the tick the stationary heartbeat could never fire).
+   *  Injectable so tests can drive it deterministically. */
+  tickIntervalMs?: number;
+  setIntervalFn?: (callback: () => void, ms: number) => unknown;
+  clearIntervalFn?: (handle: unknown) => void;
 }
 
 export interface EngineContext {
@@ -304,11 +313,18 @@ export class TrackingEngine {
     this.watchId = this.deps.geolocation.watchPosition(
       (fix) => this.handleFix(fix),
       (error) => {
+        // Surfaced immediately (the panel must never keep
+        // claiming "tracking on" through a signal problem), but
+        // the watch is NOT torn down: POSITION_UNAVAILABLE and
+        // TIMEOUT are routinely transient on real devices, and
+        // the next good fix clears the error in noteFix. The
+        // watchdog remains the backstop if fixes never resume.
         this.lastError = error;
         this.emit({ type: "geo-error", error });
       },
       { enableHighAccuracy: true, maximumAge: 5_000, timeout: 30_000 },
     );
+    this.startTick();
   }
 
   stopWatch(): void {
@@ -316,6 +332,34 @@ export class TrackingEngine {
       this.deps.geolocation.clearWatch(this.watchId);
     }
     this.watchId = null;
+    this.stopTick();
+  }
+
+  private tickHandle: unknown = null;
+
+  private startTick(): void {
+    if (this.tickHandle !== null) return;
+    const setIntervalFn =
+      this.deps.setIntervalFn ?? ((cb: () => void, ms: number) => setInterval(cb, ms));
+    this.tickHandle = setIntervalFn(() => this.onTick(), this.deps.tickIntervalMs ?? 15_000);
+  }
+
+  private stopTick(): void {
+    if (this.tickHandle === null) return;
+    const clearIntervalFn =
+      this.deps.clearIntervalFn ?? ((handle: unknown) => clearInterval(handle as never));
+    clearIntervalFn(this.tickHandle);
+    this.tickHandle = null;
+  }
+
+  /** Re-evaluate the latest fix against the cadence rules. The
+   *  tick never touches lastFixAt — it must not fake fix
+   *  freshness for the watchdog; it only lets a matured send
+   *  (moving interval reached, stationary heartbeat due) go out
+   *  on time when no new fix has arrived to trigger it. */
+  private onTick(): void {
+    if (!this.context || this.watchId === null || !this.lastFix) return;
+    this.evaluateSend(this.lastFix);
   }
 
   /** Page Visibility: hidden stops the watch (no background
@@ -374,6 +418,13 @@ export class TrackingEngine {
   handleFix(fix: GeoFix): void {
     if (!this.context) return;
     this.noteFix(fix);
+    this.evaluateSend(fix);
+  }
+
+  /** The cadence decision for one fix (a fresh arrival, or the
+   *  latest fix re-evaluated by the decision tick). */
+  private evaluateSend(fix: GeoFix): void {
+    if (!this.context) return;
     const config = this.context.config;
     const movingIntervalMs =
       (config.movingIntervalSeconds[this.context.trackingType as "PICKUP" | "DELIVERY" | "LINEHAUL"] ??
@@ -392,9 +443,8 @@ export class TrackingEngine {
     if (decision.send) {
       this.enqueueSend(fix);
     } else if (this.pending) {
-      // A new fix arrived while an older send is still unsent —
-      // retry the pending one (it stays the latest until a newer
-      // fix earns its own send).
+      // A send is still unsent — retry it (it stays the latest
+      // until a newer fix earns its own send).
       void this.flushPending();
     }
   }

@@ -230,7 +230,18 @@ export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver"
   const [startUnavailable, setStartUnavailable] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [endedDismissed, setEndedDismissed] = useState(false);
+  // The ended notice is shown once per ended session — including
+  // when the assignment is still eligible (driver stopped
+  // mid-assignment, supervisor stop) — until dismissed. The
+  // dismissal is kept in sessionStorage so a page reload does not
+  // nag the driver with the same notice again.
+  const [dismissedEndedId, setDismissedEndedId] = useState<string | null>(() => {
+    try {
+      return window.sessionStorage.getItem("bla.tracking.endedDismissed");
+    } catch {
+      return null;
+    }
+  });
   const [supported] = useState<boolean>(() => geoSupported());
 
   const engineRef = useRef<TrackingEngine | null>(null);
@@ -331,6 +342,17 @@ export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver"
   const session = data?.session ?? null;
   const sessionId = session?.id ?? null;
   const sessionStatus = session?.status ?? null;
+  const endedDismissed =
+    sessionStatus === "ENDED" && sessionId !== null && dismissedEndedId === sessionId;
+  const dismissEnded = () => {
+    if (!sessionId) return;
+    setDismissedEndedId(sessionId);
+    try {
+      window.sessionStorage.setItem("bla.tracking.endedDismissed", sessionId);
+    } catch {
+      // Storage unavailable — the in-memory dismissal still holds.
+    }
+  };
   useEffect(() => {
     const engine = engineRef.current;
     if (!sessionId || !data) {
@@ -463,7 +485,7 @@ export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver"
     }
     firstFixRef.current = fix;
     setStartingKey(null);
-    setEndedDismissed(false);
+    setDismissedEndedId(null);
     void fetchCurrent();
   }
 
@@ -625,6 +647,7 @@ export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver"
         {data !== null &&
         sessionStatus !== "ACTIVE" &&
         sessionStatus !== "PAUSED" &&
+        !(sessionStatus === "ENDED" && !endedDismissed) &&
         data.eligibleAssignments.length > 0 ? (
           <>
             <p className="text-[13px] text-ink">
@@ -686,10 +709,7 @@ export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver"
         ) : null}
 
         {/* ------------------------- ENDED ------------------------- */}
-        {data !== null &&
-        sessionStatus === "ENDED" &&
-        data.eligibleAssignments.length === 0 &&
-        !endedDismissed ? (
+        {data !== null && sessionStatus === "ENDED" && !endedDismissed ? (
           <>
             <p className="flex items-center gap-2 text-[13px] font-semibold text-slate2">
               <span className="inline-block h-2.5 w-2.5 rounded-full bg-faint" />
@@ -697,7 +717,7 @@ export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver"
             </p>
             <p className="text-[13px] text-ink">{endReasonCopy(session?.endReason ?? null)}</p>
             <div>
-              <button type="button" className={bigSubtleClass} onClick={() => setEndedDismissed(true)}>
+              <button type="button" className={bigSubtleClass} onClick={dismissEnded}>
                 Dismiss
               </button>
             </div>

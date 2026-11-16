@@ -413,6 +413,113 @@ describe("TrackingEngine", () => {
     expect(sent[1].latitude).toBe(27.7005);
   });
 
+  it("decision tick matures a held send without any new fix (sparse-fix cadence)", async () => {
+    // A platform may deliver fixes sparsely (headless emulation
+    // delivers only on position change; a stationary phone can go
+    // quiet for minutes). The move arrives inside the moving
+    // interval and is held; the tick — not a new fix — must send
+    // it once the interval matures.
+    const geo = new FakeGeo();
+    const sent: OutgoingPing[] = [];
+    const fixEvents: number[] = [];
+    let now = 1_000_000;
+    const tick: { cb: (() => void) | null } = { cb: null };
+    let clearedTicks = 0;
+    const engine = new TrackingEngine({
+      geolocation: geo,
+      sendPing: async (ping) => {
+        sent.push(ping);
+        return { ok: true, deduplicated: false };
+      },
+      now: () => now,
+      onEvent: (e) => {
+        if (e.type === "fix") fixEvents.push(e.fix.recordedAt);
+      },
+      setIntervalFn: (cb) => {
+        tick.cb = cb;
+        return "tick-1";
+      },
+      clearIntervalFn: () => {
+        clearedTicks += 1;
+        tick.cb = null;
+      },
+    });
+    engine.attach({ sessionId: "sess-tick", trackingType: "DELIVERY", config: CONFIG });
+    engine.startWatch();
+    expect(tick.cb).not.toBeNull();
+    geo.emit(fix({ recordedAt: now })); // initial fix → sent
+    await drain();
+    expect(sent).toHaveLength(1);
+    now += 10_000; // 10 s later: moved 222 m but inside the 150 s interval
+    geo.emit(fix({ latitude: 27.702, recordedAt: now }));
+    await drain();
+    expect(sent).toHaveLength(1); // held by the cadence
+    now += 150_000; // interval matured; NO new fix arrives
+    tick.cb?.();
+    await drain();
+    expect(sent).toHaveLength(2);
+    expect(sent[1].latitude).toBe(27.702);
+    // The tick must not fake fix freshness: it emits no new "fix"
+    // event (the panel's freshness display keys off arrivals).
+    expect(fixEvents).toEqual([1_000_000, 1_010_000]);
+    engine.detach();
+    expect(clearedTicks).toBe(1);
+    expect(tick.cb).toBeNull();
+  });
+
+  it("decision tick fires the stationary heartbeat with no new fixes", async () => {
+    const geo = new FakeGeo();
+    const sent: OutgoingPing[] = [];
+    let now = 1_000_000;
+    const tick: { cb: (() => void) | null } = { cb: null };
+    const engine = new TrackingEngine({
+      geolocation: geo,
+      sendPing: async (ping) => {
+        sent.push(ping);
+        return { ok: true, deduplicated: true };
+      },
+      now: () => now,
+      setIntervalFn: (cb) => {
+        tick.cb = cb;
+        return "tick-1";
+      },
+      clearIntervalFn: () => {
+        tick.cb = null;
+      },
+    });
+    engine.attach({ sessionId: "sess-tick-2", trackingType: "DELIVERY", config: CONFIG });
+    engine.startWatch();
+    geo.emit(fix({ recordedAt: now }));
+    await drain();
+    expect(sent).toHaveLength(1);
+    now += 599_000; // heartbeat (600 s) not yet due
+    tick.cb?.();
+    await drain();
+    expect(sent).toHaveLength(1);
+    now += 2_000; // 601 s — heartbeat due, still no new fix
+    tick.cb?.();
+    await drain();
+    expect(sent).toHaveLength(2);
+    engine.detach();
+  });
+
+  it("a transient watch error does not kill the watch; the next fix recovers", async () => {
+    const { engine, geo, sent, events, setNow } = makeEngine();
+    engine.startWatch();
+    geo.emit(fix({ recordedAt: 1_000_000 }));
+    await drain();
+    expect(sent).toHaveLength(1);
+    geo.fail(2); // POSITION_UNAVAILABLE — transient on real devices
+    expect(engine.getSnapshot().lastError?.code).toBe(2);
+    expect(geo.cleared).toHaveLength(0); // watch NOT torn down
+    setNow(1_200_000); // past the moving interval
+    geo.emit(fix({ latitude: 27.702, recordedAt: 1_200_000 }));
+    await drain();
+    expect(engine.getSnapshot().lastError).toBeNull(); // recovered
+    expect(sent).toHaveLength(2); // and the cadence flow resumed
+    expect(events).toContain("geo-error");
+  });
+
   it("does nothing before attach", async () => {
     const geo = new FakeGeo();
     const sendPing = vi.fn(async (): Promise<SendOutcome> => ({ ok: true, deduplicated: false }));

@@ -319,6 +319,24 @@ describe("LocationTrackingPanel", () => {
     expect(screen.getByText(/assignment was completed/)).toBeTruthy();
   });
 
+  it("shows the ended notice even while the assignment is still eligible; Dismiss reveals Start", async () => {
+    // Driver stopped mid-batch: the batch is still OPEN (eligible),
+    // but the spec's ended state must surface with its reason
+    // first — the eligible list returns only after Dismiss.
+    currentState = stateWith({
+      session: sessionView("ENDED", {
+        endedAt: new Date().toISOString(),
+        endReason: "DRIVER",
+      }) as OwnTrackingState["session"],
+      eligibleAssignments: [BATCH_ASSIGNMENT],
+    });
+    render(<LocationTrackingPanel variant="rider" />);
+    expect(await screen.findByText("Tracking ended")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Start tracking" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(await screen.findByRole("button", { name: "Start tracking" })).toBeTruthy();
+  });
+
   it("states the foreground-only limitation while active", async () => {
     currentState = stateWith({
       session: sessionView("ACTIVE") as OwnTrackingState["session"],
