@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
+
 /** Shared form styling for the warehouse module (console token system). */
 export const inputClass =
   "w-full rounded-md border border-line bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-brand disabled:bg-cream disabled:text-faint";
@@ -35,19 +37,7 @@ export function SectionCard({
 }
 
 export function WarehouseStatusBadge({ status }: { status: string }) {
-  const classes =
-    status === "ACTIVE"
-      ? "bg-greenbg text-green"
-      : status === "ARCHIVED"
-        ? "bg-cream text-faint"
-        : "bg-orangebg text-orange";
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${classes}`}
-    >
-      {status.charAt(0) + status.slice(1).toLowerCase()}
-    </span>
-  );
+  return <SharedStatusBadge domain="generic" status={status} />;
 }
 
 export function ErrorBox({ message }: { message: string }) {

@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { formatPaisa } from "@/components/bookings/ui";
+import { StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import { listWarehouses } from "@/server/services/warehouses";
 import {
@@ -52,11 +53,7 @@ function PageHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
 }
 
 export function DeliveryStatusBadge({ status }: { status: string }) {
-  return (
-    <span className="inline-block rounded-full border border-line bg-page px-2 py-0.5 text-[11px] font-semibold text-ink">
-      {status}
-    </span>
-  );
+  return <SharedStatusBadge domain="generic" status={status} />;
 }
 
 async function warehouseOptions(actor: ActorContext): Promise<WarehouseOption[]> {

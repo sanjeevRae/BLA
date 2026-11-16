@@ -7,6 +7,7 @@ import { listVendors, listVendorAddresses } from "@/server/services/vendors";
 import { listWarehouseDirectory } from "@/server/services/warehouses";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import { StatusBadge, formatDateTime, formatPaisa } from "@/components/bookings/ui";
+import { StatusBadge as DomainStatusBadge } from "@/components/ui/StatusBadge";
 import {
   BookingApprovalControls,
   BookingCancelControl,
@@ -203,7 +204,30 @@ export async function BookingDetailPage({
                       <td className="py-1 pr-3 text-ink">{pkg.billableWeightKg ?? pkg.declaredWeightKg} kg</td>
                       <td className="py-1 pr-3 text-ink">{formatPaisa(pkg.codAmountPaisa)}</td>
                       <td className="py-1">
-                        <StatusBadge status={pkg.operationalStatus} />
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="inline-flex items-center gap-1">
+                            <span className="text-[10px] uppercase text-faint">Operational</span>
+                            <DomainStatusBadge domain="operational" status={pkg.operationalStatus} />
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <span className="text-[10px] uppercase text-faint">Condition</span>
+                            <DomainStatusBadge domain="condition" status={pkg.condition} />
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <span className="text-[10px] uppercase text-faint">Payment</span>
+                            <DomainStatusBadge domain="payment" status={pkg.paymentStatus} />
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <span className="text-[10px] uppercase text-faint">Delivery</span>
+                            <DomainStatusBadge domain="delivery" status={pkg.deliveryStatus} />
+                          </span>
+                          {pkg.exceptionStatus !== "NONE" ? (
+                            <span className="inline-flex items-center gap-1">
+                              <span className="text-[10px] uppercase text-faint">Exception</span>
+                              <DomainStatusBadge domain="exception" status={pkg.exceptionStatus} />
+                            </span>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}

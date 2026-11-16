@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
+import { StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
 import { listWarehouses } from "@/server/services/warehouses";
 import {
   getIncident,
@@ -57,24 +58,11 @@ function PageHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
 }
 
 export function StatusBadge({ status }: { status: string }) {
-  return (
-    <span className="inline-block rounded-full border border-line bg-page px-2 py-0.5 text-[11px] font-semibold text-ink">
-      {status}
-    </span>
-  );
+  return <SharedStatusBadge domain="generic" status={status} />;
 }
 
 export function SeverityBadge({ severity }: { severity: string }) {
-  const hot = severity === "CRITICAL" || severity === "HIGH";
-  return (
-    <span
-      className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-        hot ? "border-red bg-page text-red" : "border-line bg-page text-ink"
-      }`}
-    >
-      {severity}
-    </span>
-  );
+  return <SharedStatusBadge domain="generic" status={severity} />;
 }
 
 async function warehouseOptions(actor: ActorContext): Promise<WarehouseOption[]> {

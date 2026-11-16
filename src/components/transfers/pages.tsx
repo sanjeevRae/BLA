@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { ActorContext } from "@/lib/auth/actor";
 import { hasPermission } from "@/lib/auth/actor";
 import { formatPaisa } from "@/components/bookings/ui";
+import { StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
 import { listWarehouses } from "@/server/services/warehouses";
 import {
   getTransfer,
@@ -54,11 +55,7 @@ function PageHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
 }
 
 export function TransferStatusBadge({ status }: { status: string }) {
-  return (
-    <span className="inline-block rounded-full border border-line bg-page px-2 py-0.5 text-[11px] font-semibold text-ink">
-      {status}
-    </span>
-  );
+  return <SharedStatusBadge domain="generic" status={status} />;
 }
 
 function fmtDate(iso: string | null): string {

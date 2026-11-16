@@ -1,3 +1,5 @@
+import { StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
+
 /** Shared display helpers for the Phase 3 modules (console tokens). */
 
 /** Integer paisa string → "NPR 1,234.56". */
@@ -22,30 +24,6 @@ export function formatDateTime(iso: string): string {
   });
 }
 
-const GOOD = new Set(["APPROVED", "DELIVERED", "ACTIVE", "CONFIRMED", "PAID"]);
-const BAD = new Set(["REJECTED", "CANCELLED", "SUSPENDED", "INACTIVE"]);
-const WARN = new Set([
-  "PENDING",
-  "PENDING_VERIFICATION",
-  "UNDER_REVIEW",
-  "SUBMITTED",
-  "UNROUTED",
-  "PARTIALLY_DELIVERED",
-]);
-
 export function StatusBadge({ status }: { status: string }) {
-  const classes = GOOD.has(status)
-    ? "bg-greenbg text-green"
-    : BAD.has(status)
-      ? "bg-[#fdecec] text-red"
-      : WARN.has(status)
-        ? "bg-orangebg text-orange"
-        : "bg-cream text-slate2";
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${classes}`}
-    >
-      {status.replaceAll("_", " ")}
-    </span>
-  );
+  return <SharedStatusBadge domain="generic" status={status} />;
 }
