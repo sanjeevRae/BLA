@@ -99,6 +99,27 @@ async function requireCustomerRead(actor: ActorContext): Promise<void> {
   throw new AuthorizationError("Missing required permission: customer.read");
 }
 
+/**
+ * Phase 6 (V2, audit M-3): the customer self-service profile read.
+ * `getCustomer` requires the staff-side `customer.read`/`customer.manage`
+ * grants, which CUSTOMER deliberately does not hold — so the profile
+ * page cannot use it. This wrapper is the scoped equivalent: gated on
+ * `profile.update_own` (the same gate as `/api/me`) and hard-bound to
+ * `actor.customerId`, so a customer actor can only ever read the
+ * customer record linked to their own account. There is no id
+ * parameter to tamper with.
+ */
+export async function getOwnCustomerProfile(actor: ActorContext): Promise<CustomerView> {
+  await requirePermAudited(actor, "profile.update_own", "Customer");
+  if (!actor.customerId) {
+    await auditAccessDenied(actor, "Customer", { reason: "customer_profile_not_linked" });
+    throw new AuthorizationError("Your account is not linked to a customer record");
+  }
+  const customer = await prisma.customer.findUnique({ where: { id: actor.customerId } });
+  if (!customer) throw new NotFoundError("Customer not found");
+  return toView(customer);
+}
+
 // ---------------------------------------------------------------------------
 // Internal: duplicate-aware find-or-create (booking flow)
 // ---------------------------------------------------------------------------

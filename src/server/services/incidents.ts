@@ -562,7 +562,26 @@ export async function listIncidents(actor: ActorContext, input: ListIncidentsInp
   } else if (actor.vendorId) {
     scope.push({ package: { order: { vendorId: actor.vendorId } } });
   } else if (actor.customerId) {
-    scope.push({ package: { recipientCustomerId: actor.customerId } });
+    // Phase 6 (V2, audit M-3): aligned with `incidentVisibleTo`, whose
+    // first rule is that a reporter always sees their own incidents.
+    // The package-only branch hid exactly the reports the customer
+    // self-service surface creates: a PAYMENT_DISPUTE is linked to the
+    // customer's own ORDER (Order.customerId = sender customer) and
+    // may carry no package link, so it vanished from the reporter's
+    // own list while `getIncident` still returned it. Self-filed
+    // disputes stay visible via the reporter branch below.
+    // Phase 6 security review F4: an earlier revision also added an
+    // `{ order: { customerId } }` branch — wider than
+    // `incidentVisibleTo` (which keys customer visibility off the
+    // package recipient only), so a sender could LIST staff-filed
+    // incidents about their order that `getIncident` hides. That
+    // branch is removed; the list now matches the canonical rule.
+    scope.push({
+      OR: [
+        { package: { recipientCustomerId: actor.customerId } },
+        { reporterId: actor.userId },
+      ],
+    });
   } else if (hasPermission(actor, "incident.report")) {
     scope.push({ OR: [{ reporterId: actor.userId }, { assigneeId: actor.userId }] });
   } else {
