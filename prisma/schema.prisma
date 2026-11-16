@@ -93,6 +93,7 @@ model User {
   deliveryAssignmentsMade  DeliveryAssignment[]    @relation("DeliveryAssignmentBy")
   deliveryAttemptsRecorded DeliveryAttempt[]       @relation("DeliveryAttemptRecordedBy")
   proofsRecorded           ProofOfDelivery[]       @relation("ProofRecordedBy")
+  deliveryEvidenceBindingsCreated DeliveryEvidenceBinding[] @relation("DeliveryEvidenceBindingCreatedBy")
   codCollectionsMade       DeliveryCodCollection[] @relation("CodCollectedBy")
   returnsRequested         ReturnRequest[]         @relation("ReturnRequestedBy")
   returnsAuthorised        ReturnRequest[]         @relation("ReturnAuthorisedBy")
@@ -1024,6 +1025,7 @@ model Package {
   deliveryAssignments DeliveryAssignment[]
   deliveryAttempts    DeliveryAttempt[]
   proofsOfDelivery    ProofOfDelivery[]
+  deliveryEvidenceBindings DeliveryEvidenceBinding[]
   codCollection       DeliveryCodCollection?
   returnRequests      ReturnRequest[]
   invoiceLines        InvoiceLine[]
@@ -1736,6 +1738,7 @@ model DeliveryAssignment {
   reassignments  DeliveryAssignment[]   @relation("AssignmentReassignment")
   attempts       DeliveryAttempt[]
   proofs         ProofOfDelivery[]
+  evidenceBindings DeliveryEvidenceBinding[]
   codCollection  DeliveryCodCollection?
   trackingEvents TrackingEvent[]
   incidents      Incident[]              @relation("IncidentDeliveryAssignment")
@@ -1797,6 +1800,12 @@ model ProofOfDelivery {
   otpVerifiedAt           DateTime?
   signatureFileId         String?
   photoFileId             String?
+  /// Phase 7 (M-10): SHA-256 hex of the stored photoFileId /
+  /// signatureFileId reference string, bound server-side through
+  /// DeliveryEvidenceBinding — the same reference cannot prove two
+  /// different packages' deliveries.
+  photoEvidenceHash       String?
+  signatureEvidenceHash   String?
   latitude                Decimal?  @db.Decimal(10, 7)
   longitude               Decimal?  @db.Decimal(10, 7)
   deliveredAt             DateTime
@@ -1811,9 +1820,38 @@ model ProofOfDelivery {
   recordedBy   User               @relation("ProofRecordedBy", fields: [recordedById], references: [id], onDelete: Restrict)
   supersededBy ProofOfDelivery?   @relation("ProofSupersededBy", fields: [supersededById], references: [id], onDelete: Restrict)
   supersedes   ProofOfDelivery[]  @relation("ProofSupersededBy")
+  evidenceBindings DeliveryEvidenceBinding[]
 
   @@index([packageId])
   @@index([assignmentId])
+  @@schema("app")
+}
+
+/// Phase 7 (M-10) — delivery evidence integrity binding. Evidence on
+/// a ProofOfDelivery is still a reference string (no object-storage
+/// provider / FileAsset yet — see docs/known-limitations.md); this
+/// table binds the SHA-256 hash of that reference to exactly one
+/// package, so the same photo/signature reference cannot be replayed
+/// to prove a different package's delivery. The hash is globally
+/// unique across kinds: an identical string presented as a photo
+/// for one package and a signature for another still conflicts
+/// (conservative by design). Append-only: no `updatedAt`.
+model DeliveryEvidenceBinding {
+  id                String   @id @default(uuid())
+  evidenceHash      String   @unique
+  evidenceKind      String
+  packageId         String
+  assignmentId      String
+  proofOfDeliveryId String
+  createdById       String
+  createdAt         DateTime @default(now())
+
+  package         Package            @relation(fields: [packageId], references: [id], onDelete: Restrict)
+  assignment      DeliveryAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  proofOfDelivery ProofOfDelivery    @relation(fields: [proofOfDeliveryId], references: [id], onDelete: Restrict)
+  createdBy       User               @relation("DeliveryEvidenceBindingCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([packageId])
   @@schema("app")
 }
 

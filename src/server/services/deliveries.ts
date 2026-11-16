@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
@@ -1886,6 +1888,12 @@ export const confirmDeliverySchema = z.object({
     .optional()
     .nullable(),
   codMethod: z.enum(COD_METHODS).optional(),
+  /** Phase 7 (M-10): POD evidence references. Still plain reference
+   *  strings (no FileAsset / object storage yet); each provided
+   *  reference is hash-bound to this package inside the delivery
+   *  transaction — see bindDeliveryEvidence. */
+  photoFileId: z.string().min(1).max(500).optional().nullable(),
+  signatureFileId: z.string().min(1).max(500).optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
   latitude: z.number().min(-90).max(90).optional().nullable(),
   longitude: z.number().min(-180).max(180).optional().nullable(),
@@ -1896,6 +1904,92 @@ export interface ConfirmDeliveryResult {
   assignment: DeliveryAssignmentView;
   proofOfDeliveryId: string;
   cod: { expectedPaisa: string; collectedPaisa: string; status: string } | null;
+}
+
+// ---------------------------------------------------------------------------
+// POD evidence integrity (Phase 7, M-10)
+// ---------------------------------------------------------------------------
+
+export type DeliveryEvidenceKind = "PHOTO" | "SIGNATURE";
+
+export const EVIDENCE_REUSE_MESSAGE =
+  "This evidence has already been used for another delivery";
+
+/**
+ * Normalise an evidence reference for storage: references are
+ * stored trimmed (same treatment as `receivedByName`), and the
+ * binding hash is taken over the STORED value, so storage and hash
+ * can never disagree. A reference that is absent — or blank once
+ * trimmed — binds nothing and stores nothing.
+ */
+export function normalizeEvidenceReference(
+  reference: string | null | undefined,
+): string | null {
+  if (reference === null || reference === undefined) return null;
+  const trimmed = reference.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/** SHA-256 hex of the stored evidence reference string. */
+export function hashEvidenceReference(storedReference: string): string {
+  return createHash("sha256").update(storedReference, "utf8").digest("hex");
+}
+
+/**
+ * Bind one evidence hash to a package inside the delivery
+ * transaction. The hash is globally unique across kinds: the same
+ * reference string cannot prove two DIFFERENT packages' deliveries
+ * (as a photo, a signature, or one of each). A hash already bound
+ * to THIS package (POD supersede / re-delivery) is allowed and is
+ * never duplicated. Any cross-package reuse throws, rolling the
+ * whole delivery back — the package stays undelivered.
+ *
+ * Returns true when a new binding row was created.
+ */
+export async function bindDeliveryEvidence(
+  tx: Prisma.TransactionClient,
+  args: {
+    evidenceHash: string;
+    evidenceKind: DeliveryEvidenceKind;
+    packageId: string;
+    assignmentId: string;
+    proofOfDeliveryId: string;
+    createdById: string;
+  },
+): Promise<boolean> {
+  const existing = await tx.deliveryEvidenceBinding.findUnique({
+    where: { evidenceHash: args.evidenceHash },
+  });
+  if (existing) {
+    if (existing.packageId !== args.packageId) {
+      throw new DomainValidationError(EVIDENCE_REUSE_MESSAGE);
+    }
+    return false;
+  }
+  try {
+    await tx.deliveryEvidenceBinding.create({
+      data: {
+        evidenceHash: args.evidenceHash,
+        evidenceKind: args.evidenceKind,
+        packageId: args.packageId,
+        assignmentId: args.assignmentId,
+        proofOfDeliveryId: args.proofOfDeliveryId,
+        createdById: args.createdById,
+      },
+    });
+  } catch (err) {
+    // Concurrent deliveries racing the same reference for different
+    // packages: the unique index is the backstop — surface it as
+    // the same domain refusal, not a raw constraint error.
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
+      throw new DomainValidationError(EVIDENCE_REUSE_MESSAGE);
+    }
+    throw err;
+  }
+  return true;
 }
 
 export async function confirmDelivery(
@@ -2036,6 +2130,54 @@ export async function confirmDelivery(
         recordedById: actor.userId,
       },
     });
+    // --- POD evidence binding (Phase 7, M-10): each provided
+    // evidence reference is stored on the POD together with the
+    // SHA-256 hash of the stored (trimmed) reference, and the hash
+    // is bound to this package in DeliveryEvidenceBinding. Reuse
+    // of the same reference for a DIFFERENT package throws inside
+    // this transaction, so the delivery rolls back whole — no POD,
+    // no DELIVERED transition, no COD row.
+    const evidenceInputs: {
+      kind: DeliveryEvidenceKind;
+      stored: string | null;
+    }[] = [
+      { kind: "PHOTO", stored: normalizeEvidenceReference(data.photoFileId) },
+      {
+        kind: "SIGNATURE",
+        stored: normalizeEvidenceReference(data.signatureFileId),
+      },
+    ];
+    const podEvidence: {
+      photoFileId?: string;
+      photoEvidenceHash?: string;
+      signatureFileId?: string;
+      signatureEvidenceHash?: string;
+    } = {};
+    for (const input of evidenceInputs) {
+      if (!input.stored) continue;
+      const evidenceHash = hashEvidenceReference(input.stored);
+      await bindDeliveryEvidence(tx, {
+        evidenceHash,
+        evidenceKind: input.kind,
+        packageId: pkg.id,
+        assignmentId: assignment.id,
+        proofOfDeliveryId: pod.id,
+        createdById: actor.userId,
+      });
+      if (input.kind === "PHOTO") {
+        podEvidence.photoFileId = input.stored;
+        podEvidence.photoEvidenceHash = evidenceHash;
+      } else {
+        podEvidence.signatureFileId = input.stored;
+        podEvidence.signatureEvidenceHash = evidenceHash;
+      }
+    }
+    if (Object.keys(podEvidence).length > 0) {
+      await tx.proofOfDelivery.update({
+        where: { id: pod.id },
+        data: podEvidence,
+      });
+    }
     let cod: ConfirmDeliveryResult["cod"] = null;
     if (expectedPaisa > BigInt(0) && collectedPaisa !== null) {
       const status = collectedPaisa === expectedPaisa ? "MATCHED" : "MISMATCH";

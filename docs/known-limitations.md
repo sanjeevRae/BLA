@@ -77,6 +77,28 @@ audit-logged with actor identity.
 *Reopen when:* Meena sets a threshold value — it then lands as a
 SystemSetting key plus one check in `approveSettlement`.
 
+### M-10 — POD evidence stays reference strings, hash-bound to one package
+Proof-of-delivery photo/signature evidence (`ProofOfDelivery.photoFileId`
+/ `signatureFileId`) remains a plain reference string by design:
+no object-storage provider is wired into the platform, and there
+is no `FileAsset` model yet — choosing a provider is a deployment
+and cost decision for Meena, not an engineering default. What
+Phase 7 adds is integrity on top of the references: at delivery
+confirmation the server stores the SHA-256 hash of each reference
+on the POD (`photoEvidenceHash` / `signatureEvidenceHash`) and
+binds the hash to the package in `DeliveryEvidenceBinding` inside
+the delivery transaction, so the same reference can never prove
+two different packages' deliveries — reuse throws and the whole
+delivery rolls back. (The hash is globally unique across kinds:
+one string used as a photo for one package and a signature for
+another still conflicts.) `DeliveryAttempt.evidenceFileId` has no
+writer anywhere in the codebase, so there is no attempt evidence
+to bind yet; when a writer lands, it binds through the same table
+with its own kind.
+*Reopen when:* an object-storage provider is chosen — `FileAsset`
+then lands, evidence references become FileAsset links, and the
+existing bindings migrate to it.
+
 ## Standing transitional items
 
 - **SMS notifications are intent-only.** Notification rows on the
