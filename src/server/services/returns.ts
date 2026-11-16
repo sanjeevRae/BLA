@@ -20,7 +20,11 @@ import {
   RETURN_REASONS,
   RETURN_STATUSES,
 } from "@/lib/deliveries/domain";
-import { rollupShipmentStatus } from "@/server/services/package-lifecycle";
+import {
+  rollupShipmentStatus,
+  transitionPackageInTx,
+} from "@/server/services/package-lifecycle";
+import { raiseIncidentInTx } from "@/server/services/incidents";
 import {
   auditAccessDenied,
   pageArgs,
@@ -50,10 +54,22 @@ import {
  * by a Warehouse Admin of the return warehouse, received back into
  * the Returns zone by the warehouse scan (deliveries.scanBackPackage
  * advances the record to RECEIVED), inspected, and completed by
- * handover to the vendor. The COLLECTION_ASSIGNED / COLLECTED /
- * IN_TRANSIT states exist in the vocabulary for returns that must
- * travel between warehouses on a normal transfer (return-workflow
- * §3.4); the same-warehouse flow does not pass through them.
+ * handover to the vendor. The COLLECTION_ASSIGNED / COLLECTED
+ * states exist in the vocabulary for collection legs the
+ * same-warehouse flow does not use.
+ *
+ * Phase 7 scope (cross-warehouse returns, return-workflow §3
+ * steps 4–6): when the warehouse that first receives the return
+ * (`warehouseId`) is not the RETURN warehouse
+ * (`destinationWarehouseId` — the origin warehouse of the
+ * package's shipment, where inspection and vendor handover
+ * happen), the received return travels on a NORMAL transfer: it is
+ * manifested toward its destination only (see the transfer hook
+ * helpers below), the return moves RECEIVED → IN_TRANSIT at
+ * dispatch and back to RECEIVED when transfer receiving completes
+ * at the destination, and inspection/completion then run at the
+ * destination warehouse. Custody stays continuous through the
+ * transfer's own chain.
  *
  * Invariants (return-workflow §7): one open return per package
  * (checked under the Package row lock — READ COMMITTED does not
@@ -79,6 +95,10 @@ export interface ReturnRequestView {
   orderNumber: string;
   warehouseId: string;
   warehouseCode: string;
+  destinationWarehouseId: string | null;
+  destinationWarehouseCode: string | null;
+  transferId: string | null;
+  transferNumber: string | null;
   reason: string;
   status: string;
   requestedById: string;
@@ -107,6 +127,8 @@ type ReturnRow = Prisma.ReturnRequestGetPayload<{
     package: { select: { trackingId: true } };
     order: { select: { orderNumber: true } };
     warehouse: { select: { code: true } };
+    destinationWarehouse: { select: { code: true } };
+    transfer: { select: { transferNumber: true } };
     requestedBy: { select: { fullName: true } };
   };
 }>;
@@ -115,8 +137,39 @@ const returnInclude = {
   package: { select: { trackingId: true } },
   order: { select: { orderNumber: true } },
   warehouse: { select: { code: true } },
+  destinationWarehouse: { select: { code: true } },
+  transfer: { select: { transferNumber: true } },
   requestedBy: { select: { fullName: true } },
 } satisfies Prisma.ReturnRequestInclude;
+
+/** The warehouse where inspection + vendor handover happen for
+ *  this return: the destination (return) warehouse once travel is
+ *  involved, falling back to the first-receiving warehouse for
+ *  same-warehouse returns and pre-Phase-7 rows. */
+export function effectiveReturnWarehouseId(row: {
+  warehouseId: string;
+  destinationWarehouseId: string | null;
+}): string {
+  return row.destinationWarehouseId ?? row.warehouseId;
+}
+
+/**
+ * The warehouse an inspection / completion act is authorised
+ * against: the warehouse the package is PHYSICALLY at for the
+ * return. Before travel that is the first-receiving warehouse
+ * (`warehouseId` — the Phase 6 flow inspects and completes there);
+ * after the cross-warehouse transfer it is the destination
+ * (return) warehouse, because transfer receiving moves the
+ * package's current warehouse. Keying off the package's actual
+ * position keeps both flows correct with one rule: you work a
+ * return where the parcel sits.
+ */
+export function returnWorkingWarehouseId(
+  row: { warehouseId: string; destinationWarehouseId: string | null },
+  packageCurrentWarehouseId: string | null,
+): string {
+  return packageCurrentWarehouseId ?? effectiveReturnWarehouseId(row);
+}
 
 function toReturnView(r: ReturnRow): ReturnRequestView {
   return {
@@ -129,6 +182,10 @@ function toReturnView(r: ReturnRow): ReturnRequestView {
     orderNumber: r.order.orderNumber,
     warehouseId: r.warehouseId,
     warehouseCode: r.warehouse.code,
+    destinationWarehouseId: r.destinationWarehouseId,
+    destinationWarehouseCode: r.destinationWarehouse?.code ?? null,
+    transferId: r.transferId,
+    transferNumber: r.transfer?.transferNumber ?? null,
     reason: r.reason,
     status: r.status,
     requestedById: r.requestedById,
@@ -222,6 +279,18 @@ export async function createReturnRequestInTx(
       `Package already has an open return (${open.returnNumber}) — a second return is refused (return-workflow rule 6)`,
     );
   }
+  // The RETURN warehouse (destinationWarehouseId) is the origin
+  // warehouse of the package's shipment — the warehouse the vendor
+  // tendered the parcel at, and therefore where inspection and
+  // vendor handover belong (return-workflow §3 step 5: "origin
+  // warehouse by default"). When it cannot be determined, the
+  // return stays a same-warehouse return at the receiving
+  // warehouse.
+  const shipment = await tx.shipment.findUnique({
+    where: { id: pkg.shipmentId },
+    select: { originWarehouseId: true },
+  });
+  const destinationWarehouseId = shipment?.originWarehouseId ?? pkg.currentWarehouseId;
   const seq = await tx.$queryRaw<{ n: bigint }[]>(
     Prisma.sql`SELECT nextval('"app"."return_number_seq"') AS n`,
   );
@@ -233,6 +302,7 @@ export async function createReturnRequestInTx(
       shipmentId: pkg.shipmentId,
       orderId: pkg.orderId,
       warehouseId: pkg.currentWarehouseId,
+      destinationWarehouseId,
       reason: args.reason,
       status: "REQUESTED",
       requestedById: actor.userId,
@@ -272,6 +342,230 @@ export async function createReturnRequestInTx(
     },
   });
   return { id: created.id, returnNumber };
+}
+
+// ---------------------------------------------------------------------------
+// Cross-warehouse travel — hooks called from the transfer service
+// (transfers.ts) inside ITS transactions. A return that must travel
+// joins a NORMAL transfer as a manifested package flagged as a
+// return (return-workflow §3 steps 4–6); these helpers are the only
+// return-side writes in that flow, and each is a no-op for packages
+// that are not travelling returns.
+// ---------------------------------------------------------------------------
+
+export interface LinkReturnToTransferArgs {
+  packageId: string;
+  transferId: string;
+  transferNumber: string;
+  originWarehouseId: string;
+  destinationWarehouseId: string;
+}
+
+/**
+ * MANIFEST (item-add) validation hook: if the package has an OPEN
+ * return, it may be manifested ONLY as a travelling return —
+ * status RECEIVED, cross-warehouse (destination ≠ first-receiving
+ * warehouse), on a transfer departing the warehouse that physically
+ * holds the package and heading exactly to the return's
+ * destination warehouse. Every other open return refuses the
+ * manifest with a ConflictError: the package is in the return
+ * flow, not ready to travel (REQUESTED / APPROVED / COLLECTED /
+ * …), already home (INSPECTED at destination), or a
+ * same-warehouse return that never travels. This runs BEFORE the
+ * transfer service's stock/status gates so a return-flow refusal
+ * is never masked by a forward-flow rejection reason, and it
+ * writes nothing — the link itself is written by
+ * linkReturnToTransferInTx only once the item row exists, so a
+ * later forward-flow rejection cannot leave a stale link behind.
+ * Returns null when the package has no open return (normal cargo).
+ */
+export async function checkReturnTravelForManifestInTx(
+  tx: Tx,
+  args: LinkReturnToTransferArgs,
+): Promise<{ returnId: string; returnNumber: string; destinationWarehouseId: string } | null> {
+  const open = await tx.returnRequest.findFirst({
+    where: { packageId: args.packageId, status: { in: [...OPEN_RETURN_STATUSES] } },
+    orderBy: { createdAt: "asc" },
+  });
+  if (!open) return null;
+  if (open.status !== "RECEIVED") {
+    throw new ConflictError(
+      `Package is under return ${open.returnNumber} in status ${open.status} — only a RECEIVED return can be manifested for travel to its return warehouse`,
+    );
+  }
+  const destinationWarehouseId = open.destinationWarehouseId ?? open.warehouseId;
+  if (!open.destinationWarehouseId || destinationWarehouseId === open.warehouseId) {
+    throw new ConflictError(
+      `Return ${open.returnNumber} is a same-warehouse return — it is already at its return warehouse and never travels on a transfer`,
+    );
+  }
+  const pkg = await tx.package.findUniqueOrThrow({
+    where: { id: args.packageId },
+    select: { currentWarehouseId: true },
+  });
+  if (args.originWarehouseId !== pkg.currentWarehouseId) {
+    throw new ConflictError(
+      `Return ${open.returnNumber} can only travel on a transfer departing the warehouse that holds the package`,
+    );
+  }
+  if (args.destinationWarehouseId !== destinationWarehouseId) {
+    throw new ConflictError(
+      `Return ${open.returnNumber} may only travel to its return warehouse — transfer ${args.transferNumber} is headed to a different warehouse`,
+    );
+  }
+  return { returnId: open.id, returnNumber: open.returnNumber, destinationWarehouseId };
+}
+
+/**
+ * MANIFEST (item-add) link hook: attach the validated travelling
+ * return to the transfer once its item row exists. The return's
+ * status stays RECEIVED until dispatch.
+ */
+export async function linkReturnToTransferInTx(
+  tx: Tx,
+  args: { returnId: string; transferId: string },
+): Promise<void> {
+  await tx.returnRequest.update({
+    where: { id: args.returnId },
+    data: { transferId: args.transferId },
+  });
+}
+
+/**
+ * MANIFEST (generate) hook: a travelling return's package sits in
+ * READY_FOR_DELIVERY (the scan-back state) when it is selected, so
+ * before the manifest's READY_FOR_DISPATCH gate runs, move it to
+ * READY_FOR_DISPATCH through the lifecycle service — from there
+ * the normal manifest transition to TRANSFER_ASSIGNED applies.
+ * No-op for packages without a return linked to this transfer.
+ */
+export async function prepareReturnPackageForManifestInTx(
+  tx: Tx,
+  actor: ActorContext,
+  packageId: string,
+  transferId: string,
+): Promise<boolean> {
+  const linked = await tx.returnRequest.findFirst({
+    where: { packageId, transferId, status: "RECEIVED" },
+    select: { id: true, returnNumber: true },
+  });
+  if (!linked) return false;
+  const pkg = await tx.package.findUniqueOrThrow({
+    where: { id: packageId },
+    select: { operationalStatus: true, currentWarehouseId: true },
+  });
+  if (pkg.operationalStatus === "READY_FOR_DELIVERY") {
+    await transitionPackageInTx(tx, actor, packageId, "READY_FOR_DISPATCH", {
+      warehouseId: pkg.currentWarehouseId,
+      transferId,
+      notes: `Return ${linked.returnNumber} readied for dispatch to its return warehouse`,
+    });
+  }
+  return true;
+}
+
+/**
+ * UNLINK hook (item removed / transfer cancelled BEFORE dispatch):
+ * the return has not left yet, so the link is cleared and the
+ * return simply stays RECEIVED at the receiving warehouse, ready
+ * to be manifested onto another transfer. No-op for packages
+ * without a return linked to this transfer, and never unlinks a
+ * return that has already dispatched (items are locked by then).
+ */
+export async function unlinkReturnFromTransferInTx(
+  tx: Tx,
+  args: { packageId: string; transferId: string },
+): Promise<boolean> {
+  const res = await tx.returnRequest.updateMany({
+    where: { packageId: args.packageId, transferId: args.transferId, status: "RECEIVED" },
+    data: { transferId: null },
+  });
+  return res.count > 0;
+}
+
+/**
+ * DISPATCH hook: the travelling return leaves with the transfer —
+ * RECEIVED → IN_TRANSIT, with its own tracking event appended (the
+ * package's transfer events already record the physical leg).
+ */
+export async function advanceReturnOnDispatchInTx(
+  tx: Tx,
+  actor: ActorContext,
+  args: { packageId: string; transferId: string; originWarehouseId: string },
+): Promise<boolean> {
+  const linked = await tx.returnRequest.findFirst({
+    where: { packageId: args.packageId, transferId: args.transferId, status: "RECEIVED" },
+  });
+  if (!linked) return false;
+  await tx.returnRequest.update({
+    where: { id: linked.id },
+    data: { status: "IN_TRANSIT" },
+  });
+  const pkg = await tx.package.findUniqueOrThrow({
+    where: { id: args.packageId },
+    select: { operationalStatus: true, shipmentId: true, orderId: true },
+  });
+  await tx.trackingEvent.create({
+    data: {
+      packageId: args.packageId,
+      shipmentId: pkg.shipmentId,
+      orderId: pkg.orderId,
+      subjectType: "PACKAGE",
+      eventType: "RETURN_IN_TRANSIT",
+      previousStatus: pkg.operationalStatus,
+      newStatus: pkg.operationalStatus,
+      actorId: actor.userId,
+      actorRole: actor.primaryRole,
+      warehouseId: args.originWarehouseId,
+      transferId: args.transferId,
+      notes: `Return ${linked.returnNumber} in transit to its return warehouse`,
+    },
+  });
+  return true;
+}
+
+/**
+ * RECEIVE hook (per-package receiving completion at the transfer's
+ * destination): the travelling return has arrived — IN_TRANSIT →
+ * RECEIVED. `receivedById`/`receivedAt` are NOT touched: they
+ * record the FIRST receipt (the scan-back at the receiving
+ * warehouse); the arrival is recorded as a
+ * RETURN_RECEIVED_AT_DESTINATION tracking event instead.
+ */
+export async function advanceReturnOnReceiveInTx(
+  tx: Tx,
+  actor: ActorContext,
+  args: { packageId: string; transferId: string; destinationWarehouseId: string },
+): Promise<boolean> {
+  const linked = await tx.returnRequest.findFirst({
+    where: { packageId: args.packageId, transferId: args.transferId, status: "IN_TRANSIT" },
+  });
+  if (!linked) return false;
+  await tx.returnRequest.update({
+    where: { id: linked.id },
+    data: { status: "RECEIVED" },
+  });
+  const pkg = await tx.package.findUniqueOrThrow({
+    where: { id: args.packageId },
+    select: { operationalStatus: true, shipmentId: true, orderId: true },
+  });
+  await tx.trackingEvent.create({
+    data: {
+      packageId: args.packageId,
+      shipmentId: pkg.shipmentId,
+      orderId: pkg.orderId,
+      subjectType: "PACKAGE",
+      eventType: "RETURN_RECEIVED_AT_DESTINATION",
+      previousStatus: pkg.operationalStatus,
+      newStatus: pkg.operationalStatus,
+      actorId: actor.userId,
+      actorRole: actor.primaryRole,
+      warehouseId: args.destinationWarehouseId,
+      transferId: args.transferId,
+      notes: `Return ${linked.returnNumber} received at its return warehouse`,
+    },
+  });
+  return true;
 }
 
 export const initiateReturnSchema = z.object({
@@ -607,6 +901,12 @@ export const inspectReturnSchema = z.object({
 });
 export type InspectReturnInput = z.input<typeof inspectReturnSchema>;
 
+/** Conservative deterioration ordering over PACKAGE_CONDITIONS
+ *  (the full vocabulary — there are no DESTROYED/OPENED values):
+ *  GOOD → anything else is worse; PACKAGING_COMPROMISED →
+ *  SUSPECTED_DAMAGE / DAMAGED is worse; SUSPECTED_DAMAGE → DAMAGED
+ *  is worse. Unknown values rank 0, so an unrecognised inspection
+ *  condition never fabricates a deterioration on its own. */
 const CONDITION_RANK: Readonly<Record<string, number>> = {
   GOOD: 0,
   PACKAGING_COMPROMISED: 1,
@@ -622,7 +922,19 @@ export async function inspectReturn(
   const data = parse(inspectReturnSchema, input);
   await requirePermAudited(actor, "package.inspect", "ReturnRequest");
   const row = await loadReturnOr404(returnId);
-  await assertWarehouseScope(actor, row.warehouseId, "ReturnRequest", row.id);
+  // Inspection happens where the package sits for the return
+  // (return-workflow §3.7): the first-receiving warehouse before
+  // travel, the destination (return) warehouse after the
+  // cross-warehouse transfer has brought it there.
+  const pkgForScope = await prisma.package.findUnique({
+    where: { id: row.packageId },
+    select: { currentWarehouseId: true },
+  });
+  const inspectionWarehouseId = returnWorkingWarehouseId(
+    row,
+    pkgForScope?.currentWarehouseId ?? null,
+  );
+  await assertWarehouseScope(actor, inspectionWarehouseId, "ReturnRequest", row.id);
   if (row.status !== "RECEIVED") {
     throw new ConflictError(`Return ${row.returnNumber} is ${row.status} — only RECEIVED returns can be inspected`);
   }
@@ -655,14 +967,18 @@ export async function inspectReturn(
         newStatus: pkg.operationalStatus,
         actorId: actor.userId,
         actorRole: actor.primaryRole,
-        warehouseId: row.warehouseId,
+        warehouseId: inspectionWarehouseId,
         notes: `Return ${row.returnNumber} inspected: condition ${data.condition}${deteriorated ? " (deteriorated since initiation)" : ""}`,
       },
     });
     if (deteriorated) {
-      // Condition worsened between initiation and inspection — the
-      // exception is raised now; the Incident record lands in
-      // Phase 8 (return-workflow rule 4).
+      // Condition worsened between initiation and inspection
+      // (return-workflow rule 4): the package is flagged DAMAGED
+      // and a DAMAGED_PACKAGE incident is raised automatically,
+      // linked to the package and the inspection warehouse, with
+      // the inspector as reporter. Idempotent per return via the
+      // sourceKey — inspection runs once, and a retry can never
+      // stack a second incident for the same deterioration.
       await tx.package.update({
         where: { id: row.packageId },
         data: { exceptionStatus: "DAMAGED", condition: data.condition },
@@ -678,14 +994,26 @@ export async function inspectReturn(
           newStatus: pkg.operationalStatus,
           actorId: actor.userId,
           actorRole: actor.primaryRole,
-          warehouseId: row.warehouseId,
+          warehouseId: inspectionWarehouseId,
           notes: `Return ${row.returnNumber}: condition deteriorated from ${row.conditionAtInitiation} to ${data.condition} during the return`,
         },
+      });
+      await raiseIncidentInTx(tx, {
+        sourceKey: `return-deterioration:${row.id}`,
+        category: "DAMAGED_PACKAGE",
+        description:
+          `Return ${row.returnNumber}: package condition deteriorated from ` +
+          `${row.conditionAtInitiation} at initiation to ${data.condition} at inspection`,
+        reporterId: actor.userId,
+        warehouseId: inspectionWarehouseId,
+        packageId: row.packageId,
+        orderId: row.orderId,
+        shipmentId: row.shipmentId,
       });
     }
   });
   await auditOps(actor, "return.inspected", "ReturnRequest", row.id, {
-    warehouseId: row.warehouseId,
+    warehouseId: inspectionWarehouseId,
     after: { condition: data.condition, deteriorated },
   });
   return toReturnView(await loadReturnOr404(returnId));
@@ -709,7 +1037,6 @@ export async function completeReturn(
   const data = parse(completeReturnSchema, input);
   await requirePermAudited(actor, "custody.handover", "ReturnRequest");
   const row = await loadReturnOr404(returnId);
-  await assertWarehouseScope(actor, row.warehouseId, "ReturnRequest", row.id);
   if (row.status !== "INSPECTED") {
     throw new ConflictError(`Return ${row.returnNumber} is ${row.status} — only INSPECTED returns can be completed`);
   }
@@ -717,6 +1044,11 @@ export async function completeReturn(
     where: { id: row.packageId },
     include: { order: { select: { vendorId: true } } },
   });
+  // Handover happens where the package sits for the return
+  // (return-workflow §3.8): the first-receiving warehouse before
+  // travel, the destination (return) warehouse after travel.
+  const completionWarehouseId = returnWorkingWarehouseId(row, pkg.currentWarehouseId);
+  await assertWarehouseScope(actor, completionWarehouseId, "ReturnRequest", row.id);
   // Default receiver: the vendor's OWNER user (the return is handed
   // back to the sender side); an explicit receiver must belong to
   // the same vendor.
@@ -749,7 +1081,7 @@ export async function completeReturn(
     const record = await tx.inventoryRecord.findFirst({
       where: { packageId: row.packageId, releasedAt: null },
     });
-    if (!record || record.warehouseId !== row.warehouseId) {
+    if (!record || record.warehouseId !== completionWarehouseId) {
       throw new ConflictError("The returned package is not in stock at the return warehouse");
     }
     const now = new Date();
@@ -762,7 +1094,7 @@ export async function completeReturn(
         packageId: row.packageId,
         inventoryRecordId: record.id,
         type: "DISPATCH",
-        fromWarehouseId: row.warehouseId,
+        fromWarehouseId: completionWarehouseId,
         fromLocationId: record.storageLocationId,
         actorId: actor.userId,
         reason: `Return ${row.returnNumber} handed to vendor`,
@@ -785,7 +1117,7 @@ export async function completeReturn(
         newStatus: pkg.operationalStatus,
         actorId: actor.userId,
         actorRole: actor.primaryRole,
-        warehouseId: row.warehouseId,
+        warehouseId: completionWarehouseId,
         notes: `Return ${row.returnNumber} completed — handed to the vendor`,
       },
     });
@@ -814,7 +1146,7 @@ export async function completeReturn(
     });
   });
   await auditOps(actor, "return.completed", "ReturnRequest", row.id, {
-    warehouseId: row.warehouseId,
+    warehouseId: completionWarehouseId,
     after: { handedToUserId },
   });
   return toReturnView(await loadReturnOr404(returnId));
@@ -843,7 +1175,15 @@ export async function listReturns(
     if (actor.warehouseIds.length === 0) {
       return { items: [], meta: pageMeta(0, query.page ?? 1, query.pageSize ?? 25) };
     }
-    conditions.push({ warehouseId: { in: actor.warehouseIds } });
+    // A return touches TWO warehouses once it travels: the
+    // receiving warehouse and the return (destination) warehouse —
+    // staff of either side see it.
+    conditions.push({
+      OR: [
+        { warehouseId: { in: actor.warehouseIds } },
+        { destinationWarehouseId: { in: actor.warehouseIds } },
+      ],
+    });
   }
   if (query.warehouseId) {
     if (!isUnscoped(actor) && !actor.vendorId && !actor.warehouseIds.includes(query.warehouseId)) {
@@ -853,7 +1193,9 @@ export async function listReturns(
       });
       throw new AuthorizationError("Warehouse is outside your assigned scope");
     }
-    conditions.push({ warehouseId: query.warehouseId });
+    conditions.push({
+      OR: [{ warehouseId: query.warehouseId }, { destinationWarehouseId: query.warehouseId }],
+    });
   }
   if (query.status) {
     if (!(RETURN_STATUSES as readonly string[]).includes(query.status)) {
@@ -906,7 +1248,14 @@ export async function getReturn(
       throw new AuthorizationError("This return belongs to another vendor");
     }
   } else if (!isUnscoped(actor)) {
-    await assertWarehouseScope(actor, row.warehouseId, "ReturnRequest", row.id);
+    // Readable from either side of the return: the receiving
+    // warehouse and the return (destination) warehouse.
+    if (
+      !actor.warehouseIds.includes(row.warehouseId) &&
+      !actor.warehouseIds.includes(effectiveReturnWarehouseId(row))
+    ) {
+      await assertWarehouseScope(actor, row.warehouseId, "ReturnRequest", row.id);
+    }
   }
   return toReturnView(row);
 }

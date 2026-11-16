@@ -432,6 +432,7 @@ model Warehouse {
 
   deliveryBatches DeliveryBatch[] @relation("DeliveryBatchWarehouse")
   returnRequests  ReturnRequest[] @relation("ReturnWarehouse")
+  returnRequestsDestination ReturnRequest[] @relation("ReturnDestinationWarehouse")
   tasks           Task[]          @relation("TaskWarehouse")
   incidents       Incident[]      @relation("IncidentWarehouse")
 
@@ -1505,6 +1506,7 @@ model Transfer {
   createdBy            User              @relation("TransferCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   approvedBy           User?             @relation("TransferApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
   items                TransferItem[]
+  returnRequests       ReturnRequest[]
   manifest             TransferManifest?
   executedTrip         Trip?             @relation("TripTransfer")
   trackingEvents       TrackingEvent[]
@@ -1871,6 +1873,19 @@ model ReturnRequest {
   shipmentId            String
   orderId               String
   warehouseId           String
+  /// Phase 7 (cross-warehouse returns): the RETURN warehouse — where
+  /// inspection and vendor handover happen. This is the origin
+  /// warehouse of the package's shipment (where the vendor tendered
+  /// it); `warehouseId` stays the warehouse that first received the
+  /// return back from the last mile. Equal to `warehouseId` for a
+  /// same-warehouse return. Null only on rows predating the backfill.
+  destinationWarehouseId String?
+  /// The normal transfer the return travels on when the return
+  /// warehouse differs from the receiving warehouse (return-workflow
+  /// §3 steps 4–6). Set when the package is manifested; the return
+  /// status moves RECEIVED → IN_TRANSIT at dispatch and back to
+  /// RECEIVED when transfer receiving completes at the destination.
+  transferId            String?
   reason                String
   status                String    @default("REQUESTED")
   requestedById         String
@@ -1896,6 +1911,8 @@ model ReturnRequest {
   shipment     Shipment      @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
   order        Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
   warehouse    Warehouse     @relation("ReturnWarehouse", fields: [warehouseId], references: [id], onDelete: Restrict)
+  destinationWarehouse Warehouse? @relation("ReturnDestinationWarehouse", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
+  transfer     Transfer?     @relation(fields: [transferId], references: [id], onDelete: Restrict)
   requestedBy  User          @relation("ReturnRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
   authorisedBy User?         @relation("ReturnAuthorisedBy", fields: [authorisedById], references: [id], onDelete: Restrict)
   receivedBy   User?         @relation("ReturnReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict)
@@ -1906,6 +1923,8 @@ model ReturnRequest {
 
   @@index([packageId, status])
   @@index([warehouseId, status])
+  @@index([destinationWarehouseId, status])
+  @@index([transferId])
   @@index([shipmentId])
   @@schema("app")
 }

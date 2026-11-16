@@ -47,6 +47,14 @@ import {
   loadWarehouseOr404,
 } from "@/server/services/warehouse-ops-shared";
 import { raiseIncidentInTx } from "@/server/services/incidents";
+import {
+  advanceReturnOnDispatchInTx,
+  advanceReturnOnReceiveInTx,
+  checkReturnTravelForManifestInTx,
+  linkReturnToTransferInTx,
+  prepareReturnPackageForManifestInTx,
+  unlinkReturnFromTransferInTx,
+} from "@/server/services/returns";
 import { endTrackingSessionsInTx } from "@/server/services/tracking";
 
 /**
@@ -539,6 +547,23 @@ export async function addTransferItems(
         reject(`Already on open transfer ${openElsewhere.transfer.transferNumber}`);
         continue;
       }
+      // Cross-warehouse returns (Phase 7): a package under an open
+      // return may be manifested ONLY as a travelling return toward
+      // its return warehouse — the hook validates that, or throws a
+      // ConflictError refusing the manifest. It runs BEFORE the
+      // stock/status gates so a return-flow refusal is never masked
+      // by a forward-flow rejection (a not-yet-received return has
+      // no stock record at all). A travelling return bypasses the
+      // two forward-flow gates below (its operational status is the
+      // scan-back READY_FOR_DELIVERY, and its shipment destination
+      // is the warehouse it is travelling FROM, not to).
+      const travelReturn = await checkReturnTravelForManifestInTx(tx, {
+        packageId,
+        transferId,
+        transferNumber: transfer.transferNumber,
+        originWarehouseId: transfer.originWarehouseId,
+        destinationWarehouseId: transfer.destinationWarehouseId,
+      });
       const record = await tx.inventoryRecord.findFirst({
         where: { packageId, releasedAt: null },
         select: { warehouseId: true },
@@ -551,13 +576,13 @@ export async function addTransferItems(
         reject("In stock at a different warehouse, not this transfer's origin");
         continue;
       }
-      if (pkg.operationalStatus !== "READY_FOR_DISPATCH") {
+      if (!travelReturn && pkg.operationalStatus !== "READY_FOR_DISPATCH") {
         reject(
           `Package is ${pkg.operationalStatus} — only READY_FOR_DISPATCH packages can be manifested`,
         );
         continue;
       }
-      if (pkg.shipment.destinationWarehouseId !== transfer.destinationWarehouseId) {
+      if (!travelReturn && pkg.shipment.destinationWarehouseId !== transfer.destinationWarehouseId) {
         reject("This package is destined for a different warehouse than the transfer's destination");
         continue;
       }
@@ -572,6 +597,12 @@ export async function addTransferItems(
           expectedCondition: pkg.condition,
         },
       });
+      if (travelReturn) {
+        await linkReturnToTransferInTx(tx, {
+          returnId: travelReturn.returnId,
+          transferId,
+        });
+      }
       result.added.push({ packageId, trackingId: pkg.trackingId });
     }
     if (result.added.length > 0) {
@@ -661,6 +692,9 @@ export async function removeTransferItem(
         notes: `Removed from transfer ${transfer.transferNumber} before dispatch${reason ? `: ${reason}` : ""}`,
       });
     }
+    // Phase 7: a removed travelling return unlinks (still RECEIVED
+    // at the origin, ready to be re-manifested); no-op otherwise.
+    await unlinkReturnFromTransferInTx(tx, { packageId, transferId });
     await tx.transferItem.delete({ where: { id: freshItem.id } });
     manifestPresent =
       (await tx.transferManifest.findUnique({
@@ -855,6 +889,10 @@ export async function generateManifest(
     // Re-validate every item inside the transaction: stock position
     // and status may have moved since selection.
     for (const item of freshItems) {
+      // Phase 7: a travelling return's package is readied for
+      // dispatch first (READY_FOR_DELIVERY → READY_FOR_DISPATCH);
+      // no-op for normal cargo.
+      await prepareReturnPackageForManifestInTx(tx, actor, item.packageId, transferId);
       const pkg = await tx.package.findUniqueOrThrow({
         where: { id: item.packageId },
         select: { operationalStatus: true },
@@ -1455,6 +1493,13 @@ export async function dispatchTransfer(
           trackingEventId: transitioned.eventId,
         },
       });
+      // Phase 7: a travelling return on this package departs with
+      // the transfer (RECEIVED → IN_TRANSIT); no-op otherwise.
+      await advanceReturnOnDispatchInTx(tx, actor, {
+        packageId: item.packageId,
+        transferId,
+        originWarehouseId: transfer.originWarehouseId,
+      });
     }
 
     const claimed = await tx.transfer.updateMany({
@@ -1560,6 +1605,9 @@ export async function cancelTransfer(
           notes: `Transfer ${freshTransfer.transferNumber} cancelled — package released back to origin stock`,
         });
       }
+      // Phase 7: a cancelled travelling return unlinks (still
+      // RECEIVED at the origin); no-op for normal cargo.
+      await unlinkReturnFromTransferInTx(tx, { packageId: item.packageId, transferId });
     }
     if (freshTransfer.tripId) {
       await tx.trip.update({
@@ -1920,11 +1968,25 @@ export async function scanDestinationPackage(
       where: { packageId: pkg.id, endedAt: null },
       data: { endedAt: now },
     });
-    const locationId = await firstActiveLocationInZoneKind(
+    // Phase 7: a travelling return is received into the destination's
+    // RETURNS zone (return-workflow §3 step 6), falling back to the
+    // RECEIVING zone when the destination has no Returns location.
+    const travellingReturn = await tx.returnRequest.findFirst({
+      where: { packageId: pkg.id, transferId, status: "IN_TRANSIT" },
+      select: { id: true },
+    });
+    let locationId = await firstActiveLocationInZoneKind(
       tx,
       transfer.destinationWarehouseId,
-      "RECEIVING",
+      travellingReturn ? "RETURNS" : "RECEIVING",
     );
+    if (travellingReturn && !locationId) {
+      locationId = await firstActiveLocationInZoneKind(
+        tx,
+        transfer.destinationWarehouseId,
+        "RECEIVING",
+      );
+    }
     const record = await tx.inventoryRecord.create({
       data: {
         packageId: pkg.id,
@@ -2100,6 +2162,14 @@ export async function completePackageReceiving(
         receivedAt: new Date(),
         ...(data.notes ? { discrepancyNote: data.notes } : {}),
       },
+    });
+    // Phase 7: a travelling return on this package has arrived at
+    // its return warehouse (IN_TRANSIT → RECEIVED, first-receipt
+    // stamps preserved); no-op for normal cargo.
+    await advanceReturnOnReceiveInTx(tx, actor, {
+      packageId: data.packageId,
+      transferId,
+      destinationWarehouseId: transfer.destinationWarehouseId,
     });
     await applyReceivingRollup(tx, transferId);
   });

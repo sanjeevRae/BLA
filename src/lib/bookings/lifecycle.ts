@@ -107,6 +107,13 @@ export const PACKAGE_TRANSITIONS: readonly PackageTransition[] = [
   // attempts. Redelivery re-enters via a fresh assignment.
   T("OUT_FOR_DELIVERY", "READY_FOR_DELIVERY", "delivery_return_scan", "package.receive"),
   T("DELIVERY_ATTEMPTED", "READY_FOR_DELIVERY", "delivery_return_scan", "package.receive"),
+  // Cross-warehouse return travel (Phase 7, return-workflow §3
+  // steps 4–6): a return received back into the delivery warehouse
+  // (READY_FOR_DELIVERY after the scan-back) that must travel to
+  // its return warehouse is readied for dispatch so it can join a
+  // normal transfer as a manifested return package. The manifest
+  // then takes it TRANSFER_ASSIGNED like any other parcel.
+  T("READY_FOR_DELIVERY", "READY_FOR_DISPATCH", "return_ready_for_dispatch", "transfer.prepare"),
 ];
 
 export function findTransition(

@@ -84,11 +84,20 @@ SystemSetting key plus one check in `approveSettlement`.
   is connected (same for EMAIL). In-app and tracking-page channels
   are live. The delivery OTP reaches the recipient through the
   phone-verified tracking view in the meantime.
-- **Cross-warehouse returns are unimplemented.** A return must be
-  received at the warehouse the delivery ran from; the
-  `COLLECTION_ASSIGNED` / `COLLECTED` / `IN_TRANSIT` return states
-  exist in the vocabulary but no flow moves a return between
-  warehouses yet.
+- **Cross-warehouse returns travel on normal transfers (Phase 7).**
+  A return's `destinationWarehouseId` is the origin warehouse of
+  the package's shipment — the return warehouse, where inspection
+  and vendor handover happen — while `warehouseId` records the
+  warehouse that first received the return back from the last
+  mile. When the two differ, the RECEIVED return joins a normal
+  transfer as a manifested package flagged as a return (linked via
+  `transferId`): it may be manifested only toward its return
+  warehouse, moves to `IN_TRANSIT` at dispatch, and returns to
+  `RECEIVED` when transfer receiving completes at the destination
+  (first-receipt stamps are preserved; the arrival is a tracking
+  event). Inspection and completion then run at the destination
+  warehouse. The `COLLECTION_ASSIGNED` / `COLLECTED` return states
+  remain vocabulary-only — no collection leg is implemented.
 - **Top-up remittances are deferred.** When a COD discrepancy is
   accepted at the counted amount, the shortfall stays as the
   rider's driver-cash ledger debt, parked against the
