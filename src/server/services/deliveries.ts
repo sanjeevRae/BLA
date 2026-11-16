@@ -877,6 +877,400 @@ export async function reassignAssignment(
   };
 }
 
+export const reassignBatchSchema = z.object({
+  riderUserId: z.string().uuid(),
+  reason: z.string().min(3).max(500),
+});
+export type ReassignBatchInput = z.input<typeof reassignBatchSchema>;
+
+export interface ReassignBatchResult {
+  previousBatch: DeliveryBatchView;
+  batch: DeliveryBatchView;
+  assignments: DeliveryAssignmentView[];
+  moved: { pending: number; accepted: number; inProgress: number; total: number };
+  oldBatchClosed: boolean;
+}
+
+/**
+ * Whole-batch rider swap (Phase 7 reassignment): every still-active
+ * assignment (PENDING / ACCEPTED / IN_PROGRESS) on the batch moves
+ * to a new rider, in ONE transaction. Per-package reassignAssignment
+ * cannot do this: it only handles not-yet-collected assignments and
+ * creates one batch per package.
+ *
+ * Race safety: the transaction locks the DeliveryBatch row first,
+ * then every candidate Package row (and its assignment row) in
+ * packageId-sorted order — the same package-before-assignment order
+ * confirmDelivery uses — and re-reads all state under those locks.
+ * A concurrent confirmDelivery on an IN_PROGRESS assignment of this
+ * batch therefore serialises with the swap: whichever transaction
+ * takes the package lock first wins, and the loser re-reads the
+ * assignment as terminal (COMPLETED vs REASSIGNED) and refuses.
+ *
+ * Collected (IN_PROGRESS) packages: custody moves old rider → new
+ * rider in-transaction, exactly as confirmPickup writes it (close
+ * the open row, open a USER custody for the new rider linked to a
+ * CUSTODY_TRANSFERRED tracking event — the reassignment reference
+ * the custody model supports), and a FRESH delivery OTP is minted
+ * for the new assignment and delivered to the recipient through the
+ * same notification intent confirmPickup emits
+ * (deliverOtpToRecipientInTx). The old assignment's hash is cleared
+ * and the old assignment is terminal, so the old code can never
+ * confirm the new assignment.
+ *
+ * Old-batch closure: after the swap every assignment that was
+ * active is REASSIGNED, so the old batch closes in-transaction with
+ * closeBatch's terminal writes (COMPLETED + closedAt/closedById +
+ * rider availability release) ONLY when no active assignment
+ * remains AND no delivered-COD close-out is pending on it. The case
+ * that leaves the old batch OPEN is a batch on which the old rider
+ * already DELIVERED packages whose COD collections are not yet on a
+ * verified/closed remittance (or, racily, an assignment added while
+ * the swap ran): the batch must stay open so the old rider's
+ * end-of-day COD reconciliation stays attached to the batch they
+ * collected it on; a dispatcher closes it with closeBatch once the
+ * COD close-out settles. Its tracking session is ended either way.
+ */
+export async function reassignBatch(
+  actor: ActorContext,
+  batchId: string,
+  input: ReassignBatchInput,
+): Promise<ReassignBatchResult> {
+  const data = parse(reassignBatchSchema, input);
+  const reason = data.reason.trim();
+  if (reason.length < 3) {
+    throw new DomainValidationError("A reason of at least 3 characters is required");
+  }
+  await requirePermAudited(actor, "delivery.assign", "DeliveryBatch");
+  const batch = await loadBatchOr404(batchId);
+  await assertWarehouseScope(actor, batch.warehouseId, "DeliveryBatch", batch.id);
+  if (batch.status === "COMPLETED" || batch.status === "CANCELLED") {
+    throw new ConflictError(
+      `Batch is ${batch.status} — a closed or cancelled batch cannot be reassigned`,
+    );
+  }
+  if (batch.status !== "OPEN" && batch.status !== "IN_PROGRESS") {
+    throw new ConflictError(`Batch is ${batch.status} — it cannot be reassigned`);
+  }
+  const rider = await loadEligibleRider(prisma, data.riderUserId, batch.warehouseId, batch.kind);
+  if (rider.driverId === batch.riderId) {
+    throw new DomainValidationError("The batch is already assigned to this rider");
+  }
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+
+  const outcome = await prisma.$transaction(
+    async (tx) => {
+      // Batch row lock first, then package rows in sorted order
+      // (see the race note above); all state below is re-read
+      // inside the transaction under those locks.
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "app"."DeliveryBatch" WHERE "id" = ${batch.id} FOR UPDATE`,
+      );
+      const freshBatch = await tx.deliveryBatch.findUniqueOrThrow({
+        where: { id: batch.id },
+      });
+      if (freshBatch.status !== "OPEN" && freshBatch.status !== "IN_PROGRESS") {
+        throw new ConflictError(
+          `Batch is ${freshBatch.status} — it can no longer be reassigned`,
+        );
+      }
+      // Eligibility is re-checked in-transaction (the pre-transaction
+      // call is a fast path): licence/employment may have changed,
+      // and the new rider must differ from the CURRENT batch rider.
+      const freshRider = await loadEligibleRider(
+        tx,
+        data.riderUserId,
+        freshBatch.warehouseId,
+        freshBatch.kind,
+      );
+      if (freshRider.driverId === freshBatch.riderId) {
+        throw new DomainValidationError("The batch is already assigned to this rider");
+      }
+      const oldRider = await tx.driver.findUniqueOrThrow({
+        where: { id: freshBatch.riderId },
+        select: { userId: true, user: { select: { fullName: true } } },
+      });
+
+      const candidates = await tx.deliveryAssignment.findMany({
+        where: { batchId: batch.id, status: { in: [...ACTIVE_ASSIGNMENT_STATUSES] } },
+        select: { id: true, packageId: true },
+        orderBy: { packageId: "asc" },
+      });
+      for (const candidate of candidates) {
+        await lockPackageRow(tx, candidate.packageId);
+        await lockAssignmentRow(tx, candidate.id);
+      }
+      const freshAssignments = await tx.deliveryAssignment.findMany({
+        where: { batchId: batch.id, id: { in: candidates.map((c) => c.id) } },
+        include: {
+          package: {
+            select: {
+              trackingId: true,
+              recipientPhone: true,
+              recipientCustomerId: true,
+              shipmentId: true,
+              orderId: true,
+              operationalStatus: true,
+            },
+          },
+        },
+        orderBy: { packageId: "asc" },
+      });
+      const movable = freshAssignments.filter((a) =>
+        (ACTIVE_ASSIGNMENT_STATUSES as readonly string[]).includes(a.status),
+      );
+      if (movable.length === 0) {
+        // The race loser lands here: every active assignment moved
+        // to a terminal state (e.g. a delivery just confirmed) while
+        // this transaction waited on the package locks.
+        throw new ConflictError(
+          "Batch has no active assignments left to reassign — they may have just been completed or cancelled",
+        );
+      }
+
+      const now = new Date();
+      const hasInProgress = movable.some((a) => a.status === "IN_PROGRESS");
+      const newBatch = await tx.deliveryBatch.create({
+        data: {
+          riderId: freshRider.driverId,
+          warehouseId: freshBatch.warehouseId,
+          serviceAreaId: freshBatch.serviceAreaId,
+          batchDate: today,
+          kind: freshBatch.kind,
+          // A batch holding already-collected packages is in
+          // progress, exactly as confirmPickup leaves it.
+          status: hasInProgress ? "IN_PROGRESS" : "OPEN",
+          createdById: actor.userId,
+        },
+      });
+
+      const moved = { pending: 0, accepted: 0, inProgress: 0, total: movable.length };
+      const newAssignmentIds: string[] = [];
+      for (const a of movable) {
+        const isInProgress = a.status === "IN_PROGRESS";
+        if (a.status === "PENDING") moved.pending += 1;
+        else if (a.status === "ACCEPTED") moved.accepted += 1;
+        else if (isInProgress) moved.inProgress += 1;
+
+        // Fresh OTP material for collected packages, minted before
+        // the new assignment row exists so the hash lands on it in
+        // one write (confirmPickup's generation shape).
+        let otp: string | null = null;
+        let otpHash: string | null = null;
+        if (isInProgress) {
+          otp = generateOtpCode();
+          otpHash = await hashOtpCode(otp);
+        }
+
+        await tx.deliveryAssignment.update({
+          where: { id: a.id },
+          data: {
+            status: "REASSIGNED",
+            completedAt: now,
+            failureNote: reason,
+            // The old code dies with the old assignment.
+            otpCodeHash: null,
+            version: { increment: 1 },
+          },
+        });
+        const created = await tx.deliveryAssignment.create({
+          data: {
+            packageId: a.packageId,
+            driverId: freshRider.driverId,
+            batchId: newBatch.id,
+            kind: a.kind,
+            status: a.status,
+            assignedById: actor.userId,
+            reassignedFromId: a.id,
+            routeSequence: a.routeSequence,
+            deliveryInstructions: a.deliveryInstructions,
+            vehicleId: a.vehicleId,
+            acceptedAt: a.acceptedAt,
+            startedAt: isInProgress ? a.startedAt : null,
+            otpCodeHash: otpHash,
+            otpGeneratedAt: isInProgress ? now : null,
+            otpExpiresAt: isInProgress ? new Date(now.getTime() + OTP_TTL_MS) : null,
+            otpFailedAttempts: 0,
+            otpLockedAt: null,
+            otpVerifiedAt: null,
+          },
+        });
+        newAssignmentIds.push(created.id);
+
+        if (isInProgress) {
+          // Custody transfer, mirroring confirmPickup's writes:
+          // close the old rider's open row, open a USER custody for
+          // the new rider. The linking tracking event is the
+          // CUSTODY_TRANSFERRED record the handover flow also uses.
+          const open = await tx.packageCustody.findFirst({
+            where: { packageId: a.packageId, endedAt: null },
+          });
+          if (
+            !open ||
+            open.custodianType !== "USER" ||
+            open.custodianUserId !== oldRider.userId
+          ) {
+            throw new ConflictError(
+              `Package ${a.package.trackingId} is IN_PROGRESS but is not in the current rider's custody — batch reassignment halted`,
+            );
+          }
+          await tx.packageCustody.update({
+            where: { id: open.id },
+            data: { endedAt: now },
+          });
+          const event = await tx.trackingEvent.create({
+            data: {
+              packageId: a.packageId,
+              shipmentId: a.package.shipmentId,
+              orderId: a.package.orderId,
+              subjectType: "PACKAGE",
+              eventType: "CUSTODY_TRANSFERRED",
+              previousStatus: a.package.operationalStatus,
+              newStatus: a.package.operationalStatus,
+              actorId: actor.userId,
+              actorRole: actor.primaryRole,
+              warehouseId: freshBatch.warehouseId,
+              deliveryAssignmentId: created.id,
+              source: "WEB",
+              notes: `Custody reassigned from ${oldRider.user.fullName} to ${freshRider.fullName} (batch reassignment): ${reason}`,
+            },
+          });
+          await tx.packageCustody.create({
+            data: {
+              packageId: a.packageId,
+              custodianType: "USER",
+              custodianUserId: freshRider.userId,
+              trackingEventId: event.id,
+            },
+          });
+          // The fresh code goes to the RECIPIENT through the same
+          // notification intent confirmPickup emits, in this
+          // transaction — if the swap rolls back, no code was ever
+          // delivered for the new assignment.
+          await deliverOtpToRecipientInTx(tx, {
+            assignmentId: created.id,
+            trackingId: a.package.trackingId,
+            recipientPhone: a.package.recipientPhone,
+            recipientCustomerId: a.package.recipientCustomerId,
+            otp: otp!,
+            generatedAt: now,
+          });
+        }
+
+        // Phase 8 trigger, mirrored from reassignAssignment: the new
+        // rider is notified in-transaction, per package.
+        if (freshRider.userId !== actor.userId) {
+          await notifyUsersInTx(tx, [freshRider.userId], {
+            category: "DELIVERY_ASSIGNED",
+            title: `Delivery assigned: ${a.package.trackingId}`,
+            body: `Package ${a.package.trackingId} was reassigned to you.`,
+            entityType: "DeliveryAssignment",
+            entityId: created.id,
+            dedupeKey: `delivery-assigned:${created.id}`,
+          });
+        }
+      }
+
+      // The old rider's live tracking belonged to the old batch;
+      // it ends here with the reassignment reason, in-transaction.
+      await endTrackingSessionsInTx(tx, { deliveryBatchId: batch.id }, "REASSIGNED");
+      if (oldRider.userId !== actor.userId) {
+        await notifyUsersInTx(tx, [oldRider.userId], {
+          category: "GENERAL",
+          title: "Delivery batch reassigned",
+          body: `${movable.length} package(s) from your delivery batch were reassigned to ${freshRider.fullName}. Reason: ${reason}`,
+          entityType: "DeliveryBatch",
+          entityId: batch.id,
+          dedupeKey: `delivery-batch-reassigned-away:${batch.id}:${newBatch.id}`,
+        });
+      }
+      if (hasInProgress) {
+        // Mirror confirmPickup: a rider holding collected packages
+        // is ON_DELIVERY.
+        await tx.driver.updateMany({
+          where: { id: freshRider.driverId, availabilityStatus: "AVAILABLE" },
+          data: { availabilityStatus: "ON_DELIVERY" },
+        });
+      }
+
+      // Old-batch closure (see the function doc comment for the
+      // rule and the case that leaves the batch OPEN).
+      const remainingActive = await tx.deliveryAssignment.count({
+        where: { batchId: batch.id, status: { in: [...ACTIVE_ASSIGNMENT_STATUSES] } },
+      });
+      const collections = await tx.deliveryCodCollection.findMany({
+        where: { batchId: batch.id },
+        include: {
+          remittanceLines: {
+            include: { remittance: { select: { status: true } } },
+          },
+        },
+      });
+      const codCloseoutPending = collections.some((c) => {
+        const line = c.remittanceLines[0];
+        return (
+          !line ||
+          (line.remittance.status !== "VERIFIED" && line.remittance.status !== "CLOSED")
+        );
+      });
+      let oldBatchClosed = false;
+      if (remainingActive === 0 && !codCloseoutPending) {
+        await tx.deliveryBatch.update({
+          where: { id: batch.id },
+          data: { status: "COMPLETED", closedAt: now, closedById: actor.userId },
+        });
+        // closeBatch's own terminal write; a no-op here because the
+        // REASSIGNED end above already ended any live session.
+        await endTrackingSessionsInTx(
+          tx,
+          { deliveryBatchId: batch.id },
+          "ASSIGNMENT_COMPLETED",
+        );
+        const otherOpen = await tx.deliveryBatch.count({
+          where: {
+            riderId: freshBatch.riderId,
+            status: "IN_PROGRESS",
+            id: { not: batch.id },
+          },
+        });
+        if (otherOpen === 0) {
+          await tx.driver.updateMany({
+            where: { id: freshBatch.riderId, availabilityStatus: "ON_DELIVERY" },
+            data: { availabilityStatus: "AVAILABLE" },
+          });
+        }
+        oldBatchClosed = true;
+      }
+      return { newBatchId: newBatch.id, newAssignmentIds, moved, oldBatchClosed };
+    },
+    { timeout: 30_000 },
+  );
+
+  await auditOps(actor, "delivery.batch_reassigned", "DeliveryBatch", batch.id, {
+    warehouseId: batch.warehouseId,
+    after: {
+      newBatchId: outcome.newBatchId,
+      newRiderId: rider.driverId,
+      previousRiderId: batch.riderId,
+      reason,
+      moved: outcome.moved,
+      oldBatchClosed: outcome.oldBatchClosed,
+    },
+  });
+  const assignments: DeliveryAssignmentView[] = [];
+  for (const id of outcome.newAssignmentIds) {
+    assignments.push(toAssignmentView(await loadAssignmentOr404(id)));
+  }
+  return {
+    previousBatch: toBatchView(await loadBatchOr404(batchId)),
+    batch: toBatchView(await loadBatchOr404(outcome.newBatchId)),
+    assignments,
+    moved: outcome.moved,
+    oldBatchClosed: outcome.oldBatchClosed,
+  };
+}
+
 export async function cancelBatch(
   actor: ActorContext,
   batchId: string,

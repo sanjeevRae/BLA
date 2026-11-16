@@ -42,10 +42,12 @@ import {
   arriveTrip,
   departTrip,
   recordCheckpoint,
+  replaceTripDriver,
   reportTripDelay,
   resumeTrip,
   type CheckpointInput,
   type DelayInput,
+  type ReplaceTripDriverInput,
   type TripView,
 } from "@/server/services/trips";
 
@@ -278,6 +280,15 @@ export async function reportTripDelayAction(
   input: DelayInput,
 ): Promise<ActionResult<TripView>> {
   const result = await withActor((actor) => reportTripDelay(actor, tripId, input));
+  if (result.success) revalidateTransferSurfaces();
+  return result;
+}
+
+export async function replaceTripDriverAction(
+  tripId: string,
+  input: ReplaceTripDriverInput,
+): Promise<ActionResult<TripView>> {
+  const result = await withActor((actor) => replaceTripDriver(actor, tripId, input));
   if (result.success) revalidateTransferSurfaces();
   return result;
 }

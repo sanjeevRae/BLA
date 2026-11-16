@@ -24,6 +24,7 @@ export const TRACKING_END_REASONS = [
   "SUPERVISOR",
   "ASSIGNMENT_COMPLETED",
   "ASSIGNMENT_CANCELLED",
+  "REASSIGNED",
   "EXPIRED",
 ] as const;
 export type TrackingEndReason = (typeof TRACKING_END_REASONS)[number];

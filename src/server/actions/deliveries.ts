@@ -19,6 +19,7 @@ import {
   confirmPickup,
   createDeliveryBatch,
   reassignAssignment,
+  reassignBatch,
   recordDeliveryAttempt,
   regenerateOtp,
   scanBackPackage,
@@ -34,6 +35,8 @@ import {
   type DeliveryAssignmentView,
   type DeliveryBatchView,
   type ReassignAssignmentInput,
+  type ReassignBatchInput,
+  type ReassignBatchResult,
   type RecordAttemptInput,
   type RecordAttemptResult,
   type ScanBackInput,
@@ -129,6 +132,15 @@ export async function reassignAssignmentAction(
   }>
 > {
   const result = await withActor((actor) => reassignAssignment(actor, assignmentId, input));
+  if (result.success) revalidateDeliverySurfaces();
+  return result;
+}
+
+export async function reassignBatchAction(
+  batchId: string,
+  input: ReassignBatchInput,
+): Promise<ActionResult<ReassignBatchResult>> {
+  const result = await withActor((actor) => reassignBatch(actor, batchId, input));
   if (result.success) revalidateDeliverySurfaces();
   return result;
 }

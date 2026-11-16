@@ -17,6 +17,7 @@ import {
   inspectReturnAction,
   recordDeliveryAttemptAction,
   reassignAssignmentAction,
+  reassignBatchAction,
   regenerateOtpAction,
   rejectReturnAction,
   scanBackPackageAction,
@@ -361,6 +362,92 @@ export function ReassignForm({
       </button>
       {error ? <span className="text-[12px] text-red">{error}</span> : null}
     </span>
+  );
+}
+
+export function ReassignBatchForm({
+  batchId,
+  status,
+  currentRiderUserId,
+  riders,
+}: {
+  batchId: string;
+  status: string;
+  currentRiderUserId: string;
+  riders: DeliveryRiderOption[];
+}) {
+  const router = useRouter();
+  const [riderUserId, setRiderUserId] = useState("");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (status !== "OPEN" && status !== "IN_PROGRESS") return null;
+
+  async function onClick() {
+    if (!riderUserId) {
+      setError("Select the new rider.");
+      return;
+    }
+    if (reason.trim().length < 3) {
+      setError("Give a short reason (at least 3 characters).");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    const result = await reassignBatchAction(batchId, {
+      riderUserId,
+      reason: reason.trim(),
+    });
+    setBusy(false);
+    if (!result.success) {
+      setError(result.error);
+      return;
+    }
+    setNotice(
+      `${result.data.moved.total} package(s) moved to the new rider` +
+        (result.data.oldBatchClosed ? " — this batch was closed." : "."),
+    );
+    router.refresh();
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          className={inputClass}
+          value={riderUserId}
+          onChange={(e) => setRiderUserId(e.target.value)}
+        >
+          <option value="">Reassign whole batch to…</option>
+          {riders
+            .filter((r) => r.userId !== currentRiderUserId)
+            .map((r) => (
+              <option key={r.userId} value={r.userId} disabled={r.blockers.length > 0}>
+                {r.fullName}
+                {r.blockers.length > 0 ? ` — ${r.blockers.join("; ")}` : ""}
+              </option>
+            ))}
+        </select>
+        <input
+          className={inputClass}
+          placeholder="Reason (required)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+        <button type="button" className={subtleButtonClass} disabled={busy} onClick={onClick}>
+          {busy ? "Reassigning…" : "Reassign batch"}
+        </button>
+      </div>
+      <p className="text-[12px] text-slate2">
+        Moves every waiting and collected package to the new rider — collected packages keep
+        their custody chain and get a fresh delivery code for the recipient.
+      </p>
+      {error ? <ErrorBox message={error} /> : null}
+      {notice ? <OkBox message={notice} /> : null}
+    </div>
   );
 }
 

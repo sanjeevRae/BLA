@@ -1039,7 +1039,7 @@ export async function getOwnTrackingState(
 export async function endTrackingSessionsInTx(
   tx: Tx,
   target: { tripId?: string; deliveryBatchId?: string },
-  endReason: "ASSIGNMENT_COMPLETED" | "ASSIGNMENT_CANCELLED",
+  endReason: "ASSIGNMENT_COMPLETED" | "ASSIGNMENT_CANCELLED" | "REASSIGNED",
 ): Promise<void> {
   if (!target.tripId && !target.deliveryBatchId) return;
   const sessions = await tx.trackingSession.findMany({

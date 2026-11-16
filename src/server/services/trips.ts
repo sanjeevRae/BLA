@@ -9,8 +9,13 @@ import {
   hasPermission,
   type ActorContext,
 } from "@/lib/auth/actor";
-import { ConflictError, NotFoundError } from "@/lib/errors";
+import { ConflictError, DomainValidationError, NotFoundError } from "@/lib/errors";
 import { transitionPackageInTx } from "@/server/services/package-lifecycle";
+import { notifyUsersInTx } from "@/server/services/notifications";
+import { endTrackingSessionsInTx } from "@/server/services/tracking";
+import {
+  driverAssignmentBlockers,
+} from "@/server/services/transfers";
 import {
   auditAccessDenied,
   pageArgs,
@@ -18,7 +23,11 @@ import {
   parse,
   requirePermAudited,
 } from "@/server/services/scoping";
-import { auditOps, isUnscoped } from "@/server/services/warehouse-ops-shared";
+import {
+  assertWarehouseScope,
+  auditOps,
+  isUnscoped,
+} from "@/server/services/warehouse-ops-shared";
 import { assertTransferReadable } from "@/server/services/transfers";
 
 /**
@@ -240,6 +249,39 @@ export async function arriveTrip(
   const transfer = trip.transfer;
   const now = new Date();
   await prisma.$transaction(async (tx) => {
+    // Lock the Trip row and re-validate under it (P5-5 stale-
+    // snapshot class, and the serialisation point shared with
+    // replaceTripDriver): a driver replaced mid-arrival — or an
+    // arrival recorded against a trip another operation just moved
+    // — must fail from the FRESH row, not the pre-transaction
+    // snapshot. In particular the progress-scope check is re-run
+    // against the fresh driverId: if the trip was reassigned, the
+    // previous driver can no longer arrive it.
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "app"."Trip" WHERE "id" = ${trip.id} FOR UPDATE`,
+    );
+    const fresh = await tx.trip.findUniqueOrThrow({
+      where: { id: trip.id },
+      select: { status: true, driverId: true },
+    });
+    if (fresh.status !== "IN_TRANSIT" && fresh.status !== "DELAYED") {
+      throw new ConflictError(
+        `Only an IN_TRANSIT trip can record arrival (current: ${fresh.status})`,
+      );
+    }
+    const stillInScope =
+      isUnscoped(actor) ||
+      (actor.driverId !== null && actor.driverId === fresh.driverId) ||
+      actor.warehouseIds.includes(transfer.destinationWarehouseId);
+    if (!stillInScope) {
+      await auditAccessDenied(actor, "Trip", {
+        entityId: trip.id,
+        reason: "trip_progress_out_of_scope",
+      });
+      throw new AuthorizationError(
+        "You are not assigned to this trip and do not oversee either end of it",
+      );
+    }
     for (const item of transfer.items) {
       // Only packages still on the truck transition; a package whose
       // state moved on (e.g. resolved mid-trip) is left untouched.
@@ -263,6 +305,269 @@ export async function arriveTrip(
   await auditOps(actor, "trip.arrived", "Trip", trip.id, {
     warehouseId: transfer.destinationWarehouseId,
     after: { transferId: transfer.id },
+  });
+  return toTripView(await loadTripOr404(tripId));
+}
+
+// ---------------------------------------------------------------------------
+// En-route driver replacement (Phase 7 reassignment)
+// ---------------------------------------------------------------------------
+
+export const replaceTripDriverSchema = z.object({
+  driverId: z.string().uuid(),
+  reason: z.string().min(3).max(500),
+});
+export type ReplaceTripDriverInput = z.input<typeof replaceTripDriverSchema>;
+
+/** Trip statuses in which the truck is on the road and the driver
+ *  may be replaced mid-journey. */
+const EN_ROUTE_TRIP_STATUSES: readonly string[] = [
+  "DISPATCHED",
+  "IN_TRANSIT",
+  "DELAYED",
+  "INCIDENT",
+];
+
+/** Pre-departure statuses: the driver is changed through crew
+ *  assignment (assignTransferCrew), never through replacement. */
+const PRE_DEPARTURE_TRIP_STATUSES: readonly string[] = ["PLANNED", "ASSIGNED", "LOADING"];
+
+function assertTripEnRoute(status: string): void {
+  if (EN_ROUTE_TRIP_STATUSES.includes(status)) return;
+  if (PRE_DEPARTURE_TRIP_STATUSES.includes(status)) {
+    throw new ConflictError(
+      `Trip is ${status} — it has not departed yet; change the driver through crew assignment instead`,
+    );
+  }
+  throw new ConflictError(
+    `Trip is ${status} — the driver can only be replaced while the trip is en route (DISPATCHED, IN_TRANSIT, DELAYED or INCIDENT)`,
+  );
+}
+
+/**
+ * Replace the driver of an EN-ROUTE trip (the truck has left and
+ * cannot wait for a pre-dispatch crew edit). Vehicle unchanged.
+ *
+ * One transaction with a fixed lock order — trip → transfer → old
+ * driver → new driver (then manifested package rows in packageId
+ * order for the custody swap) — re-validating everything under the
+ * locks: en-route status, the replacement driver's eligibility via
+ * the same driverAssignmentBlockers assignTransferCrew uses, and
+ * custody ownership. Custody mirrors dispatchTransfer: every
+ * manifested package whose open custody is held by the old driver
+ * closes to the old driver and opens to the new driver (USER
+ * custody linked to a CUSTODY_TRANSFERRED tracking event). The old
+ * driver's live tracking session on the trip ends REASSIGNED in
+ * the same transaction, so their subsequent pings fail the
+ * session-ACTIVE gate in the tracking ingest. Serialises with
+ * arriveTrip on the Trip row lock: the loser re-reads the fresh row
+ * and refuses (trip no longer en route, or the arriving actor is no
+ * longer the trip's driver).
+ */
+export async function replaceTripDriver(
+  actor: ActorContext,
+  tripId: string,
+  input: ReplaceTripDriverInput,
+): Promise<TripView> {
+  const data = parse(replaceTripDriverSchema, input);
+  const reason = data.reason.trim();
+  if (reason.length < 3) {
+    throw new DomainValidationError("A reason of at least 3 characters is required");
+  }
+  // The crew-assignment permissions (assignTransferCrew requires
+  // both): replacing the driver IS a crew assignment, mid-journey.
+  await requirePermAudited(actor, "driver.assign", "Trip");
+  await requirePermAudited(actor, "vehicle.assign", "Trip");
+  const trip = await loadTripOr404(tripId);
+  await assertWarehouseScope(actor, trip.transfer.originWarehouseId, "Trip", trip.id);
+  assertTripEnRoute(trip.status);
+  if (data.driverId === trip.driverId) {
+    throw new DomainValidationError("This trip is already assigned to that driver");
+  }
+  const transferId = trip.transferId;
+
+  const outcome = await prisma.$transaction(
+    async (tx) => {
+      // Fixed lock order: trip → transfer → old driver → new driver.
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "app"."Trip" WHERE "id" = ${tripId} FOR UPDATE`,
+      );
+      const freshTrip = await tx.trip.findUniqueOrThrow({
+        where: { id: tripId },
+        include: {
+          transfer: {
+            select: {
+              id: true,
+              originWarehouseId: true,
+              destinationWarehouseId: true,
+            },
+          },
+        },
+      });
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "app"."Transfer" WHERE "id" = ${transferId} FOR UPDATE`,
+      );
+      assertTripEnRoute(freshTrip.status);
+      if (data.driverId === freshTrip.driverId) {
+        throw new DomainValidationError("This trip is already assigned to that driver");
+      }
+      const previousDriverId = freshTrip.driverId;
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "app"."Driver" WHERE "id" = ${previousDriverId} FOR UPDATE`,
+      );
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "app"."Driver" WHERE "id" = ${data.driverId} FOR UPDATE`,
+      );
+      const newDriver = await tx.driver.findUnique({
+        where: { id: data.driverId },
+        include: {
+          user: {
+            include: { roles: { include: { role: { select: { code: true } } } } },
+          },
+          capabilities: true,
+        },
+      });
+      if (!newDriver) throw new NotFoundError("Driver profile not found");
+      const blockers = await driverAssignmentBlockers(tx, newDriver, transferId);
+      if (blockers.length > 0) {
+        throw new DomainValidationError(blockers.join("; "));
+      }
+      const oldDriver = await tx.driver.findUniqueOrThrow({
+        where: { id: previousDriverId },
+        select: {
+          userId: true,
+          availabilityStatus: true,
+          currentTripId: true,
+          user: { select: { fullName: true } },
+        },
+      });
+
+      // Custody swap (dispatch's shape): manifested packages held
+      // by the old driver move to the new driver. Package rows are
+      // locked in packageId order after the driver locks.
+      const items = await tx.transferItem.findMany({
+        where: { transferId },
+        select: { packageId: true },
+        orderBy: { packageId: "asc" },
+      });
+      const now = new Date();
+      let custodyTransferred = 0;
+      for (const item of items) {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT "id" FROM "app"."Package" WHERE "id" = ${item.packageId} FOR UPDATE`,
+        );
+        const open = await tx.packageCustody.findFirst({
+          where: { packageId: item.packageId, endedAt: null },
+        });
+        if (
+          !open ||
+          open.custodianType !== "USER" ||
+          open.custodianUserId !== oldDriver.userId
+        ) {
+          continue; // not held by the old driver for this trip — untouched
+        }
+        const pkg = await tx.package.findUniqueOrThrow({
+          where: { id: item.packageId },
+          select: { shipmentId: true, orderId: true, operationalStatus: true },
+        });
+        await tx.packageCustody.update({
+          where: { id: open.id },
+          data: { endedAt: now },
+        });
+        const event = await tx.trackingEvent.create({
+          data: {
+            packageId: item.packageId,
+            shipmentId: pkg.shipmentId,
+            orderId: pkg.orderId,
+            subjectType: "PACKAGE",
+            eventType: "CUSTODY_TRANSFERRED",
+            previousStatus: pkg.operationalStatus,
+            newStatus: pkg.operationalStatus,
+            actorId: actor.userId,
+            actorRole: actor.primaryRole,
+            warehouseId: freshTrip.transfer.originWarehouseId,
+            tripId,
+            source: "WEB",
+            notes: `Custody reassigned from ${oldDriver.user.fullName} to ${newDriver.user.fullName} (trip driver replacement): ${reason}`,
+          },
+        });
+        await tx.packageCustody.create({
+          data: {
+            packageId: item.packageId,
+            custodianType: "USER",
+            custodianUserId: newDriver.userId,
+            trackingEventId: event.id,
+          },
+        });
+        custodyTransferred += 1;
+      }
+
+      await tx.trip.update({
+        where: { id: tripId },
+        data: { driverId: newDriver.id },
+      });
+      await tx.transfer.update({
+        where: { id: transferId },
+        data: { driverId: newDriver.id },
+      });
+      // Availability, mirroring dispatch / trip-completion writes:
+      // the old driver is freed only from ON_TRIP (and only from
+      // THIS trip's currentTrip pointer); the new driver takes the
+      // trip over.
+      if (oldDriver.availabilityStatus === "ON_TRIP") {
+        await tx.driver.update({
+          where: { id: previousDriverId },
+          data: {
+            availabilityStatus: "AVAILABLE",
+            ...(oldDriver.currentTripId === tripId ? { currentTripId: null } : {}),
+          },
+        });
+      } else if (oldDriver.currentTripId === tripId) {
+        await tx.driver.update({
+          where: { id: previousDriverId },
+          data: { currentTripId: null },
+        });
+      }
+      await tx.driver.update({
+        where: { id: newDriver.id },
+        data: { availabilityStatus: "ON_TRIP", currentTripId: tripId },
+      });
+
+      await endTrackingSessionsInTx(tx, { tripId }, "REASSIGNED");
+      if (newDriver.userId !== actor.userId) {
+        await notifyUsersInTx(tx, [newDriver.userId], {
+          category: "GENERAL",
+          title: `Trip assigned to you: ${freshTrip.tripNumber}`,
+          body: `You have replaced the driver on trip ${freshTrip.tripNumber} (${custodyTransferred} package(s) now in your custody). Reason: ${reason}`,
+          entityType: "Trip",
+          entityId: tripId,
+          dedupeKey: `trip-driver-replaced-new:${tripId}:${newDriver.id}`,
+        });
+      }
+      if (oldDriver.userId !== actor.userId) {
+        await notifyUsersInTx(tx, [oldDriver.userId], {
+          category: "GENERAL",
+          title: `You were replaced on trip ${freshTrip.tripNumber}`,
+          body: `The driver on trip ${freshTrip.tripNumber} was replaced. Reason: ${reason}`,
+          entityType: "Trip",
+          entityId: tripId,
+          dedupeKey: `trip-driver-replaced-old:${tripId}:${previousDriverId}`,
+        });
+      }
+      return { previousDriverId, custodyTransferred };
+    },
+    { timeout: 30_000 },
+  );
+
+  await auditOps(actor, "trip.driver_replaced", "Trip", tripId, {
+    warehouseId: trip.transfer.originWarehouseId,
+    after: {
+      transferId,
+      reason,
+      previousDriverId: outcome.previousDriverId,
+      newDriverId: data.driverId,
+      custodyTransferred: outcome.custodyTransferred,
+    },
   });
   return toTripView(await loadTripOr404(tripId));
 }

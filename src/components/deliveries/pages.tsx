@@ -37,6 +37,7 @@ import {
   DeliverForm,
   InspectReturnForm,
   PickupForm,
+  ReassignBatchForm,
   ReassignForm,
   RejectReturnForm,
   ScanBackForm,
@@ -276,7 +277,15 @@ export async function DeliveryBatchDetailPage({
 
       {canAssign ? (
         <SectionCard title="Batch actions">
-          <BatchCloseButtons batchId={batch.id} status={batch.status} />
+          <div className="flex flex-col gap-4">
+            <BatchCloseButtons batchId={batch.id} status={batch.status} />
+            <ReassignBatchForm
+              batchId={batch.id}
+              status={batch.status}
+              currentRiderUserId={batch.riderUserId}
+              riders={riders}
+            />
+          </div>
         </SectionCard>
       ) : null}
 

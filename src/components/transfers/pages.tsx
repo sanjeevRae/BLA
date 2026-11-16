@@ -29,6 +29,7 @@ import {
   LoadScanForm,
   ReceivingCloseButtons,
   RemoveItemButton,
+  ReplaceDriverForm,
   TransferLifecycleButtons,
   TripProgressForms,
   UnloadButton,
@@ -292,7 +293,13 @@ export async function TransferCreatePage({
 // Detail
 // ---------------------------------------------------------------------------
 
-async function TripPanel({ trip }: { trip: TripView }) {
+async function TripPanel({
+  trip,
+  replaceDrivers,
+}: {
+  trip: TripView;
+  replaceDrivers?: CrewDriverOption[];
+}) {
   return (
     <div className="flex flex-col gap-3">
       <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
@@ -326,6 +333,14 @@ async function TripPanel({ trip }: { trip: TripView }) {
         </ol>
       ) : null}
       <TripProgressForms tripId={trip.id} status={trip.status} />
+      {replaceDrivers ? (
+        <ReplaceDriverForm
+          tripId={trip.id}
+          status={trip.status}
+          drivers={replaceDrivers}
+          currentDriverId={trip.driverId}
+        />
+      ) : null}
     </div>
   );
 }
@@ -389,6 +404,26 @@ export async function TransferDetailPage({
       trip = await getTrip(actor, transfer.tripId);
     } catch {
       trip = null;
+    }
+  }
+
+  // En-route driver replacement options (Phase 7): only while the
+  // trip is on the road and only for crew-assignment holders.
+  let replaceDrivers: CrewDriverOption[] | undefined;
+  if (
+    trip &&
+    ["DISPATCHED", "IN_TRANSIT", "DELAYED", "INCIDENT"].includes(trip.status) &&
+    hasPermission(actor, "driver.assign")
+  ) {
+    try {
+      const assignable = await listAssignableDrivers(actor);
+      replaceDrivers = assignable.map((a) => ({
+        driverId: a.driver.id,
+        name: a.driver.fullName,
+        blockers: a.blockers,
+      }));
+    } catch {
+      replaceDrivers = undefined;
     }
   }
 
@@ -600,7 +635,7 @@ export async function TransferDetailPage({
 
       {trip ? (
         <SectionCard title="Trip">
-          <TripPanel trip={trip} />
+          <TripPanel trip={trip} replaceDrivers={replaceDrivers} />
         </SectionCard>
       ) : null}
 

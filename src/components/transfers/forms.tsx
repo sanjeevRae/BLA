@@ -25,6 +25,7 @@ import {
   arriveTripAction,
   departTripAction,
   recordCheckpointAction,
+  replaceTripDriverAction,
   reportTripDelayAction,
   resumeTripAction,
 } from "@/server/actions/transfers";
@@ -845,6 +846,89 @@ export function ReceivingCloseButtons({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-2">{buttons}</div>
+      {error ? <ErrorBox message={error} /> : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// En-route driver replacement (shown only while the trip is en route)
+// ---------------------------------------------------------------------------
+
+export function ReplaceDriverForm({
+  tripId,
+  status,
+  drivers,
+  currentDriverId,
+}: {
+  tripId: string;
+  status: string;
+  drivers: CrewDriverOption[];
+  currentDriverId: string;
+}) {
+  const router = useRouter();
+  const [driverId, setDriverId] = useState("");
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (!["DISPATCHED", "IN_TRANSIT", "DELAYED", "INCIDENT"].includes(status)) return null;
+
+  async function onClick() {
+    if (!driverId) {
+      setError("Select the replacement driver.");
+      return;
+    }
+    if (reason.trim().length < 3) {
+      setError("Give a short reason (at least 3 characters).");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const result = await replaceTripDriverAction(tripId, {
+      driverId,
+      reason: reason.trim(),
+    });
+    setBusy(false);
+    if (!result.success) {
+      setError(result.error);
+      return;
+    }
+    router.refresh();
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          className={inputClass}
+          value={driverId}
+          onChange={(e) => setDriverId(e.target.value)}
+        >
+          <option value="">Replace driver with…</option>
+          {drivers
+            .filter((d) => d.driverId !== currentDriverId)
+            .map((d) => (
+              <option key={d.driverId} value={d.driverId} disabled={d.blockers.length > 0}>
+                {d.name}
+                {d.blockers.length > 0 ? ` — ${d.blockers.join("; ")}` : ""}
+              </option>
+            ))}
+        </select>
+        <input
+          className={inputClass}
+          placeholder="Reason (required)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+        <button type="button" className={subtleButtonClass} disabled={busy} onClick={onClick}>
+          {busy ? "Replacing…" : "Replace driver"}
+        </button>
+      </div>
+      <p className="text-[12px] text-slate2">
+        En-route replacement: package custody and the trip move to the new driver; the
+        current driver&apos;s tracking session ends.
+      </p>
       {error ? <ErrorBox message={error} /> : null}
     </div>
   );
