@@ -318,10 +318,14 @@ export function LiveOperationsBoard({
     items.every((item) => item.freshnessState === "STALE" || item.freshnessState === "OFFLINE");
   const selectedItem = items.find((item) => item.trackingSessionId === selectedId) ?? null;
 
-  // Detail action links: warehouse dashboard only (admin/super-admin
-  // have no transfers/deliveries tree), each permission-gated. There
-  // is deliberately NO "View driver" action — no driver-detail
-  // route exists in any dashboard.
+  // Detail action links, each permission-gated. Trip/manifest/batch
+  // links are warehouse-dashboard only (admin/super-admin have no
+  // transfers/deliveries tree). "View driver" (Phase 7) works on
+  // every dashboard: the driver-detail route exists in the admin,
+  // super-admin and warehouse trees, and basePath already resolves
+  // to the actor's own dashboard — it shows when the payload carries
+  // a driverId and the actor holds the fleet read gate
+  // (driver.manage / driver.assign, the Drivers-page gate).
   const detailForActions = detail ?? selectedItem;
   const showTripActions =
     isWarehouseDashboard &&
@@ -333,6 +337,9 @@ export function LiveOperationsBoard({
     (permissionSet.has("delivery.assign") ||
       permissionSet.has("delivery.read_assigned") ||
       permissionSet.has("package.receive"));
+  const showDriverAction =
+    detailForActions?.driverId != null &&
+    (permissionSet.has("driver.manage") || permissionSet.has("driver.assign"));
   const showConnectorNote =
     detail !== null &&
     detail.location !== null &&
@@ -607,7 +614,7 @@ export function LiveOperationsBoard({
               </p>
             ) : null}
 
-            {showTripActions || showBatchAction ? (
+            {showTripActions || showBatchAction || showDriverAction ? (
               <div className="flex flex-wrap gap-2">
                 {showTripActions ? (
                   <>
@@ -631,6 +638,14 @@ export function LiveOperationsBoard({
                     className="rounded-md bg-brand px-3 py-2 text-[12px] font-semibold text-white"
                   >
                     View batch
+                  </Link>
+                ) : null}
+                {showDriverAction ? (
+                  <Link
+                    href={`${basePath}/drivers/${detailForActions!.driverId}`}
+                    className="rounded-md border border-line bg-surface px-3 py-2 text-[12px] font-semibold text-ink"
+                  >
+                    View driver
                   </Link>
                 ) : null}
               </div>

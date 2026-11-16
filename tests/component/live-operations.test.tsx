@@ -224,11 +224,11 @@ const BOARD_PERMISSIONS = [
   "package.receive",
 ];
 
-function renderBoard(basePath = "/warehouse") {
+function renderBoard(basePath = "/warehouse", permissions: string[] = BOARD_PERMISSIONS) {
   return render(
     <LiveOperationsBoard
       basePath={basePath}
-      permissions={BOARD_PERMISSIONS}
+      permissions={permissions}
       warehouseOptions={[
         { id: "wh-ktm", code: "KTM", name: "Kathmandu" },
         { id: "wh-pkr", code: "PKR", name: "Pokhara" },
@@ -365,7 +365,9 @@ describe("LiveOperationsBoard — detail drawer", () => {
     expect(screen.getByRole("link", { name: "View manifest" }).getAttribute("href")).toBe(
       "/warehouse/transfers/transfer-1/manifest",
     );
-    // No driver-detail route exists anywhere — the action is omitted.
+    // BOARD_PERMISSIONS holds no fleet read permission
+    // (driver.manage / driver.assign), so the Phase 7 "View driver"
+    // action is omitted here — it renders only under that gate.
     expect(screen.queryByRole("link", { name: /driver/i })).toBeNull();
   });
 
@@ -388,6 +390,52 @@ describe("LiveOperationsBoard — detail drawer", () => {
     await waitFor(() =>
       expect(fetchCalls.some((url) => url.startsWith("/api/live-operations/sess-"))).toBe(true),
     );
+  });
+});
+
+describe("LiveOperationsBoard — View driver action (Phase 7)", () => {
+  const WITH_DRIVER_PERMS = [...BOARD_PERMISSIONS, "driver.manage"];
+
+  it("links to the warehouse driver detail when the actor holds the fleet read gate", async () => {
+    details = { "sess-2": detailFor(linehaulItem) };
+    renderBoard("/warehouse", WITH_DRIVER_PERMS);
+    fireEvent.click(await screen.findByRole("button", { name: /Linehaul Driver/ }));
+    expect(await screen.findByText("Packages (2)")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View driver" }).getAttribute("href")).toBe(
+      "/warehouse/drivers/driver-2",
+    );
+    // Trip actions still render alongside it.
+    expect(screen.getByRole("link", { name: "View trip" })).toBeTruthy();
+  });
+
+  it("links to the admin driver detail on the admin dashboard (where trip/batch actions stay hidden)", async () => {
+    details = { "sess-1": detailFor(deliveryItem) };
+    renderBoard("/admin", ["operations.live_view", "driver.assign"]);
+    fireEvent.click(await screen.findByRole("button", { name: /Delivery Driver/ }));
+    expect(await screen.findByText("Packages (2)")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View driver" }).getAttribute("href")).toBe(
+      "/admin/drivers/driver-1",
+    );
+    expect(screen.queryByRole("link", { name: "View batch" })).toBeNull();
+  });
+
+  it("links to the super-admin driver detail on the super-admin dashboard", async () => {
+    details = { "sess-1": detailFor(deliveryItem) };
+    renderBoard("/super-admin", WITH_DRIVER_PERMS);
+    fireEvent.click(await screen.findByRole("button", { name: /Delivery Driver/ }));
+    expect(await screen.findByText("Packages (2)")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View driver" }).getAttribute("href")).toBe(
+      "/super-admin/drivers/driver-1",
+    );
+  });
+
+  it("omits View driver when the actor lacks the fleet read gate, even though the payload carries a driverId", async () => {
+    details = { "sess-1": detailFor(deliveryItem) };
+    renderBoard("/warehouse", BOARD_PERMISSIONS);
+    fireEvent.click(await screen.findByRole("button", { name: /Delivery Driver/ }));
+    expect(await screen.findByText("Packages (2)")).toBeTruthy();
+    expect(deliveryItem.driverId).toBe("driver-1");
+    expect(screen.queryByRole("link", { name: "View driver" })).toBeNull();
   });
 });
 

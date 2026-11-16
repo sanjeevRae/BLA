@@ -1,10 +1,14 @@
+import Link from "next/link";
+
 import type { ActorContext } from "@/lib/auth/actor";
 import { hasPermission } from "@/lib/auth/actor";
 import { formatPaisa } from "@/components/bookings/ui";
 import { listWarehouses } from "@/server/services/warehouses";
 import {
+  getDriverProfile,
   listDriverCandidates,
   listDrivers,
+  type DriverProfileView,
   type DriverView,
 } from "@/server/services/drivers";
 import {
@@ -237,6 +241,216 @@ async function VehicleRow({
           ) : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function ProfileField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-slate2">{label}</dt>
+      <dd className="font-medium text-ink">{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * Driver detail page (Phase 7) — shared by the admin, super-admin
+ * and warehouse dashboards the way the fleet list pages are; the
+ * service (getDriverProfile) enforces the fleet read gate + scope,
+ * and the GPS section renders only when the profile carries the
+ * `gps` key (operations.live_view holders only).
+ */
+export async function DriverDetailPage({
+  actor,
+  basePath,
+  driverId,
+}: {
+  actor: ActorContext;
+  basePath: string;
+  driverId: string;
+}) {
+  const profile: DriverProfileView = await getDriverProfile(actor, driverId);
+  const canManage = hasPermission(actor, "driver.manage");
+  const hasGps = "gps" in profile;
+  return (
+    <div className="flex flex-col gap-5">
+      <div>
+        <Link
+          href={`${basePath}/drivers`}
+          className="text-[12px] font-semibold text-brand"
+        >
+          ← All drivers
+        </Link>
+        <h1 className="mt-1 text-[22px] font-bold text-ink">{profile.fullName}</h1>
+        <p className="text-[13px] text-slate2">
+          {profile.email}
+          {profile.phone ? ` · ${profile.phone}` : ""} · home{" "}
+          {profile.homeWarehouse.code} — {profile.homeWarehouse.name}
+        </p>
+      </div>
+
+      <SectionCard title="Driver profile">
+        <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
+          <ProfileField
+            label="Type"
+            value={profile.roles.join(", ") || "—"}
+          />
+          <ProfileField
+            label="Capabilities"
+            value={profile.capabilities.join(", ") || "—"}
+          />
+          <ProfileField label="Employment" value={profile.employmentStatus} />
+          <ProfileField label="Availability" value={profile.availabilityStatus} />
+          <ProfileField
+            label="Licence"
+            value={`${profile.licenseNumber}${profile.licenseCategory ? ` (${profile.licenseCategory})` : ""}`}
+          />
+          <ProfileField
+            label="Licence expiry"
+            value={`${profile.licenseExpiry}${profile.licenseExpired ? " — EXPIRED" : ""}`}
+          />
+          <ProfileField
+            label="Emergency contact"
+            value={`${profile.emergencyContactName ?? "—"}${profile.emergencyContactPhone ? ` · ${profile.emergencyContactPhone}` : ""}`}
+          />
+          <ProfileField label="Account status" value={profile.userStatus} />
+        </dl>
+        {canManage ? (
+          <div className="mt-4 flex flex-col gap-3">
+            <DriverAdminButtons
+              driverId={profile.id}
+              employmentStatus={profile.employmentStatus}
+            />
+            <UpdateDriverLicenceForm
+              driverId={profile.id}
+              licenseNumber={profile.licenseNumber}
+              licenseExpiry={profile.licenseExpiry}
+            />
+          </div>
+        ) : null}
+      </SectionCard>
+
+      <SectionCard title="Current vehicle">
+        {profile.currentVehicle ? (
+          <p className="text-[13px] text-ink">
+            <span className="font-mono font-bold">{profile.currentVehicle.registration}</span>{" "}
+            · {profile.currentVehicle.type} · {profile.currentVehicle.status}
+          </p>
+        ) : (
+          <p className="text-[13px] text-slate2">No vehicle currently assigned.</p>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Current work">
+        {profile.currentTrip || profile.currentBatch ? (
+          <div className="flex flex-col gap-3 text-[13px] text-ink">
+            {profile.currentTrip ? (
+              <div>
+                <div className="font-semibold">
+                  Trip {profile.currentTrip.tripNumber} · {profile.currentTrip.status}
+                </div>
+                <div className="text-slate2">
+                  {profile.currentTrip.origin.name} → {profile.currentTrip.destination.name}
+                  {profile.currentTrip.vehicleRegistration
+                    ? ` · ${profile.currentTrip.vehicleRegistration}`
+                    : ""}
+                </div>
+              </div>
+            ) : null}
+            {profile.currentBatch ? (
+              <div>
+                <div className="font-semibold">
+                  {profile.currentBatch.kind} batch · {profile.currentBatch.status} ·{" "}
+                  {profile.currentBatch.batchDate}
+                </div>
+                <div className="text-slate2">
+                  {profile.currentBatch.warehouse.code} — {profile.currentBatch.warehouse.name}{" "}
+                  · <span className="tnum">{profile.currentBatch.assignedCount}</span> assigned
+                  · <span className="tnum">{profile.currentBatch.deliveredCount}</span>{" "}
+                  delivered · <span className="tnum">{profile.currentBatch.remainingCount}</span>{" "}
+                  remaining
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-[13px] text-slate2">No active trip or delivery batch.</p>
+        )}
+      </SectionCard>
+
+      {hasGps ? (
+        <SectionCard title="Live location (GPS)">
+          {profile.gps ? (
+            <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
+              <ProfileField
+                label="Position"
+                value={`${profile.gps.latitude.toFixed(5)}, ${profile.gps.longitude.toFixed(5)}`}
+              />
+              <ProfileField
+                label="Accuracy"
+                value={`±${Math.round(profile.gps.accuracyMeters)} m`}
+              />
+              <ProfileField label="Freshness" value={profile.gps.freshnessState} />
+              <ProfileField
+                label="Last update"
+                value={new Date(profile.gps.lastReceivedAt).toLocaleString("en-GB")}
+              />
+              <ProfileField label="Session type" value={profile.gps.trackingType} />
+            </dl>
+          ) : (
+            <p className="text-[13px] text-slate2">
+              No current location snapshot for this driver.
+            </p>
+          )}
+        </SectionCard>
+      ) : null}
+
+      <SectionCard title={`Recent trips (${profile.recentTrips.length})`}>
+        {profile.recentTrips.length === 0 ? (
+          <p className="text-[13px] text-slate2">No trips yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-2 text-[13px] text-ink">
+            {profile.recentTrips.map((trip) => (
+              <li
+                key={trip.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2"
+              >
+                <span className="font-semibold">{trip.tripNumber}</span>
+                <span className="text-slate2">
+                  {trip.origin.code} → {trip.destination.code} · {trip.status} ·{" "}
+                  {new Date(trip.createdAt).toLocaleDateString("en-GB")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
+
+      <SectionCard title={`Recent delivery batches (${profile.recentBatches.length})`}>
+        {profile.recentBatches.length === 0 ? (
+          <p className="text-[13px] text-slate2">No delivery batches yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-2 text-[13px] text-ink">
+            {profile.recentBatches.map((batch) => (
+              <li
+                key={batch.id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2"
+              >
+                <span className="font-semibold">
+                  {batch.warehouse.code} · {batch.batchDate}
+                </span>
+                <span className="text-slate2">
+                  {batch.kind} · {batch.status} ·{" "}
+                  <span className="tnum">{batch.assignedCount}</span> assigned ·{" "}
+                  <span className="tnum">{batch.deliveredCount}</span> delivered ·{" "}
+                  <span className="tnum">{batch.remainingCount}</span> remaining
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </SectionCard>
     </div>
   );
 }

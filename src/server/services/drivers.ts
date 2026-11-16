@@ -14,7 +14,10 @@ import {
   DomainValidationError,
   NotFoundError,
 } from "@/lib/errors";
+import { computeFreshness } from "@/lib/tracking/config";
+import type { FreshnessState } from "@/lib/tracking/domain";
 import {
+  ACTIVE_TRIP_STATUSES,
   DRIVER_CAPABILITIES,
   DRIVER_EMPLOYMENT_STATUSES,
 } from "@/lib/transfers/domain";
@@ -26,6 +29,7 @@ import {
   parse,
   requirePermAudited,
 } from "@/server/services/scoping";
+import { loadTrackingConfig } from "@/server/services/tracking";
 import {
   assertWarehouseScope,
   auditOps,
@@ -468,6 +472,355 @@ export async function getDriver(
   const driver = await loadDriverOr404(driverId);
   await assertDriverScope(actor, driver, driver.id);
   return toDriverView(driver);
+}
+
+// ---------------------------------------------------------------------------
+// Driver profile (Phase 7) — the driver-detail read behind the admin /
+// super-admin / warehouse driver pages and the Live Operations
+// "View driver" action.
+// ---------------------------------------------------------------------------
+
+export interface DriverProfileWarehouseView {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface DriverProfileVehicleView {
+  id: string;
+  registration: string;
+  type: string;
+  status: string;
+}
+
+export interface DriverProfileTripView {
+  id: string;
+  tripNumber: string;
+  status: string;
+  origin: DriverProfileWarehouseView;
+  destination: DriverProfileWarehouseView;
+  vehicleRegistration: string | null;
+  createdAt: string;
+}
+
+export interface DriverProfileBatchView {
+  id: string;
+  warehouse: DriverProfileWarehouseView;
+  kind: string;
+  status: string;
+  batchDate: string;
+  assignedCount: number;
+  deliveredCount: number;
+  remainingCount: number;
+}
+
+/** The driver's DriverCurrentLocation snapshot. Present as a KEY on
+ *  the profile only when the actor holds operations.live_view (the
+ *  value is null when the driver has no snapshot); the key is absent
+ *  entirely otherwise — the live-operations COD-field convention. */
+export interface DriverProfileGpsView {
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number;
+  freshnessState: FreshnessState;
+  lastRecordedAt: string;
+  lastReceivedAt: string;
+  trackingSessionId: string;
+  trackingType: string;
+}
+
+export interface DriverProfileView {
+  id: string;
+  userId: string;
+  fullName: string;
+  email: string;
+  phone: string | null;
+  userStatus: string;
+  /** The login roles (RIDER / LINEHAUL_DRIVER) — the driver "type". */
+  roles: string[];
+  capabilities: string[];
+  homeWarehouse: DriverProfileWarehouseView;
+  licenseNumber: string;
+  licenseCategory: string | null;
+  licenseExpiry: string;
+  licenseExpired: boolean;
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
+  employmentStatus: string;
+  availabilityStatus: string;
+  currentVehicle: DriverProfileVehicleView | null;
+  currentTrip: DriverProfileTripView | null;
+  currentBatch: DriverProfileBatchView | null;
+  recentTrips: DriverProfileTripView[];
+  recentBatches: DriverProfileBatchView[];
+  createdAt: string;
+  gps?: DriverProfileGpsView | null;
+}
+
+/** DeliveryBatch statuses that count as live work (the tracking
+ *  vocabulary: GPS may run, the run is not finished). */
+const ACTIVE_BATCH_STATUSES: readonly string[] = ["OPEN", "IN_PROGRESS"];
+
+/** Assignment statuses that still owe the rider a visit — the same
+ *  remaining-work definition as live-operations / the delivery day
+ *  summary (COMPLETED counts as delivered). */
+const PROFILE_REMAINING_ASSIGNMENT_STATUSES: ReadonlySet<string> = new Set([
+  "PENDING",
+  "ACCEPTED",
+  "IN_PROGRESS",
+]);
+
+const profileTripInclude = {
+  transfer: {
+    include: {
+      originWarehouse: { select: { id: true, code: true, name: true } },
+      destinationWarehouse: { select: { id: true, code: true, name: true } },
+    },
+  },
+  vehicle: { select: { registration: true } },
+} satisfies Prisma.TripInclude;
+
+type ProfileTripRow = Prisma.TripGetPayload<{ include: typeof profileTripInclude }>;
+
+function toProfileTripView(row: ProfileTripRow): DriverProfileTripView {
+  return {
+    id: row.id,
+    tripNumber: row.tripNumber,
+    status: row.status,
+    origin: {
+      id: row.transfer.originWarehouse.id,
+      code: row.transfer.originWarehouse.code,
+      name: row.transfer.originWarehouse.name,
+    },
+    destination: {
+      id: row.transfer.destinationWarehouse.id,
+      code: row.transfer.destinationWarehouse.code,
+      name: row.transfer.destinationWarehouse.name,
+    },
+    vehicleRegistration: row.vehicle.registration,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+const profileBatchInclude = {
+  warehouse: { select: { id: true, code: true, name: true } },
+  assignments: { select: { status: true } },
+} satisfies Prisma.DeliveryBatchInclude;
+
+type ProfileBatchRow = Prisma.DeliveryBatchGetPayload<{
+  include: typeof profileBatchInclude;
+}>;
+
+function toProfileBatchView(row: ProfileBatchRow): DriverProfileBatchView {
+  return {
+    id: row.id,
+    warehouse: {
+      id: row.warehouse.id,
+      code: row.warehouse.code,
+      name: row.warehouse.name,
+    },
+    kind: row.kind,
+    status: row.status,
+    batchDate: dateOnly(row.batchDate),
+    assignedCount: row.assignments.length,
+    deliveredCount: row.assignments.filter((a) => a.status === "COMPLETED").length,
+    remainingCount: row.assignments.filter((a) =>
+      PROFILE_REMAINING_ASSIGNMENT_STATUSES.has(a.status),
+    ).length,
+  };
+}
+
+/**
+ * Profile scope (Phase 7): unscoped actors (SUPER_ADMIN / ADMIN via
+ * warehouse.read_all) may read any driver. A warehouse-scoped actor
+ * may read a driver whose HOME warehouse is one of theirs, OR who is
+ * currently working out of one of theirs — an active trip whose
+ * transfer ORIGINATES at their warehouse, or an active (OPEN /
+ * IN_PROGRESS) delivery batch at their warehouse. Anything else is
+ * denied (and audited by the caller).
+ */
+async function driverProfileInScope(
+  actor: ActorContext,
+  driverId: string,
+  homeWarehouseId: string,
+): Promise<boolean> {
+  if (isUnscoped(actor)) return true;
+  if (actor.driverId && actor.driverId === driverId) return true;
+  if (actor.warehouseIds.includes(homeWarehouseId)) return true;
+  if (actor.warehouseIds.length === 0) return false;
+  const [trip, batch] = await Promise.all([
+    prisma.trip.findFirst({
+      where: {
+        driverId,
+        status: { in: [...ACTIVE_TRIP_STATUSES] },
+        transfer: { originWarehouseId: { in: actor.warehouseIds } },
+      },
+      select: { id: true },
+    }),
+    prisma.deliveryBatch.findFirst({
+      where: {
+        riderId: driverId,
+        status: { in: [...ACTIVE_BATCH_STATUSES] },
+        warehouseId: { in: actor.warehouseIds },
+      },
+      select: { id: true },
+    }),
+  ]);
+  return trip !== null || batch !== null;
+}
+
+/**
+ * The full driver profile for the detail pages. Gate: the fleet read
+ * gate the existing fleet surfaces use — driver.manage OR
+ * driver.assign (the catalog has no separate driver.read code; the
+ * navigation registry gates the Drivers pages on exactly this pair,
+ * and getDriver/listDrivers above use the same check). Denials are
+ * audit-logged as access.denied, mirroring requirePermAudited.
+ *
+ * Identity fields (email, phone) are internal staff data shown only
+ * behind this gate + scope; the GPS snapshot is attached only for
+ * operations.live_view holders (see DriverProfileGpsView).
+ */
+export async function getDriverProfile(
+  actor: ActorContext,
+  driverId: string,
+): Promise<DriverProfileView> {
+  if (
+    !hasPermission(actor, "driver.manage") &&
+    !hasPermission(actor, "driver.assign")
+  ) {
+    await auditAccessDenied(actor, "Driver", {
+      entityId: driverId,
+      reason: "missing_permission:driver.read",
+    });
+    throw new AuthorizationError("Missing required permission to read drivers");
+  }
+
+  const driver = await prisma.driver.findUnique({
+    where: { id: driverId },
+    include: {
+      user: {
+        include: { roles: { include: { role: { select: { code: true } } } } },
+      },
+      homeWarehouse: { select: { id: true, code: true, name: true } },
+      capabilities: true,
+    },
+  });
+  if (!driver) throw new NotFoundError("Driver profile not found");
+
+  if (!(await driverProfileInScope(actor, driver.id, driver.homeWarehouseId))) {
+    await auditAccessDenied(actor, "Driver", {
+      entityId: driver.id,
+      warehouseId: driver.homeWarehouseId,
+      reason: "driver_out_of_scope",
+    });
+    throw new AuthorizationError("Driver is outside your assigned scope");
+  }
+
+  const [vehicle, currentTrip, currentBatch, recentTrips, recentBatches] =
+    await Promise.all([
+      prisma.vehicle.findFirst({
+        where: { assignedDriverId: driver.id },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, registration: true, type: true, status: true },
+      }),
+      prisma.trip.findFirst({
+        where: { driverId: driver.id, status: { in: [...ACTIVE_TRIP_STATUSES] } },
+        orderBy: { createdAt: "desc" },
+        include: profileTripInclude,
+      }),
+      prisma.deliveryBatch.findFirst({
+        where: {
+          riderId: driver.id,
+          status: { in: [...ACTIVE_BATCH_STATUSES] },
+        },
+        orderBy: [{ batchDate: "desc" }, { createdAt: "desc" }],
+        include: profileBatchInclude,
+      }),
+      prisma.trip.findMany({
+        where: { driverId: driver.id },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: profileTripInclude,
+      }),
+      prisma.deliveryBatch.findMany({
+        where: { riderId: driver.id },
+        orderBy: [{ batchDate: "desc" }, { createdAt: "desc" }],
+        take: 10,
+        include: profileBatchInclude,
+      }),
+    ]);
+
+  const profile: DriverProfileView = {
+    id: driver.id,
+    userId: driver.userId,
+    fullName: driver.user.fullName,
+    email: driver.user.email,
+    phone: driver.user.phone,
+    userStatus: driver.user.status,
+    roles: driver.user.roles.map((r) => r.role.code),
+    capabilities: driver.capabilities.map((c) => c.capability).sort(),
+    homeWarehouse: {
+      id: driver.homeWarehouse.id,
+      code: driver.homeWarehouse.code,
+      name: driver.homeWarehouse.name,
+    },
+    licenseNumber: driver.licenseNumber,
+    licenseCategory: driver.licenseCategory,
+    licenseExpiry: dateOnly(driver.licenseExpiry),
+    licenseExpired: isExpiredDate(driver.licenseExpiry),
+    emergencyContactName: driver.emergencyContactName,
+    emergencyContactPhone: driver.emergencyContactPhone,
+    employmentStatus: driver.employmentStatus,
+    availabilityStatus: driver.availabilityStatus,
+    currentVehicle: vehicle
+      ? {
+          id: vehicle.id,
+          registration: vehicle.registration,
+          type: vehicle.type,
+          status: vehicle.status,
+        }
+      : null,
+    currentTrip: currentTrip ? toProfileTripView(currentTrip) : null,
+    currentBatch: currentBatch ? toProfileBatchView(currentBatch) : null,
+    recentTrips: recentTrips.map(toProfileTripView),
+    recentBatches: recentBatches.map(toProfileBatchView),
+    createdAt: driver.createdAt.toISOString(),
+  };
+
+  // GPS snapshot: operations.live_view holders only — the key is
+  // omitted entirely otherwise. Freshness is recomputed from the
+  // snapshot's session status + receive clock, exactly as the
+  // live-operations board derives it.
+  if (hasPermission(actor, "operations.live_view")) {
+    const snapshot = await prisma.driverCurrentLocation.findUnique({
+      where: { driverId: driver.id },
+      include: {
+        trackingSession: { select: { status: true, trackingType: true } },
+      },
+    });
+    if (!snapshot) {
+      profile.gps = null;
+    } else {
+      const config = await loadTrackingConfig();
+      profile.gps = {
+        latitude: snapshot.latitude,
+        longitude: snapshot.longitude,
+        accuracyMeters: snapshot.accuracyMeters,
+        freshnessState: computeFreshness({
+          sessionStatus: snapshot.trackingSession.status,
+          lastReceivedAt: snapshot.lastReceivedAt,
+          now: new Date(),
+          config,
+        }),
+        lastRecordedAt: snapshot.lastRecordedAt.toISOString(),
+        lastReceivedAt: snapshot.lastReceivedAt.toISOString(),
+        trackingSessionId: snapshot.trackingSessionId,
+        trackingType: snapshot.trackingSession.trackingType,
+      };
+    }
+  }
+  return profile;
 }
 
 /** Slim picker row for the crew-assignment UI (Phase 10 slice 2,
