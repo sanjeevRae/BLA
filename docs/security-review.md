@@ -395,3 +395,66 @@ data, and one privileged invitation completed the full
 four-eyes flow end to end (invite → redemption refused before
 approval → second-user approval → redemption → new Admin signs
 in through MFA enrolment to a working dashboard).
+
+## V2 Phase 7 — Operational workflows completion (independent review, 2026-11-16)
+
+Scope: the new Phase 7 surfaces — driver incident links, vendor
+bulk booking, batch/trip reassignments, cross-warehouse returns,
+POD evidence binding, the driver-detail profile, and the vendor
+pickup leg. The reviewer was builder-independent and wrote live
+proof-of-concept tests (`tests/integration/phase7-security-review.test.ts`,
+37 PoCs) against every surface, asserting both the refusal and
+unchanged state on each denial.
+
+Verdict: **PASS WITH FINDINGS** — 36/37 PoCs passed on first run;
+one Low finding, fixed in-phase; the suite now passes 37/37.
+
+- **F1 (Low, defense in depth)** — the PICKUP branch of
+  `addBatchPackages` checked for an active PICKUP assignment but
+  not for an active DELIVERY assignment (the DELIVERY branch
+  checks both). Through current flows the violating state is not
+  reachable (a package with an active delivery assignment is
+  never in a pickup-eligible status), but a future flow could
+  have double-committed a parcel. Fixed: the PICKUP branch now
+  refuses when the package carries an open delivery assignment,
+  mirroring the DELIVERY branch.
+
+Surfaces verified holding (probe counts in the PoC suite):
+driver incident scope (foreign trip/assignment/package links
+refused with no rows written; follow-up task assignee validation;
+warehouse derived from the incident, never from input); bulk
+booking (cross-vendor rows, schema-invalid rows and
+in-transaction failures all roll back the whole bulk — zero
+partial writes; 51-row and 0-row bulks refused); reassignment
+races (reassign ∥ deliver and double-reassign each produce
+exactly one winner and exactly one open custody record; the old
+rider's tracking session ends with REASSIGNED while other
+batches' sessions are untouched; a COD-pending old batch stays
+open and reconcilable; trip driver replacement refuses all
+pre-departure statuses and races safely against arrival);
+returns custody (wrong-destination / non-RECEIVED / same-warehouse
+manifesting refused; a mixed add rolls back entirely; inspect and
+complete enforce the package's physical warehouse; the
+deterioration incident fires exactly once); evidence binding
+(same reference on a second package refused with the delivery
+fully rolled back; cross-kind reuse refused; trim normalisation
+holds; concurrent deliveries racing one reference produce exactly
+one binding); driver detail (out-of-scope reads denied and
+audit-logged; the `gps` key is absent for actors without
+`operations.live_view`); pickup leg (cross-warehouse adds
+refused; drop-off parcels refused; only the PICKUP_FAILED
+exception auto-clears on re-assignment; collection generates no
+OTP material; shortages stay PENDING).
+
+Also in Phase 7: the continuous chain test
+(`tests/integration/phase7-chain.test.ts`, 14 tests) executes the
+full logistics scenario end to end with custody / inventory /
+ledger assertions at every step, and the live run-through of the
+same chain on the production build exposed — and this phase
+fixed — a reachability defect the service tests could not see:
+`listEligiblePackages` (the transfer picker's query) never
+offered cross-warehouse return packages, so a return could not
+be manifested from the UI. The picker now includes RECEIVED
+returns whose return destination matches the transfer
+destination; `addTransferItems` remains the authoritative gate
+(regression test in `phase7-returns-cross-warehouse.test.ts`).
