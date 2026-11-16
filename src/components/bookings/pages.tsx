@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import type { ActorContext } from "@/lib/auth/actor";
+import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { getBooking, listBookings } from "@/server/services/bookings";
 import { listShippingServices } from "@/server/services/pricing";
 import { listVendors, listVendorAddresses } from "@/server/services/vendors";
@@ -271,10 +271,22 @@ export async function BookingCreatePage({
   actor: ActorContext;
   basePath: string;
 }) {
-  const [warehouses, services] = await Promise.all([
+  const [directory, services] = await Promise.all([
     listWarehouseDirectory(),
     listShippingServices(),
   ]);
+  // Warehouse-scoped actors (Warehouse Admin, audit M-5): the
+  // drop-off choices are limited to the actor's own memberships in
+  // the UI. Unscoped readers (Admin/SA) and vendor actors (no
+  // warehouse memberships; drop-off is a customer choice for them)
+  // keep the full directory. createBooking enforces the same origin
+  // scope server-side for WAREHOUSE_DROPOFF regardless of the UI.
+  const warehouses =
+    actor.warehouseIds.length > 0 &&
+    !hasPermission(actor, "warehouse.read_all") &&
+    !hasPermission(actor, "booking.read_all")
+      ? directory.filter((w) => actor.warehouseIds.includes(w.id))
+      : directory;
   if (actor.vendorId) {
     const addresses = await listVendorAddresses(actor, actor.vendorId);
     return (
@@ -300,7 +312,16 @@ export async function BookingCreatePage({
       </div>
     );
   }
-  const { vendors } = await listVendors(actor, { status: "APPROVED", page: 1, pageSize: 100 });
+  // listVendors requires vendor.read_all / vendor.manage (or a
+  // vendor link). Warehouse Admins hold neither — they create
+  // walk-in bookings only — so the vendor picker is offered only to
+  // actors the service would actually serve; calling it for WA
+  // would throw an audited denial and break the page.
+  const canListVendors =
+    hasPermission(actor, "vendor.read_all") || hasPermission(actor, "vendor.manage");
+  const { vendors } = canListVendors
+    ? await listVendors(actor, { status: "APPROVED", page: 1, pageSize: 100 })
+    : { vendors: [] as Awaited<ReturnType<typeof listVendors>>["vendors"] };
   return (
     <div className="grid gap-5">
       <h1 className="text-[20px] font-bold text-ink">New booking</h1>

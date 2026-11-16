@@ -362,6 +362,32 @@ async function createBookingOnce(
       }
     }
 
+    // Origin scope chokepoint (Phase 6 security review F2+F3): every
+    // creation path — warehouse drop-off AND the vendor pickup address
+    // derivation above — funnels through this single assertion once
+    // the origin warehouse is fully resolved and before the order is
+    // persisted. A non-vendor actor without booking.read_all may only
+    // create bookings originating at a warehouse they are a member of;
+    // an empty membership list therefore means NO scope (the old
+    // drop-off-only check treated it as unscoped), and a pickup
+    // derived from another warehouse's service area is refused the
+    // same way. A null origin (UNROUTED) has nothing to scope.
+    // Vendor actors and global (booking.read_all) actors are exempt,
+    // exactly as before. The denial audit uses the shared prisma
+    // client, so it survives this transaction's rollback.
+    if (
+      !actor.vendorId &&
+      !actor.permissions.has("booking.read_all") &&
+      originWarehouseId &&
+      !actor.warehouseIds.includes(originWarehouseId)
+    ) {
+      await auditAccessDenied(actor, "Order", {
+        warehouseId: originWarehouseId,
+        reason: "origin_warehouse_out_of_scope",
+      });
+      throw new AuthorizationError("Drop-off warehouse is outside your membership scope");
+    }
+
     // --- Destination routing by district --------------------------------
     const destAreas = await tx.serviceArea.findMany({
       where: { district: data.recipient.district, isActive: true },

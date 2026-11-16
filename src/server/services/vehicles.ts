@@ -280,9 +280,41 @@ export async function assignVehicleDriver(
 ): Promise<VehicleView> {
   await requirePermAudited(actor, "vehicle.assign", "Vehicle");
   const vehicle = await loadVehicleOr404(vehicleId);
+  let driver: { id: string; homeWarehouseId: string } | null = null;
   if (driverId) {
-    const driver = await prisma.driver.findUnique({ where: { id: driverId } });
+    driver = await prisma.driver.findUnique({ where: { id: driverId } });
     if (!driver) throw new NotFoundError("Driver profile not found");
+  }
+  // Warehouse scope for scoped actors (Phase 6 security review F7):
+  // vehicle.assign is held by Warehouse Admins, who may only assign
+  // within their own warehouses — the vehicle must be homed at one
+  // of them (a null home warehouse is out of scope for them), and a
+  // driver being assigned must be homed at one of them too. Global
+  // actors (vehicle.manage — Admin / Super Admin) are unchanged.
+  if (!hasPermission(actor, "vehicle.manage")) {
+    if (
+      !vehicle.homeWarehouseId ||
+      !actor.warehouseIds.includes(vehicle.homeWarehouseId)
+    ) {
+      await auditAccessDenied(actor, "Vehicle", {
+        entityId: vehicleId,
+        warehouseId: vehicle.homeWarehouseId,
+        reason: "vehicle_out_of_scope",
+      });
+      throw new AuthorizationError("Vehicle is outside your warehouse scope");
+    }
+    if (
+      driverId &&
+      driver &&
+      (!driver.homeWarehouseId || !actor.warehouseIds.includes(driver.homeWarehouseId))
+    ) {
+      await auditAccessDenied(actor, "Vehicle", {
+        entityId: vehicleId,
+        warehouseId: driver.homeWarehouseId,
+        reason: "driver_out_of_scope",
+      });
+      throw new AuthorizationError("Driver is outside your warehouse scope");
+    }
   }
   await prisma.vehicle.update({
     where: { id: vehicle.id },

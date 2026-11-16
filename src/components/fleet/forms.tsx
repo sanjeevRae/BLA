@@ -457,11 +457,18 @@ export function VehicleAdminButtons({
   status,
   drivers,
   assignedDriverId,
+  canManage = true,
+  canAssign = true,
 }: {
   vehicleId: string;
   status: string;
   drivers: FleetDriverOption[];
   assignedDriverId: string | null;
+  /** Status changes are vehicle.manage work (service-enforced). */
+  canManage?: boolean;
+  /** Default-driver assignment is vehicle.assign work (service-enforced);
+   *  a Warehouse Admin holds it without vehicle.manage (Phase 6, M-4). */
+  canAssign?: boolean;
 }) {
   const { error, busy, run } = useAction();
   const [driverId, setDriverId] = useState(assignedDriverId ?? "");
@@ -471,7 +478,7 @@ export function VehicleAdminButtons({
   return (
     <span className="inline-flex flex-col items-start gap-2">
       <span className="flex flex-wrap items-center gap-1">
-        {status !== "ON_TRIP"
+        {canManage && status !== "ON_TRIP"
           ? manualTargets.map((s) => (
               <button
                 key={s}
@@ -491,26 +498,30 @@ export function VehicleAdminButtons({
               </button>
             ))
           : null}
-        <select
-          className={inputClass}
-          value={driverId}
-          onChange={(e) => setDriverId(e.target.value)}
-        >
-          <option value="">No default driver</option>
-          {drivers.map((d) => (
-            <option key={d.driverId} value={d.driverId}>
-              {d.name}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className={subtleButtonClass}
-          disabled={busy}
-          onClick={() => run(() => assignVehicleDriverAction(vehicleId, driverId || null))}
-        >
-          Set default driver
-        </button>
+        {canAssign ? (
+          <>
+            <select
+              className={inputClass}
+              value={driverId}
+              onChange={(e) => setDriverId(e.target.value)}
+            >
+              <option value="">No default driver</option>
+              {drivers.map((d) => (
+                <option key={d.driverId} value={d.driverId}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={subtleButtonClass}
+              disabled={busy}
+              onClick={() => run(() => assignVehicleDriverAction(vehicleId, driverId || null))}
+            >
+              Set default driver
+            </button>
+          </>
+        ) : null}
       </span>
       {error ? <span className="text-[12px] text-red-700">{error}</span> : null}
     </span>

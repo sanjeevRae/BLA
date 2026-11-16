@@ -148,11 +148,13 @@ async function VehicleRow({
   actor,
   vehicle,
   canManage,
+  canAssign,
   driverOptions,
 }: {
   actor: ActorContext;
   vehicle: VehicleView;
   canManage: boolean;
+  canAssign: boolean;
   driverOptions: FleetDriverOption[];
 }) {
   const maintenance = await listVehicleMaintenance(actor, vehicle.id).catch(() => []);
@@ -213,20 +215,26 @@ async function VehicleRow({
           ))}
         </ul>
       ) : null}
-      {canManage ? (
+      {canManage || canAssign ? (
         <div className="mt-3 flex flex-col gap-3">
           <VehicleAdminButtons
             vehicleId={vehicle.id}
             status={vehicle.status}
             drivers={driverOptions}
             assignedDriverId={vehicle.assignedDriverId}
+            canManage={canManage}
+            canAssign={canAssign}
           />
-          <UpdateVehicleDocsForm
-            vehicleId={vehicle.id}
-            insuranceExpiry={vehicle.insuranceExpiry}
-            registrationExpiry={vehicle.registrationExpiry}
-          />
-          <RecordMaintenanceForm vehicleId={vehicle.id} />
+          {canManage ? (
+            <>
+              <UpdateVehicleDocsForm
+                vehicleId={vehicle.id}
+                insuranceExpiry={vehicle.insuranceExpiry}
+                registrationExpiry={vehicle.registrationExpiry}
+              />
+              <RecordMaintenanceForm vehicleId={vehicle.id} />
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -235,6 +243,7 @@ async function VehicleRow({
 
 export async function VehiclesPage({ actor }: { actor: ActorContext }) {
   const canManage = hasPermission(actor, "vehicle.manage");
+  const canAssign = canManage || hasPermission(actor, "vehicle.assign");
   const { items } = await listVehicles(actor, { pageSize: 100 });
   const { items: drivers } = await listDrivers(actor, { pageSize: 100 });
   const driverOptions: FleetDriverOption[] = drivers.map((d) => ({
@@ -261,6 +270,7 @@ export async function VehiclesPage({ actor }: { actor: ActorContext }) {
                 actor={actor}
                 vehicle={vehicle}
                 canManage={canManage}
+                canAssign={canAssign}
                 driverOptions={driverOptions}
               />
             ))}
