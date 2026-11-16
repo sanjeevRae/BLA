@@ -649,6 +649,15 @@ export async function addBatchPackages(
               `Package ${pkg.trackingId} already has an open pickup assignment`,
             );
           }
+          // Phase 7 security review F1 (defense in depth): mirror the
+          // DELIVERY branch — a package already committed to an active
+          // delivery assignment must never be pickup-assigned, even if
+          // a future flow leaves it in a pickup-eligible status.
+          if (pkg.deliveryAssignments.length > 0) {
+            throw new DomainValidationError(
+              `Package ${pkg.trackingId} already has an open delivery assignment`,
+            );
+          }
           const isBooked = pkg.operationalStatus === STATUS_BOOKED;
           const isReassignable =
             pkg.operationalStatus === STATUS_PICKUP_ASSIGNED;
