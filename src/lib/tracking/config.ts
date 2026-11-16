@@ -42,20 +42,24 @@ export const TRACKING_CONFIG_DEFAULTS: TrackingConfig = {
  *  treated as malformed and ignored (the default applies), so a
  *  typo'd SystemSetting row can never silently disable a gate —
  *  the same pattern as the idle-timeout bounds in
- *  src/server/services/system-settings.ts. Integer fields must be
- *  whole numbers; maxAccuracyMeters may be fractional. */
+ *  src/server/services/system-settings.ts. Floors matter as much
+ *  as caps (Phase 3 security review): a 1-second ping floor would
+ *  invite spam, a 1-day clock tolerance would gut the timestamp
+ *  validation, a 1-minute abandonment window would kill live
+ *  sessions. Integer fields must be whole numbers;
+ *  maxAccuracyMeters may be fractional. */
 const FIELD_RULES: Readonly<
-  Record<keyof TrackingConfig, { integer: boolean; max: number }>
+  Record<keyof TrackingConfig, { integer: boolean; min: number; max: number }>
 > = {
-  minPingIntervalSeconds: { integer: true, max: 3600 },
-  freshWithinSeconds: { integer: true, max: 86400 },
-  delayedWithinSeconds: { integer: true, max: 86400 },
-  retentionDays: { integer: true, max: 3650 },
-  recentWindowMinutes: { integer: true, max: 10080 },
-  abandonedSessionMinutes: { integer: true, max: 10080 },
-  maxAccuracyMeters: { integer: false, max: 100000 },
-  futureTimestampToleranceSeconds: { integer: true, max: 86400 },
-  preStartToleranceSeconds: { integer: true, max: 86400 },
+  minPingIntervalSeconds: { integer: true, min: 5, max: 3600 },
+  freshWithinSeconds: { integer: true, min: 30, max: 86400 },
+  delayedWithinSeconds: { integer: true, min: 60, max: 86400 },
+  retentionDays: { integer: true, min: 1, max: 3650 },
+  recentWindowMinutes: { integer: true, min: 1, max: 10080 },
+  abandonedSessionMinutes: { integer: true, min: 5, max: 10080 },
+  maxAccuracyMeters: { integer: false, min: 50, max: 100000 },
+  futureTimestampToleranceSeconds: { integer: true, min: 10, max: 3600 },
+  preStartToleranceSeconds: { integer: true, min: 5, max: 3600 },
 };
 
 function saneValue(
@@ -67,7 +71,7 @@ function saneValue(
     return fallback;
   }
   const rule = FIELD_RULES[field];
-  if (value > rule.max) return fallback;
+  if (value < rule.min || value > rule.max) return fallback;
   if (rule.integer && !Number.isInteger(value)) return fallback;
   return value;
 }

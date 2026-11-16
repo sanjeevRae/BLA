@@ -30,6 +30,7 @@ import {
 } from "@/lib/tracking/domain";
 import {
   auditAccessDenied,
+  isUniqueViolation,
   isUniqueViolationOn,
   parse,
   requirePermAudited,
@@ -329,7 +330,10 @@ export const postLocationPingSchema = z.object({
   speedMetersPerSecond: z.number().nullable().optional(),
   headingDegrees: z.number().nullable().optional(),
   recordedAt: z.string().min(1),
-  sequenceId: z.number().int().min(0),
+  // The column is a Postgres int4: bound the value here so an
+  // out-of-range sequence is a clean 400, not a raw DB error
+  // (Phase 3 security review F-3).
+  sequenceId: z.number().int().min(0).max(2147483647),
   // Accepted so legacy clients keep working, but NEVER trusted:
   // identity always comes from the authenticated actor. A value
   // that disagrees with the actor is audit-logged and ignored.
@@ -342,21 +346,6 @@ export async function postLocationPing(
   input: unknown,
 ): Promise<PostLocationPingResult> {
   const data = parse(postLocationPingSchema, input);
-
-  // Identity mismatch: log it, then continue as the actor — the
-  // supplied driverId never influences identity, scoping or storage.
-  if (data.driverId != null && data.driverId !== actor.driverId) {
-    await prisma.auditLog.create({
-      data: {
-        actorId: actor.userId,
-        actorRole: actor.primaryRole,
-        action: "tracking.identity_mismatch",
-        entityType: "TrackingSession",
-        entityId: data.trackingSessionId,
-        after: { suppliedDriverId: data.driverId },
-      },
-    });
-  }
 
   await requirePermAudited(actor, "tracking.manage_own", "TrackingSession");
   if (!actor.driverId) {
@@ -421,6 +410,25 @@ export async function postLocationPing(
       reason: "tracking_session_not_owned",
     });
     throw new AuthorizationError("This tracking session belongs to another driver");
+  }
+
+  // Identity mismatch: log it, then continue as the actor — the
+  // supplied driverId never influences identity, scoping or
+  // storage. Written only AFTER the permission and ownership
+  // checks above: an actor who cannot legitimately ping must not
+  // be able to mint append-only audit rows at will (Phase 3
+  // security review F-4).
+  if (data.driverId != null && data.driverId !== driverId) {
+    await prisma.auditLog.create({
+      data: {
+        actorId: actor.userId,
+        actorRole: actor.primaryRole,
+        action: "tracking.identity_mismatch",
+        entityType: "TrackingSession",
+        entityId: data.trackingSessionId,
+        after: { suppliedDriverId: data.driverId },
+      },
+    });
   }
 
   // -- The ingest transaction ----------------------------------------
@@ -552,6 +560,14 @@ export async function postLocationPing(
     let snapshotShouldUpdate = false;
     if (!snapshot) {
       snapshotShouldUpdate = true;
+    } else if (snapshot.trackingSessionId !== session.id) {
+      // The snapshot belongs to a superseded (ended) session.
+      // SequenceIds are per-session and restart, so they are not
+      // comparable across sessions: the live session's fix wins on
+      // an equal recordedAt, and only a strictly older fix loses
+      // (Phase 3 security review F-2).
+      snapshotShouldUpdate =
+        recordedAt.getTime() >= snapshot.lastRecordedAt.getTime();
     } else if (recordedAt.getTime() > snapshot.lastRecordedAt.getTime()) {
       snapshotShouldUpdate = true;
     } else if (recordedAt.getTime() === snapshot.lastRecordedAt.getTime()) {
@@ -781,7 +797,13 @@ export async function resumeTrackingSession(
       return row;
     });
   } catch (error) {
-    if (isUniqueViolationOn(error, "TrackingSession_one_active_per_driver")) {
+    // Any unique violation inside this transaction is the
+    // one-active-session partial index firing on the UPDATE path
+    // (its P2002 metadata does not name the index the way the
+    // INSERT path does — Phase 3 security review F-1); the update
+    // touches nothing else unique. Translate it to the same 409
+    // the start path returns instead of leaking a raw Prisma error.
+    if (isUniqueViolation(error)) {
       throw new ConflictError("You already have an active tracking session");
     }
     throw error;
