@@ -398,6 +398,7 @@ beforeAll(async () => {
   const b = await ensureWarehouse("WH-ZC7-02", "P7C Beta (shared fixture)", fx.districtB);
   fx.whB = b.id;
   fx.locRetB = b.locations.RETURNS;
+  fx.locStoB = b.locations.STORAGE;
 
   serviceCode = `P7CSTD${RUN.slice(-5)}`.toUpperCase();
   const service = await prisma.shippingService.create({
@@ -631,22 +632,26 @@ describe("Phase 7 chain — transfer A→B with a partial receive", () => {
     }
     const dispatched = await transfersSvc.dispatchTransfer(waAActor, transfer.id);
     chain.trip1 = dispatched.tripId ?? crewed.tripId!;
-    // In transit: custody sits with the line-haul driver for every parcel.
+    // Dispatched: custody sits with the line-haul driver for every parcel.
     for (const p of Object.values(parcels)) {
       await expectCustody(p.packageId, { userId: fx.linehaulUser });
       const pkg = await pkgStatus(p.packageId);
-      expect(pkg.operationalStatus).toBe("IN_TRANSIT");
+      expect(pkg.operationalStatus).toBe("DISPATCHED");
     }
   });
 
   it("runs the trip: depart + arrive", async () => {
     await tripsSvc.departTrip(linehaulActor, chain.trip1);
+    for (const p of Object.values(parcels)) {
+      const pkg = await pkgStatus(p.packageId);
+      expect(pkg.operationalStatus).toBe("IN_TRANSIT");
+    }
     await tripsSvc.arriveTrip(linehaulActor, chain.trip1);
     const trip = await prisma.trip.findUniqueOrThrow({ where: { id: chain.trip1 } });
     expect(trip.status).toBe("ARRIVED");
   });
 
-  it("receives five of six at destination — the sixth goes missing and opens an investigation", async () => {
+  it("receives five of six at destination (one damaged on arrival) — the sixth goes missing", async () => {
     const received = ["P1", "P2", "P3", "P5", "P6"];
     for (const label of received) {
       const p = parcels[label];
@@ -657,18 +662,25 @@ describe("Phase 7 chain — transfer A→B with a partial receive", () => {
       expect(scan.kind).toBe("RECEIVED_SCAN");
       await transfersSvc.completePackageReceiving(waBActor, chain.transfer1, {
         packageId: p.packageId,
-        condition: "GOOD",
+        condition: label === "P5" ? "DAMAGED" : "GOOD",
+        ...(label === "P5" ? { notes: "Crushed corner, contents rattling" } : {}),
       });
     }
-    await transfersSvc.finishReceiving(waBActor, chain.transfer1);
+    const finished = await transfersSvc.finishReceiving(waBActor, chain.transfer1);
+    expect(finished.status).toBe("RECONCILIATION_PENDING");
+    expect(finished.reconciliation.missingCount).toBe(1);
+    expect(finished.reconciliation.damagedCount).toBe(1);
+    expect(finished.reconciliation.receivedCount).toBe(4);
 
-    // P4 was never scanned: item MISSING, package flagged, incident open.
+    // P4 was never scanned: item MISSING, package flagged, incident open,
+    // and the parcel is still in the line-haul driver's custody.
     const item4 = await prisma.transferItem.findFirstOrThrow({
       where: { transferId: chain.transfer1, packageId: parcels.P4.packageId },
     });
     expect(item4.itemStatus).toBe("MISSING");
     const pkg4 = await pkgStatus(parcels.P4.packageId);
     expect(pkg4.exceptionStatus).toBe("MISSING");
+    await expectCustody(parcels.P4.packageId, { userId: fx.linehaulUser });
     const incident = await prisma.incident.findFirst({
       where: { transferId: chain.transfer1, category: "TRANSFER_SHORTAGE" },
     });
@@ -684,9 +696,21 @@ describe("Phase 7 chain — transfer A→B with a partial receive", () => {
       await expectCustody(p.packageId, { warehouseId: fx.whB });
       expect(await openRecord(p.packageId)).not.toBeNull();
     }
+    // P5 arrived damaged: flagged and quarantined in B's DAMAGED zone.
+    const pkg5 = await pkgStatus(parcels.P5.packageId);
+    expect(pkg5.condition).toBe("DAMAGED");
+    expect(pkg5.exceptionStatus).toBe("DAMAGED");
+    const record5 = await openRecord(parcels.P5.packageId);
+    const location5 = await prisma.storageLocation.findUniqueOrThrow({
+      where: { id: record5!.storageLocationId! },
+      include: { zone: true },
+    });
+    expect(location5.zone.kind).toBe("DAMAGED");
+  });
 
+  it("investigates the shortage, recovers the parcel by late scan, reconciles and closes", async () => {
     // Investigation: a follow-up task on the incident, worked to close.
-    const task = await incidentsSvc.createIncidentFollowUpTask(waBActor, incident!.id, {
+    const task = await incidentsSvc.createIncidentFollowUpTask(waBActor, chain.shortageIncident, {
       assigneeId: fx.staffB,
     });
     chain.investigationTask = task.id;
@@ -694,48 +718,506 @@ describe("Phase 7 chain — transfer A→B with a partial receive", () => {
     await tasksSvc.updateTaskStatus(staffBActor, task.id, { status: "IN_PROGRESS" });
     await tasksSvc.updateTaskStatus(staffBActor, task.id, {
       status: "SUBMITTED",
-      note: "Vehicle and cage searched; parcel not found — shortage confirmed.",
+      note: "Parcel found in the vehicle's side cage — late scan completed.",
     });
     await tasksSvc.updateTaskStatus(waBActor, task.id, { status: "VERIFIED" });
     const closed = await tasksSvc.updateTaskStatus(waBActor, task.id, { status: "CLOSED" });
     expect(closed.status).toBe("CLOSED");
 
-    // Reconcile + close with the shortage on record.
+    // While P4 is unaccounted, reconciliation refuses and parks the
+    // transfer in EXCEPTION.
+    await expect(transfersSvc.reconcileTransfer(waBActor, chain.transfer1)).rejects.toThrow(
+      /unaccounted/,
+    );
+    const blocked = await transfersSvc.getTransfer(waBActor, chain.transfer1);
+    expect(blocked.status).toBe("EXCEPTION");
+
+    // Late scan: the parcel turns up; the MISSING flag clears.
+    const late = await transfersSvc.scanDestinationPackage(waBActor, chain.transfer1, {
+      trackingId: parcels.P4.trackingId,
+      idempotencyKey: `p7c-unload-late-${RUN}-${parcels.P4.trackingId}`,
+    });
+    expect(late.kind).toBe("RECEIVED_SCAN");
+    const found = await pkgStatus(parcels.P4.packageId);
+    expect(found.exceptionStatus).toBe("NONE");
+    await transfersSvc.completePackageReceiving(waBActor, chain.transfer1, {
+      packageId: parcels.P4.packageId,
+      condition: "GOOD",
+    });
+    await transfersSvc.finishReceiving(waBActor, chain.transfer1);
     const reconciled = await transfersSvc.reconcileTransfer(waBActor, chain.transfer1);
-    expect(reconciled.reconciliation.missing).toBe(1);
-    expect(reconciled.reconciliation.received).toBe(5);
+    expect(reconciled.status).toBe("RECONCILED");
+    expect(reconciled.reconciliation.receivedCount).toBe(5);
+    expect(reconciled.reconciliation.damagedCount).toBe(1);
     await transfersSvc.closeTransfer(waBActor, chain.transfer1);
+
+    // P4 joins the deliverable stock at B; the shortage incident resolves.
+    const pkg4 = await pkgStatus(parcels.P4.packageId);
+    expect(pkg4.operationalStatus).toBe("RECEIVED_AT_DESTINATION");
+    await expectCustody(parcels.P4.packageId, { warehouseId: fx.whB });
+    await incidentsSvc.acknowledgeIncident(waBActor, chain.shortageIncident);
+    await incidentsSvc.assignIncident(waBActor, chain.shortageIncident, {
+      assigneeId: fx.staffB,
+    });
+    await incidentsSvc.proposeIncidentResolution(waBActor, chain.shortageIncident, {
+      resolution: "Parcel recovered by late scan and received in good condition.",
+    });
+    await incidentsSvc.approveIncidentResolution(adminActor, chain.shortageIncident);
+    await incidentsSvc.resolveIncident(waBActor, chain.shortageIncident, {});
+    const closedIncident = await incidentsSvc.closeIncident(waBActor, chain.shortageIncident);
+    expect(closedIncident.status).toBe("CLOSED");
   });
 
-  it("handles the damaged parcel: destination inspection finds damage, incident raised, quarantined", async () => {
-    const p5 = parcels.P5;
-    await inventorySvc.moveToInspection(staffBActor, p5.packageId);
-    await inventorySvc.startInspection(staffBActor, p5.packageId);
-    await inventorySvc.recordInspection(staffBActor, {
-      packageId: p5.packageId,
-      condition: "DAMAGED",
-      actualWeightKg: 2,
-    });
-    const pkg = await pkgStatus(p5.packageId);
-    expect(pkg.condition).toBe("DAMAGED");
-    expect(pkg.exceptionStatus).toBe("DAMAGED");
-    const record = await openRecord(p5.packageId);
-    expect(record).not.toBeNull();
-    const location = await prisma.storageLocation.findUniqueOrThrow({
-      where: { id: record!.storageLocationId! },
-      include: { zone: true },
-    });
-    expect(location.zone.kind).toBe("DAMAGED");
-
+  it("handles the damaged parcel: incident raised with a follow-up task, custody stays at B", async () => {
     const incident = await incidentsSvc.createIncident(waBActor, {
       category: "DAMAGED_PACKAGE",
-      description: "Crushed corner found at destination inspection; contents rattling.",
-      packageId: p5.packageId,
+      description: "Crushed corner found on arrival at destination; contents rattling.",
+      packageId: parcels.P5.packageId,
       warehouseId: fx.whB,
     });
     expect(incident.category).toBe("DAMAGED_PACKAGE");
     chain.damageIncident = incident.id;
+    const task = await incidentsSvc.createIncidentFollowUpTask(waBActor, incident.id, {
+      assigneeId: fx.staffB,
+    });
+    expect(task.relatedIncidentId).toBe(incident.id);
     // Custody never moved during handling: still the destination warehouse.
-    await expectCustody(p5.packageId, { warehouseId: fx.whB });
+    await expectCustody(parcels.P5.packageId, { warehouseId: fx.whB });
+  });
+});
+
+describe("Phase 7 chain — local delivery with partial success", () => {
+  it("delivers four of five in one batch; the refused parcel enters the return flow", async () => {
+    const batch = await deliveriesSvc.createDeliveryBatch(waBActor, {
+      warehouseId: fx.whB,
+      riderUserId: fx.riderAUser,
+      batchDate: TODAY,
+      kind: "DELIVERY",
+    });
+    chain.deliveryBatch = batch.id;
+    const labels = ["P1", "P2", "P3", "P4", "P6"];
+    const added = await deliveriesSvc.addBatchPackages(waBActor, batch.id, {
+      packageIds: labels.map((l) => parcels[l].packageId),
+    });
+    expect(added.rejected).toEqual([]);
+    expect(added.added).toHaveLength(5);
+    const assignmentByPackage = new Map(added.added.map((a) => [a.packageId, a.id]));
+    const pickup = await deliveriesSvc.confirmPickup(riderAActor, batch.id, {
+      trackingIds: labels.map((l) => parcels[l].trackingId),
+    });
+    expect(pickup.failed).toEqual([]);
+    expect(pickup.taken).toHaveLength(5);
+    for (const l of labels) {
+      await expectCustody(parcels[l].packageId, { userId: fx.riderAUser });
+    }
+
+    const deliver = async (
+      label: string,
+      codCollectedPaisa?: string,
+      notes?: string,
+    ) => {
+      const assignmentId = assignmentByPackage.get(parcels[label].packageId)!;
+      const otp = await recipientOtp(assignmentId);
+      return deliveriesSvc.confirmDelivery(riderAActor, assignmentId, {
+        receivedByName: `Recipient ${label}`,
+        otpCode: otp,
+        ...(codCollectedPaisa ? { codCollectedPaisa } : {}),
+        ...(notes ? { notes } : {}),
+      });
+    };
+
+    // P1 prepaid, P4 (the recovered parcel) prepaid — both delivered.
+    await deliver("P1");
+    await deliver("P4");
+    // P2 COD exact.
+    const d2 = await deliver("P2", "500000");
+    expect(d2.cod?.status).toBe("MATCHED");
+    // P3 COD short with the mandatory mismatch explanation.
+    const d3 = await deliver("P3", "250000", "Recipient paid part in cash, rest refused");
+    expect(d3.cod?.status).toBe("MISMATCH");
+    expect(d3.cod?.expectedPaisa).toBe("300000");
+    expect(d3.cod?.collectedPaisa).toBe("250000");
+
+    for (const l of ["P1", "P2", "P3", "P4"]) {
+      const pkg = await pkgStatus(parcels[l].packageId);
+      expect(pkg.operationalStatus).toBe("DELIVERED");
+      expect(pkg.deliveryStatus).toBe("DELIVERED");
+      // The rider no longer holds custody of delivered parcels.
+      const open = await openCustodies(parcels[l].packageId);
+      expect(open).toHaveLength(1);
+      expect(open[0].custodianUserId).not.toBe(fx.riderAUser);
+      // A POD exists for each delivery.
+      const pod = await prisma.proofOfDelivery.findFirst({
+        where: { packageId: parcels[l].packageId },
+      });
+      expect(pod).not.toBeNull();
+    }
+    // COD collections recorded exactly.
+    const c2 = await prisma.deliveryCodCollection.findFirstOrThrow({
+      where: { packageId: parcels.P2.packageId },
+    });
+    expect(c2.status).toBe("MATCHED");
+    expect(c2.collectedPaisa.toString()).toBe("500000");
+    const c3 = await prisma.deliveryCodCollection.findFirstOrThrow({
+      where: { packageId: parcels.P3.packageId },
+    });
+    expect(c3.status).toBe("MISMATCH");
+    expect(c3.expectedPaisa.toString()).toBe("300000");
+    chain.codP2 = c2.id;
+    chain.codP3 = c3.id;
+
+    // P6: recipient refuses at the door → return opens.
+    const attempt = await deliveriesSvc.recordDeliveryAttempt(
+      riderAActor,
+      assignmentByPackage.get(parcels.P6.packageId)!,
+      {
+        result: "REFUSED",
+        failureReason: "Recipient refused the parcel at the door",
+        nextAction: "RETURN_TO_SENDER",
+      },
+    );
+    let returnId = attempt.returnRequest?.id ?? null;
+    if (!returnId) {
+      const initiated = await returnsSvc.initiateReturn(waBActor, {
+        packageId: parcels.P6.packageId,
+        reason: "CUSTOMER_REFUSAL",
+      });
+      returnId = initiated.id;
+    }
+    chain.returnP6 = returnId;
+    const approved = await returnsSvc.approveReturn(waBActor, returnId, {
+      chargeBearer: "VENDOR",
+      chargeAmountPaisa: "10000",
+    });
+    expect(approved.status).toBe("APPROVED");
+    expect(approved.destinationWarehouseId).toBe(fx.whA);
+
+    // Rider brings P6 back; B scans it into the Returns zone.
+    const scan = await deliveriesSvc.scanBackPackage(staffBActor, {
+      warehouseId: fx.whB,
+      trackingId: parcels.P6.trackingId,
+    });
+    expect(scan.returnRequest?.status).toBe("RECEIVED");
+    await expectCustody(parcels.P6.packageId, { warehouseId: fx.whB });
+
+    // Partial success closes out: 4 delivered, 1 returned.
+    const closedBatch = await deliveriesSvc.closeBatch(waBActor, batch.id);
+    expect(closedBatch.batch.status).toBe("COMPLETED");
+  });
+});
+
+describe("Phase 7 chain — cross-warehouse return of the refused parcel", () => {
+  it("travels B→A on a transfer, is inspected and handed to the vendor at A", async () => {
+    const transfer = await transfersSvc.createTransfer(waBActor, {
+      originWarehouseId: fx.whB,
+      destinationWarehouseId: fx.whA,
+    });
+    chain.transfer2 = transfer.id;
+    const added = await transfersSvc.addTransferItems(waBActor, transfer.id, [
+      parcels.P6.packageId,
+    ]);
+    expect(added.rejected).toEqual([]);
+    const linked = await returnsSvc.getReturn(waBActor, chain.returnP6);
+    expect(linked.transferId).toBe(transfer.id);
+    await transfersSvc.generateManifest(waBActor, transfer.id);
+    const crewed = await transfersSvc.assignTransferCrew(waBActor, {
+      transferId: transfer.id,
+      driverId: fx.linehaulProfile,
+      vehicleId: fx.vehicle,
+    });
+    const loaded = await transfersSvc.loadTransferPackage(waBActor, transfer.id, {
+      trackingId: parcels.P6.trackingId,
+      idempotencyKey: `p7c-load2-${RUN}-${parcels.P6.trackingId}`,
+    });
+    expect(loaded.allLoaded).toBe(true);
+    const dispatched = await transfersSvc.dispatchTransfer(waBActor, transfer.id);
+    chain.trip2 = dispatched.tripId ?? crewed.tripId!;
+    const inTransit = await returnsSvc.getReturn(waBActor, chain.returnP6);
+    expect(inTransit.status).toBe("IN_TRANSIT");
+    // While travelling, the return cannot be delivery-assigned.
+    const pkgMid = await pkgStatus(parcels.P6.packageId);
+    expect(pkgMid.currentWarehouseId).toBe(fx.whB);
+
+    await tripsSvc.departTrip(linehaulActor, chain.trip2);
+    await tripsSvc.arriveTrip(linehaulActor, chain.trip2);
+    const scan = await transfersSvc.scanDestinationPackage(waAActor, transfer.id, {
+      trackingId: parcels.P6.trackingId,
+      idempotencyKey: `p7c-unload2-${RUN}-${parcels.P6.trackingId}`,
+    });
+    expect(scan.kind).toBe("RECEIVED_SCAN");
+    await transfersSvc.completePackageReceiving(waAActor, transfer.id, {
+      packageId: parcels.P6.packageId,
+      condition: "GOOD",
+    });
+    await transfersSvc.finishReceiving(waAActor, transfer.id);
+    await transfersSvc.reconcileTransfer(waAActor, transfer.id);
+    await transfersSvc.closeTransfer(waAActor, transfer.id);
+
+    const arrived = await returnsSvc.getReturn(waAActor, chain.returnP6);
+    expect(arrived.status).toBe("RECEIVED");
+    await expectCustody(parcels.P6.packageId, { warehouseId: fx.whA });
+
+    const inspected = await returnsSvc.inspectReturn(waAActor, chain.returnP6, {
+      condition: "GOOD",
+    });
+    expect(inspected.status).toBe("INSPECTED");
+    const completed = await returnsSvc.completeReturn(waAActor, chain.returnP6, {
+      handedToUserId: fx.vendorOwnerUser,
+    });
+    expect(completed.status).toBe("COMPLETED");
+    expect(completed.handedToUserId).toBe(fx.vendorOwnerUser);
+
+    // Original delivery history is preserved — the refusal attempt and
+    // every earlier event are still on the package's timeline.
+    const attemptRow = await prisma.deliveryAttempt.findFirst({
+      where: { assignment: { packageId: parcels.P6.packageId }, result: "REFUSED" },
+    });
+    expect(attemptRow).not.toBeNull();
+    const eventTypes = (
+      await prisma.trackingEvent.findMany({
+        where: { packageId: parcels.P6.packageId },
+        select: { eventType: true },
+      })
+    ).map((e) => e.eventType);
+    expect(eventTypes).toContain("RETURN_REQUESTED");
+    expect(eventTypes).toContain("RETURN_IN_TRANSIT");
+    expect(eventTypes).toContain("RETURN_RECEIVED_AT_DESTINATION");
+  });
+});
+
+describe("Phase 7 chain — COD, remittance (shortage + surplus), settlement", () => {
+  it("remits rider A's COD with a shortage: discrepancy incident + rider debt, journals balanced", async () => {
+    const position = await remittancesSvc.getRiderCodPosition(riderAActor);
+    expect(position.awaitingRemittanceTotalPaisa).toBe("750000");
+    expect(position.awaitingRemittance).toHaveLength(2);
+
+    const remittance = await remittancesSvc.submitRemittance(riderAActor, {
+      collectionIds: [chain.codP2, chain.codP3],
+      declaredAmountPaisa: "750000",
+      warehouseId: fx.whB,
+      idempotencyKey: `p7c-remit-a-${RUN}`,
+    });
+    chain.remittanceA = remittance.id;
+    // Finance counts only Rs 7,000 in the envelope — Rs 500 short of the
+    // declared/collected amount: a verification discrepancy.
+    const verified = await remittancesSvc.verifyRemittance(financeActor, remittance.id, {
+      countedAmountPaisa: "700000",
+    });
+    expect(verified.status).toBe("DISCREPANCY");
+    expect(verified.expectedPaisa).toBe("800000");
+    expect(verified.countedAmountPaisa).toBe("700000");
+    expect(verified.discrepancyPaisa).toBe("-50000");
+
+    // The discrepancy auto-opened a COD_DISCREPANCY incident.
+    const incident = await prisma.incident.findFirst({
+      where: { remittanceId: remittance.id, category: "COD_DISCREPANCY" },
+    });
+    expect(incident).not.toBeNull();
+
+    const resolved = await remittancesSvc.resolveRemittance(financeActor, remittance.id, {
+      resolution: "ACCEPTED_COUNTED",
+      note: "Shortage accepted at counted amount; rider owes the difference.",
+    });
+    expect(resolved.status).toBe("CLOSED");
+
+    // The rider now owes exactly the 50,000-paisa shortfall.
+    const after = await remittancesSvc.getRiderCodPosition(riderAActor);
+    expect(after.ledgerOwedPaisa).toBe("50000");
+    expect(after.awaitingRemittance).toHaveLength(0);
+
+    // Every journal written for this remittance balances to the paisa.
+    const byDirection = await prisma.ledgerTransaction.groupBy({
+      by: ["journalRef", "direction"],
+      where: { journalRef: { startsWith: remittance.remittanceNumber } },
+      _sum: { amountPaisa: true },
+    });
+    expect(byDirection.length).toBeGreaterThan(0);
+    const sums = new Map<string, { d: bigint; c: bigint }>();
+    for (const row of byDirection) {
+      const entry = sums.get(row.journalRef) ?? { d: BigInt(0), c: BigInt(0) };
+      if (row.direction === "DEBIT") entry.d = row._sum.amountPaisa ?? BigInt(0);
+      else entry.c = row._sum.amountPaisa ?? BigInt(0);
+      sums.set(row.journalRef, entry);
+    }
+    expect(sums.size).toBeGreaterThan(0);
+    for (const [, s] of sums) expect(s.d).toBe(s.c);
+  });
+
+  it("runs a surplus leg for rider B: over-collection posts a balanced surplus journal", async () => {
+    // A second vendor, local to B (dropoff at B, delivered at B).
+    const vendor2 = await vendorsSvc.createVendor(adminActor, {
+      businessName: `P7C Vendor Two ${RUN}`,
+      contactName: "P7C Contact Two",
+      email: email("vendor2"),
+      phone: phone(21),
+      billingPreference: "COD_OFFSET",
+      creditLimitPaisa: null,
+      registrationNumber: null,
+    });
+    await vendorsSvc.setVendorVerificationStatus(adminActor, vendor2.id, {
+      target: "UNDER_REVIEW",
+      notes: null,
+    });
+    await vendorsSvc.setVendorVerificationStatus(adminActor, vendor2.id, {
+      target: "APPROVED",
+      notes: null,
+    });
+    const booking = await bookingsSvc.createBooking(adminActor, {
+      vendorId: vendor2.id,
+      sender: { name: "P7C Sender Two", phone: phone(43), email: null },
+      recipient: {
+        name: "P7C Local Recipient",
+        phone: phone(107),
+        addressLine: "Lakeside Street 9",
+        city: "Beta Town",
+        district: fx.districtB,
+        province: "Bagmati",
+      },
+      pickup: { method: "WAREHOUSE_DROPOFF" as const, originWarehouseId: fx.whB },
+      shippingServiceCode: serviceCode,
+      paymentMethod: "CASH" as const,
+      codAmountPaisa: "100000",
+      items: [{ description: "Local parcel", quantity: 1, weightKg: 1.0 }],
+    });
+    const pkg = booking.shipments[0].packages[0];
+    await inventorySvc.receivePackage(staffBActor, {
+      warehouseId: fx.whB,
+      trackingId: pkg.trackingId,
+    });
+    await inventorySvc.moveToInspection(staffBActor, pkg.id);
+    await inventorySvc.startInspection(staffBActor, pkg.id);
+    await inventorySvc.recordInspection(staffBActor, {
+      packageId: pkg.id,
+      condition: "GOOD",
+      actualWeightKg: 2,
+    });
+    await inventorySvc.putAwayPackage(staffBActor, pkg.id, fx.locStoB);
+    await inventorySvc.markReadyForDispatch(staffBActor, pkg.id);
+
+    const batch = await deliveriesSvc.createDeliveryBatch(waBActor, {
+      warehouseId: fx.whB,
+      riderUserId: fx.riderBUser,
+      batchDate: TODAY,
+      kind: "DELIVERY",
+    });
+    const added = await deliveriesSvc.addBatchPackages(waBActor, batch.id, {
+      packageIds: [pkg.id],
+    });
+    expect(added.rejected).toEqual([]);
+    const pickup = await deliveriesSvc.confirmPickup(riderBActor, batch.id, {
+      trackingIds: [pkg.trackingId],
+    });
+    expect(pickup.taken).toHaveLength(1);
+    const otp = await recipientOtp(added.added[0].id);
+    const delivered = await deliveriesSvc.confirmDelivery(riderBActor, added.added[0].id, {
+      receivedByName: "Local Recipient",
+      otpCode: otp,
+      codCollectedPaisa: "120000",
+      notes: "Recipient paid extra against an earlier balance",
+    });
+    expect(delivered.cod?.status).toBe("MISMATCH");
+    const collection = await prisma.deliveryCodCollection.findFirstOrThrow({
+      where: { packageId: pkg.id },
+    });
+
+    const remittance = await remittancesSvc.submitRemittance(riderBActor, {
+      collectionIds: [collection.id],
+      declaredAmountPaisa: "120000",
+      warehouseId: fx.whB,
+      idempotencyKey: `p7c-remit-b-${RUN}`,
+    });
+    // The rider collected 120,000 against 100,000 expected (a delivery
+    // mismatch). Finance counts 125,000 in the envelope — 5,000 MORE
+    // than the rider declared/collected: a surplus discrepancy.
+    const verified = await remittancesSvc.verifyRemittance(financeActor, remittance.id, {
+      countedAmountPaisa: "125000",
+    });
+    expect(verified.expectedPaisa).toBe("100000");
+    expect(verified.countedAmountPaisa).toBe("125000");
+    expect(verified.status).toBe("DISCREPANCY");
+    expect(verified.discrepancyPaisa).toBe("5000");
+    const resolvedB = await remittancesSvc.resolveRemittance(financeActor, remittance.id, {
+      resolution: "ACCEPTED_COUNTED",
+      note: "Surplus accepted at counted amount.",
+    });
+    expect(resolvedB.status).toBe("CLOSED");
+
+    // The surplus is journalised under its own journal, and every
+    // journal for this remittance balances to the paisa.
+    const remitRows = await prisma.ledgerTransaction.findMany({
+      where: { journalRef: { startsWith: remittance.remittanceNumber } },
+    });
+    expect(remitRows.length).toBeGreaterThan(0);
+    const surplus = remitRows.filter((r) => r.journalRef.endsWith(":SURPLUS"));
+    expect(surplus.length).toBeGreaterThan(0);
+    const byJournal = new Map<string, { d: bigint; c: bigint }>();
+    for (const row of remitRows) {
+      const entry = byJournal.get(row.journalRef) ?? { d: BigInt(0), c: BigInt(0) };
+      if (row.direction === "DEBIT") entry.d += row.amountPaisa;
+      else entry.c += row.amountPaisa;
+      byJournal.set(row.journalRef, entry);
+    }
+    for (const [, s] of byJournal) expect(s.d).toBe(s.c);
+  });
+
+  it("settles the vendor: prepare → approve → pay, net payable exact, ledger balanced", async () => {
+    const prepared = await settlementsSvc.prepareSettlement(financeActor, {
+      vendorId: fx.vendor,
+    });
+    const detail = await settlementsSvc.getSettlement(financeActor, prepared.id);
+    // Gross COD settled for the vendor = amounts verified on the
+    // remittance lines: P2's 500,000 in full + 200,000 of P3's line
+    // (the counted 700,000 attributed across lines in order).
+    expect(detail.grossCodPaisa).toBe("700000");
+    expect(BigInt(detail.netPayablePaisa)).toBe(
+      BigInt(detail.grossCodPaisa) -
+        BigInt(detail.shippingChargesPaisa) -
+        BigInt(detail.otherDeductionsPaisa),
+    );
+    expect(BigInt(detail.netPayablePaisa)).toBeGreaterThan(BigInt(0));
+    // The vendor's return charge (Rs 100, bearer VENDOR) is inside the
+    // settlement's deductions/lines.
+    const lineKinds = detail.lines.map((l) => l.kind);
+    expect(lineKinds.length).toBeGreaterThan(0);
+
+    // Finance cannot approve its own preparation path — Admin approves.
+    await expect(
+      settlementsSvc.approveSettlement(financeActor, prepared.id),
+    ).rejects.toThrow();
+    const approved = await settlementsSvc.approveSettlement(adminActor, prepared.id);
+    expect(approved.status).toBe("APPROVED");
+    const paid = await settlementsSvc.paySettlement(financeActor, prepared.id, {
+      method: "BANK_TRANSFER",
+      transactionRef: `P7C-PAY-${RUN}`,
+    });
+    expect(paid.status).toBe("SETTLED");
+
+    // The settlement journal balances to the paisa, and the vendor
+    // payable account moved by exactly the net payable.
+    const rows = await prisma.ledgerTransaction.findMany({
+      where: { journalRef: { startsWith: paid.settlementNumber } },
+    });
+    expect(rows.length).toBeGreaterThan(0);
+    const byJournal = new Map<string, { d: bigint; c: bigint }>();
+    for (const row of rows) {
+      const entry = byJournal.get(row.journalRef) ?? { d: BigInt(0), c: BigInt(0) };
+      if (row.direction === "DEBIT") entry.d += row.amountPaisa;
+      else entry.c += row.amountPaisa;
+      byJournal.set(row.journalRef, entry);
+    }
+    for (const [, s] of byJournal) expect(s.d).toBe(s.c);
+
+    const payableAccount = await prisma.financialAccount.findUnique({
+      where: { code: financeDomain.vendorPayableAccountCode(fx.vendor) },
+    });
+    expect(payableAccount).not.toBeNull();
+    const payableRows = await prisma.ledgerTransaction.findMany({
+      where: { accountId: payableAccount!.id },
+    });
+    let payableBalance = BigInt(0); // LIABILITY: credit-normal
+    for (const row of payableRows) {
+      payableBalance += row.direction === "CREDIT" ? row.amountPaisa : -row.amountPaisa;
+    }
+    expect(payableBalance).toBe(BigInt(0));
   });
 });
