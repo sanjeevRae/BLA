@@ -140,3 +140,85 @@ money and is the safe direction), and a warehouse actor who
 legitimately handled a package sees its full movement history
 including legs at other warehouses (continuity for handlers; the
 pre-existing scope branch behaves the same way).
+
+## V2 Phase 3 — GPS tracking backend (2026-11-16)
+
+### Permission-catalog changes (grant reconciliation)
+
+Phase 3 adds exactly two permissions; no existing grant was
+changed.
+
+| Code | Grants added |
+| --- | --- |
+| `tracking.manage_own` | RIDER, LINEHAUL_DRIVER |
+| `operations.live_view` | SUPER_ADMIN, ADMIN, WAREHOUSE_ADMIN |
+
+No role can post a location for another driver (identity comes
+only from the authenticated session) and no role can read another
+driver's raw ping history — the live-operations read is
+snapshot-only and warehouse-scoped. COD figures appear in
+live-operations payloads only when the actor independently holds
+`finance.read` or `cod.read`.
+
+### Independent review
+
+A reviewer who built nothing attacked the GPS surface with 46
+proof-of-concept tests (`tests/integration/phase3-security-review.test.ts`):
+identity substitution (body-smuggled driverId/userId/source,
+cross-driver ping/stop/pause/resume), session races (concurrent
+starts, ping-vs-stop, double stop, concurrent resumes), replay
+(duplicate sequence with a different payload, replay after end,
+cross-session snapshot tie-breaks), scope escapes on both GET
+endpoints (home-warehouse vs session-warehouse confusion,
+`warehouseId` widening attempts, superseded-session snapshot
+leakage), COD gating on list AND detail (including a FINANCE actor
+with COD permissions but no `live_view`), supervisor-stop scope
+and auditing, validation abuse (NaN/Infinity, int32 overflow,
+tolerance edges, an assignment forced terminal behind the
+session's back), and the expire/prune sweeps under hostile config
+overrides.
+
+**Verdict: no High or Medium findings.** Every headline claim held:
+actor-only identity, FOR UPDATE row-lock serialisation of
+ping/stop, one ACTIVE session per driver (DB partial index),
+snapshot never rewinds within a session, warehouse scope that
+cannot be widened by request parameters, COD field absence, and
+the in-transaction assignment re-check.
+
+Four Low findings, all fixed in the same phase:
+
+- **F-1 (fixed)** — `resumeTrackingSession` leaked a raw Prisma
+  P2002 instead of a 409 when the one-active-session partial index
+  fired on the UPDATE path (its metadata does not name the index
+  the way the INSERT path does). The DB invariant always held; the
+  resume transaction now translates any unique violation to
+  `ConflictError`, matching the start path.
+- **F-2 (fixed)** — the snapshot tie-break compared per-session
+  sequenceIds across sessions: a new session's first fix at the
+  same `recordedAt` as the ended session's last fix, with a lower
+  (restarted) sequenceId, did not move the snapshot, leaving the
+  live board dark for an actively reporting driver. A fix from a
+  different (current) session now wins on equal `recordedAt`;
+  sequence comparison applies only within the same session.
+- **F-3 (fixed)** — `sequenceId` beyond the int4 column range
+  escaped as a raw database error. The ping schema now bounds
+  `sequenceId` to the int32 range, so it is a clean 400.
+- **F-4 (fixed)** — the `tracking.identity_mismatch` audit row was
+  written before the permission and ownership checks, letting any
+  authenticated low-privilege account mint append-only AuditLog
+  rows for nonexistent sessions. The audit now happens only after
+  both checks pass.
+
+One judgment call was actioned with the findings: the tracking
+config resolver had caps but no floors, so a single SystemSetting
+write could set a 1-second ping floor or a 24-hour device-clock
+tolerance. Floors (and a tighter tolerance cap) are now enforced
+per field in `src/lib/tracking/config.ts`; out-of-range overrides
+fall back to defaults as before. `retentionDays: 1` remains an
+allowed operator choice (prune still never touches sessions,
+snapshots or custody history).
+
+One Info observation, no action: a missing session id returns 404
+while a foreign one returns 403 on the ping and detail paths — an
+existence oracle consistent with the rest of the codebase, over
+unguessable UUID ids.
