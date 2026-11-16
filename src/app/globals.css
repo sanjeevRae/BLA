@@ -23,12 +23,36 @@
   --color-purple: #7c3aed;
   --color-purplebg: #f1e9fd;
   --color-red: #dc2626;
+  --color-redbg: #fdecec;
   --color-amber: #f59e0b;
+  --color-amberbg: #fdf3e0;
+  /* Deep variants: badge/label text on the tinted backgrounds above.
+   * The bright hues fail contrast at small sizes; the deep ones pass
+   * (see docs/ui-ux-guidelines.md, status colour semantics). */
+  --color-greendeep: #15803d;
+  --color-amberdeep: #9a6206;
+  --color-reddeep: #b91c1c;
+
+  /*
+   * V2 Phase 1 design-system tokens (docs/ui-ux-guidelines.md).
+   * The palette above is the existing console language and stays the
+   * single source: `brand` is the ONE accent; green/amber/red are
+   * semantic only (success / pending-warning / failed-critical);
+   * cream + faint are the inactive/neutral pair. Purple and orange are
+   * legacy accents — retained because existing screens reference them,
+   * but new work must not introduce them (see the guidelines doc).
+   */
   --color-line: #e6ebf0;
 
   --radius-sm: 2px;
   --radius-md: 3px;
   --radius-lg: 4px;
+  --radius-xl: 8px;
+
+  /* Subtle shadows only: cards rest on borders, overlays (dialog,
+   * drawer, menus) get the one pop shadow. */
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04);
+  --shadow-pop: 0 8px 28px rgb(15 23 42 / 0.14), 0 2px 6px rgb(15 23 42 / 0.08);
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
 }
@@ -42,4 +66,15 @@ body {
 /* Tabular numerals for money and counts (legacy `.tnum`). */
 .tnum {
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Keyboard focus must be visible everywhere (V2 Phase 1 accessibility
+ * baseline). Mouse users are unaffected: :focus-visible only matches
+ * keyboard/programmatic focus in modern browsers.
+ */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 1px;
+  border-radius: var(--radius-sm);
 }

@@ -6,7 +6,7 @@ import { DashboardShell } from "@/components/layout/DashboardShell";
 export default async function Layout({ children }: { children: ReactNode }) {
   const actor = await requireDashboardActor(["RIDER"]);
   return (
-    <DashboardShell actor={actor} title="Delivery Rider">
+    <DashboardShell actor={actor} title="Delivery Rider" dashboard="rider">
       {children}
     </DashboardShell>
   );
