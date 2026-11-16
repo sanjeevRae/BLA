@@ -1078,9 +1078,13 @@ export async function endTrackingSessionsInTx(
  * the configured abandonment window. Each session ends in its own
  * transaction under the row lock, with a system AuditLog row
  * (actorId null). Returns the number of sessions ended.
+ *
+ * With `dryRun: true` nothing is written: the return value is the
+ * number of sessions that WOULD have been ended.
  */
 export async function expireAbandonedTrackingSessions(
   now: Date = new Date(),
+  options: { dryRun?: boolean } = {},
 ): Promise<number> {
   const config = await loadTrackingConfig();
   const cutoff = now.getTime() - config.abandonedSessionMinutes * 60 * 1000;
@@ -1128,6 +1132,11 @@ export async function expireAbandonedTrackingSessions(
     const abandoned = lastActivity < cutoff;
     if (!assignmentTerminal && !abandoned) continue;
 
+    if (options.dryRun) {
+      ended += 1;
+      continue;
+    }
+
     const didEnd = await prisma.$transaction(async (tx) => {
       await lockSessionRow(tx, session.id);
       const fresh = await tx.trackingSession.findUnique({
@@ -1168,12 +1177,24 @@ export async function expireAbandonedTrackingSessions(
  * Retention sweep: delete location pings received longer ago than
  * the configured retention window. Sessions and current-location
  * snapshots are never touched.
+ *
+ * With `dryRun: true` nothing is deleted: `deleted` reports the
+ * number of pings that WOULD have been deleted (the same
+ * `receivedAt < threshold` match the real sweep uses, so a ping
+ * exactly at the threshold age is kept in both modes).
  */
 export async function pruneExpiredLocationPings(
   now: Date = new Date(),
+  options: { dryRun?: boolean } = {},
 ): Promise<{ deleted: number }> {
   const config = await loadTrackingConfig();
   const threshold = new Date(now.getTime() - config.retentionDays * 24 * 60 * 60 * 1000);
+  if (options.dryRun) {
+    const count = await prisma.driverLocationPing.count({
+      where: { receivedAt: { lt: threshold } },
+    });
+    return { deleted: count };
+  }
   const result = await prisma.driverLocationPing.deleteMany({
     where: { receivedAt: { lt: threshold } },
   });
