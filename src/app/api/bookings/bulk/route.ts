@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
   if (!actor) return unauthenticatedResponse();
   try {
     requireAccessGranted(actor); // P2-3 gate
-    const body = (await request.json()) as CreateBulkBookingsInput;
+    const body = (await request.json().catch(() => ({}))) as CreateBulkBookingsInput;
     const bookings = await createBulkBookings(actor, body);
     return NextResponse.json({ bookings }, { status: 201 });
   } catch (error) {
