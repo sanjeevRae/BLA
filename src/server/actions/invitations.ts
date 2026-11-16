@@ -1,7 +1,9 @@
 "use server";
 
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
+import { getClientIp } from "@/lib/auth/client-ip";
 import {
   AuthorizationError,
   getActorContext,
@@ -47,7 +49,8 @@ export async function acceptInvitationAction(
   input: AcceptInvitationInput,
 ): Promise<ActionResult<never>> {
   try {
-    await acceptInvitation(input);
+    const ipAddress = getClientIp(await headers());
+    await acceptInvitation(input, { ipAddress });
   } catch (error) {
     if (
       error instanceof AuthorizationError ||

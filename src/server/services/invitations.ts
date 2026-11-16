@@ -15,6 +15,10 @@ import {
 import { ConflictError, DomainValidationError, NotFoundError } from "@/lib/errors";
 import { ROLE_CODES } from "@/lib/permissions/catalog";
 import { VENDOR_ROLES } from "@/lib/bookings/domain";
+import {
+  INVITATION_IP_FAILURE_LIMIT,
+  INVITATION_IP_FAILURE_WINDOW_MS,
+} from "@/lib/auth/login-guard";
 import { newPasswordSchema } from "@/server/services/users";
 
 /**
@@ -281,6 +285,52 @@ export async function createInvitation(
   };
 }
 
+/** The one generic redemption refusal: unknown, used, throttled and
+ *  account-conflict redemptions are indistinguishable to the caller. */
+export const INVITATION_GENERIC_REFUSAL =
+  "Invitation is invalid or has already been used";
+
+/** Optional request metadata for redemption (Phase 2 V2 rate limit).
+ *  `ipAddress` comes from the trusted forwarding header (see
+ *  src/lib/auth/client-ip.ts). When no IP is present the limiter is
+ *  inert — exactly like the login / tracking per-IP throttles. */
+export interface AcceptInvitationMeta {
+  ipAddress?: string | null;
+}
+
+/** True when the IP has exhausted its failed-redemption budget. */
+async function isInvitationIpBudgetExceeded(
+  ipAddress: string | null | undefined,
+): Promise<boolean> {
+  if (!ipAddress) return false;
+  const failures = await prisma.invitationAttempt.count({
+    where: {
+      ipAddress,
+      succeeded: false,
+      createdAt: { gt: new Date(Date.now() - INVITATION_IP_FAILURE_WINDOW_MS) },
+    },
+  });
+  return failures >= INVITATION_IP_FAILURE_LIMIT;
+}
+
+/** Record one redemption attempt. Only ever called when an IP is
+ *  present; a bookkeeping failure must never mask the redemption
+ *  outcome itself, so write errors are swallowed. */
+async function recordInvitationAttempt(
+  tokenHash: string,
+  succeeded: boolean,
+  ipAddress: string | null | undefined,
+): Promise<void> {
+  if (!ipAddress) return;
+  try {
+    await prisma.invitationAttempt.create({
+      data: { tokenHash, succeeded, ipAddress },
+    });
+  } catch {
+    // Best-effort forensics — the caller's result stands.
+  }
+}
+
 export const acceptInvitationSchema = z.object({
   token: z.string().min(32).max(256),
   fullName: z.string().min(2).max(120),
@@ -303,39 +353,61 @@ export interface AcceptedInvitation {
  */
 export async function acceptInvitation(
   input: AcceptInvitationInput,
+  meta?: AcceptInvitationMeta,
 ): Promise<AcceptedInvitation> {
   const parsed = acceptInvitationSchema.safeParse(input);
   if (!parsed.success) {
     throw new DomainValidationError(parsed.error.issues[0]?.message ?? "Invalid input");
   }
+  const ipAddress = meta?.ipAddress ?? null;
   const tokenHash = hashInvitationToken(parsed.data.token);
+  // Phase 2 V2 rate limit: the per-IP failure budget is checked
+  // BEFORE the token lookup, following the tracking-access
+  // philosophy — an exhausted IP is refused with the SAME generic
+  // message as an invalid token (never a distinguishable throttle
+  // error), and the limiter's own refusal writes no attempt row, so
+  // the budget decays with its window. With no IP the limiter is
+  // inert and behaviour is identical to before.
+  if (await isInvitationIpBudgetExceeded(ipAddress)) {
+    throw new DomainValidationError(INVITATION_GENERIC_REFUSAL);
+  }
   const invitation = await prisma.userInvitation.findUnique({
     where: { tokenHash },
     include: { role: true },
   });
   if (!invitation) {
-    throw new DomainValidationError("Invitation is invalid or has already been used");
+    await recordInvitationAttempt(tokenHash, false, ipAddress);
+    throw new DomainValidationError(INVITATION_GENERIC_REFUSAL);
   }
   // Constant-time confirmation of the stored hash (defence in depth on
   // top of the unique lookup).
   const stored = Buffer.from(invitation.tokenHash, "hex");
   const presented = Buffer.from(tokenHash, "hex");
   if (stored.length !== presented.length || !timingSafeEqual(stored, presented)) {
-    throw new DomainValidationError("Invitation is invalid or has already been used");
+    await recordInvitationAttempt(tokenHash, false, ipAddress);
+    throw new DomainValidationError(INVITATION_GENERIC_REFUSAL);
   }
   if (invitation.status !== "PENDING") {
-    throw new DomainValidationError("Invitation is invalid or has already been used");
+    await recordInvitationAttempt(tokenHash, false, ipAddress);
+    throw new DomainValidationError(INVITATION_GENERIC_REFUSAL);
   }
   if (invitation.expiresAt.getTime() <= Date.now()) {
     await prisma.userInvitation.update({
       where: { id: invitation.id },
       data: { status: "EXPIRED" },
     });
-    throw new DomainValidationError("Invitation has expired — ask for a new one");
+    await recordInvitationAttempt(tokenHash, false, ipAddress);
+    // Security review F-4: expired tokens refuse with the SAME
+    // generic message as every other refusal class — a distinct
+    // "has expired" message was an oracle distinguishing token
+    // states. The status flip above still records the expiry.
+    throw new DomainValidationError(INVITATION_GENERIC_REFUSAL);
   }
 
   const passwordHash = await bcryptHash(parsed.data.password, 12);
-  const result = await prisma.$transaction(async (tx) => {
+  let result: AcceptedInvitation;
+  try {
+    result = await prisma.$transaction(async (tx) => {
     // P2-5: claim the invitation atomically. The pre-transaction PENDING
     // check above is only a fast path — under two parallel accepts, the
     // conditional flip is what guarantees exactly one winner: the loser
@@ -447,7 +519,20 @@ export async function acceptInvitation(
         },
       },
     });
-    return { userId: user.id, email: user.email, roleCode: invitation.role.code };
-  });
+      return { userId: user.id, email: user.email, roleCode: invitation.role.code };
+    });
+  } catch (error) {
+    // In-transaction generic refusals (the P2-5 claim race loser,
+    // the P2-2 established-account guard) rolled back with the
+    // transaction — record the failed attempt outside it.
+    if (
+      error instanceof DomainValidationError &&
+      error.message === INVITATION_GENERIC_REFUSAL
+    ) {
+      await recordInvitationAttempt(tokenHash, false, ipAddress);
+    }
+    throw error;
+  }
+  await recordInvitationAttempt(tokenHash, true, ipAddress);
   return result;
 }

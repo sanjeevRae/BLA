@@ -1257,6 +1257,30 @@ export async function listPackageMovements(
   const scopeWarehouseId = record?.warehouseId ?? pkg.currentWarehouseId;
   if (scopeWarehouseId) {
     await assertWarehouseScope(actor, scopeWarehouseId, "Package", packageId);
+  } else if (!isUnscoped(actor)) {
+    // L-2: no open inventory record and no current warehouse — the
+    // scope cannot be derived from the package's present position.
+    // Falling through unchecked would hand the full movement
+    // history to any scoped reader. A scoped actor may read it only
+    // when the package's own movement history touches one of their
+    // warehouses; otherwise the denial is audited like any other.
+    const touching = await prisma.inventoryMovement.findFirst({
+      where: {
+        packageId,
+        OR: [
+          { fromWarehouseId: { in: actor.warehouseIds } },
+          { toWarehouseId: { in: actor.warehouseIds } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!touching) {
+      await auditAccessDenied(actor, "Package", {
+        entityId: packageId,
+        reason: "warehouse_out_of_scope",
+      });
+      throw new AuthorizationError("Warehouse is outside your assigned scope");
+    }
   }
   const rows = await prisma.inventoryMovement.findMany({
     where: { packageId },

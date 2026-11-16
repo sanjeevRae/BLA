@@ -335,6 +335,23 @@ model LoginAttempt {
   @@schema("app")
 }
 
+/// Invitation-redemption attempts for the per-IP failure budget
+/// (Phase 2 V2): failed redemptions from one client IP across ALL
+/// invitation tokens share one budget, mirroring LoginAttempt /
+/// TrackingAccessAttempt. Only the token HASH is stored, never the
+/// raw token. Rows are written only when a client IP is known.
+model InvitationAttempt {
+  id        String   @id @default(uuid())
+  tokenHash String
+  succeeded Boolean  @default(false)
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  @@index([ipAddress, createdAt])
+  @@index([tokenHash, createdAt])
+  @@schema("app")
+}
+
 // ---------------------------------------------------------------------------
 // Phase 2: warehouses (docs/database-schema.md §2, docs/warehouse-workflow.md)
 // ---------------------------------------------------------------------------
