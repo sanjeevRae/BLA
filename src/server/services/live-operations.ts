@@ -122,8 +122,10 @@ export interface LiveOperationItem {
   sessionStatus: string;
   tripId: string | null;
   tripNumber: string | null;
+  transferId: string | null;
   deliveryBatchId: string | null;
   batchKind: string | null;
+  batchDate: string | null;
   origin: LiveOperationWarehouseView;
   destination: LiveOperationWarehouseView | null;
   vehicleRegistration: string | null;
@@ -277,8 +279,12 @@ function toItem(
     sessionStatus: row.status,
     tripId: row.tripId,
     tripNumber: row.trip?.tripNumber ?? null,
+    transferId: row.trip?.transferId ?? null,
     deliveryBatchId: row.deliveryBatchId,
     batchKind: row.deliveryBatch?.kind ?? null,
+    batchDate: row.deliveryBatch
+      ? row.deliveryBatch.batchDate.toISOString().slice(0, 10)
+      : null,
     origin,
     destination,
     vehicleRegistration: row.trip?.vehicle.registration ?? null,
@@ -340,12 +346,18 @@ async function loadCodByBatchId(
 
 export interface ListLiveOperationsQuery {
   warehouseId?: string;
+  search?: string;
 }
 
 export async function listLiveOperations(
   actor: ActorContext,
   query: ListLiveOperationsQuery = {},
-): Promise<{ items: LiveOperationItem[]; total: number }> {
+): Promise<{
+  items: LiveOperationItem[];
+  total: number;
+  generatedAt: string;
+  latestReceivedAt: string | null;
+}> {
   const scope = await liveOpsScope(actor);
   const config = await loadTrackingConfig();
   const now = new Date();
@@ -357,7 +369,12 @@ export async function listLiveOperations(
     !("global" in scope) &&
     !scope.warehouseIds.includes(query.warehouseId)
   ) {
-    return { items: [], total: 0 };
+    return {
+      items: [],
+      total: 0,
+      generatedAt: now.toISOString(),
+      latestReceivedAt: null,
+    };
   }
 
   const conditions: Prisma.TrackingSessionWhereInput[] = [
@@ -380,6 +397,55 @@ export async function listLiveOperations(
       OR: [
         { originWarehouseId: query.warehouseId },
         { destinationWarehouseId: query.warehouseId },
+      ],
+    });
+  }
+  const search = query.search?.trim();
+  if (search) {
+    // Search is ONE additional AND-ed condition: it narrows the
+    // already-scoped, status-windowed, warehouse-filtered set and
+    // can never widen scope. The OR lives inside this single
+    // condition only.
+    conditions.push({
+      OR: [
+        {
+          driver: {
+            user: { fullName: { contains: search, mode: "insensitive" } },
+          },
+        },
+        { trip: { tripNumber: { contains: search, mode: "insensitive" } } },
+        {
+          trip: {
+            transfer: {
+              transferNumber: { contains: search, mode: "insensitive" },
+            },
+          },
+        },
+        { deliveryBatchId: { startsWith: search } },
+        {
+          trip: {
+            transfer: {
+              items: {
+                some: {
+                  package: {
+                    trackingId: { contains: search, mode: "insensitive" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          deliveryBatch: {
+            assignments: {
+              some: {
+                package: {
+                  trackingId: { contains: search, mode: "insensitive" },
+                },
+              },
+            },
+          },
+        },
       ],
     });
   }
@@ -422,7 +488,23 @@ export async function listLiveOperations(
   });
 
   const items = decorated.map((d) => d.item);
-  return { items, total: items.length };
+  let latestReceivedAt: Date | null = null;
+  for (const d of decorated) {
+    if (
+      d.lastReceivedAt &&
+      (latestReceivedAt === null || d.lastReceivedAt > latestReceivedAt)
+    ) {
+      latestReceivedAt = d.lastReceivedAt;
+    }
+  }
+  return {
+    items,
+    total: items.length,
+    generatedAt: now.toISOString(),
+    latestReceivedAt: latestReceivedAt
+      ? latestReceivedAt.toISOString()
+      : null,
+  };
 }
 
 // ---------------------------------------------------------------------------

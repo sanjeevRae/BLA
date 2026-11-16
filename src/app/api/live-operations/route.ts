@@ -19,6 +19,7 @@ export async function GET(request: Request) {
     return NextResponse.json(
       await listLiveOperations(actor, {
         warehouseId: url.searchParams.get("warehouseId") ?? undefined,
+        search: url.searchParams.get("search") ?? undefined,
       }),
     );
   } catch (error) {
