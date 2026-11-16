@@ -728,7 +728,8 @@ describe("3 Admin — Users & Roles escalation boundary, membership scope, Setti
       await prisma.warehouseMembership.count({ where: { userId: staffUserId, revokedAt: null } }),
     ).toBe(0);
     const ok = await warehousesSvc.assignMember(waAActor, fx.whA, { email: staffEmail, roleCode: "WAREHOUSE_STAFF" });
-    expect(ok.warehouseId ?? fx.whA).toBeTruthy();
+    expect(ok.userId).toBe(staffUserId);
+    expect(ok.roleCode).toBe("WAREHOUSE_STAFF");
     expect(
       await prisma.warehouseMembership.count({ where: { userId: staffUserId, warehouseId: fx.whA, revokedAt: null } }),
     ).toBe(1);
