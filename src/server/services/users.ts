@@ -1,5 +1,6 @@
 import "server-only";
 
+import type { Prisma } from "@prisma/client";
 import { compare, hash } from "bcryptjs";
 import { z } from "zod";
 
@@ -10,6 +11,13 @@ import {
   type ActorContext,
 } from "@/lib/auth/actor";
 import { DomainValidationError, NotFoundError } from "@/lib/errors";
+import { ROLE_CODES } from "@/lib/permissions/catalog";
+import {
+  auditAccessDenied,
+  pageArgs,
+  pageMeta,
+  requirePermAudited,
+} from "@/server/services/scoping";
 
 /**
  * User lifecycle operations (docs/security-architecture.md §2, §4):
@@ -239,8 +247,17 @@ export async function reactivateUser(
   targetUserId: string,
 ): Promise<{ reactivated: true }> {
   await requireManagePermissionAudited(actor, targetUserId);
-  const target = await prisma.user.findUnique({ where: { id: targetUserId } });
+  const target = await prisma.user.findUnique({
+    where: { id: targetUserId },
+    include: { roles: { include: { role: true } } },
+  });
   if (!target) throw new NotFoundError(`User not found: ${targetUserId}`);
+  // Mirror suspendUser's guard exactly (Phase 6 security review F5):
+  // only a Super Admin can reactivate a Super Admin account.
+  const targetIsSuperAdmin = target.roles.some((r) => r.role.code === "SUPER_ADMIN");
+  if (targetIsSuperAdmin && actor.primaryRole !== "SUPER_ADMIN") {
+    throw new AuthorizationError("Only a Super Admin can reactivate a Super Admin account");
+  }
   if (target.status !== "SUSPENDED") {
     throw new DomainValidationError("Only a suspended user can be reactivated");
   }
@@ -262,4 +279,259 @@ export async function reactivateUser(
     });
   });
   return { reactivated: true };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 (V2): Super Admin / Admin identity surfaces (audit H-4)
+// ---------------------------------------------------------------------------
+
+export interface UserMembershipView {
+  membershipId: string;
+  warehouseId: string;
+  warehouseCode: string;
+  warehouseName: string;
+  roleCode: string;
+  isPrimary: boolean;
+}
+
+export interface UserListView {
+  id: string;
+  fullName: string;
+  email: string;
+  status: string;
+  roles: string[];
+  memberships: UserMembershipView[];
+  vendor: { vendorId: string; businessName: string; vendorRole: string } | null;
+  hasPassword: boolean;
+  mfaEnrolled: boolean;
+  createdAt: string;
+}
+
+const userListInclude = {
+  roles: { include: { role: true } },
+  memberships: {
+    where: { revokedAt: null },
+    include: { warehouse: true, role: true },
+    orderBy: { assignedAt: "asc" as const },
+  },
+  vendorLinks: {
+    where: { isActive: true },
+    include: { vendor: true },
+    orderBy: { createdAt: "asc" as const },
+  },
+} satisfies Prisma.UserInclude;
+
+type UserListRow = Prisma.UserGetPayload<{ include: typeof userListInclude }>;
+
+function toUserListView(row: UserListRow): UserListView {
+  const vendorLink = row.vendorLinks[0];
+  return {
+    id: row.id,
+    fullName: row.fullName,
+    email: row.email,
+    status: row.status,
+    roles: row.roles.map((r) => r.role.code),
+    memberships: row.memberships.map((m) => ({
+      membershipId: m.id,
+      warehouseId: m.warehouseId,
+      warehouseCode: m.warehouse.code,
+      warehouseName: m.warehouse.name,
+      roleCode: m.role.code,
+      isPrimary: m.isPrimary,
+    })),
+    vendor: vendorLink
+      ? {
+          vendorId: vendorLink.vendorId,
+          businessName: vendorLink.vendor.businessName,
+          vendorRole: vendorLink.vendorRole,
+        }
+      : null,
+    // Projection discipline: only WHETHER a password / MFA enrolment
+    // exists — never the hash, the secret, or any token material.
+    hasPassword: row.passwordHash !== null,
+    mfaEnrolled: row.mfaEnabled,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export interface ListUsersQuery {
+  search?: string;
+  roleCode?: string;
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ListUsersResult {
+  items: UserListView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+/** List users (user.manage). Company-wide by design — the identity
+ *  module is a Super Admin / Admin surface, not a warehouse surface. */
+export async function listUsers(
+  actor: ActorContext,
+  query: ListUsersQuery = {},
+): Promise<ListUsersResult> {
+  await requirePermAudited(actor, "user.manage", "User");
+  const { skip, take, page, pageSize } = pageArgs(query.page ?? 1, query.pageSize ?? 25);
+
+  const where: Prisma.UserWhereInput = {};
+  if (query.status) where.status = query.status;
+  if (query.roleCode) {
+    where.roles = { some: { role: { code: query.roleCode } } };
+  }
+  if (query.search?.trim()) {
+    const term = query.search.trim();
+    where.OR = [
+      { fullName: { contains: term, mode: "insensitive" } },
+      { email: { contains: term, mode: "insensitive" } },
+    ];
+  }
+
+  const [total, rows] = await Promise.all([
+    prisma.user.count({ where }),
+    prisma.user.findMany({
+      where,
+      include: userListInclude,
+      orderBy: { createdAt: "desc" },
+      skip,
+      take,
+    }),
+  ]);
+  return { items: rows.map(toUserListView), ...pageMeta(total, page, pageSize) };
+}
+
+/** One user's identity detail (user.manage) — same projection as the
+ *  list, for the detail page. */
+export async function getUserDetail(
+  actor: ActorContext,
+  userId: string,
+): Promise<UserListView> {
+  await requirePermAudited(actor, "user.manage", "User");
+  const row = await prisma.user.findUnique({ where: { id: userId }, include: userListInclude });
+  if (!row) throw new NotFoundError(`User not found: ${userId}`);
+  return toUserListView(row);
+}
+
+export interface SetUserRolesResult {
+  userId: string;
+  roles: string[];
+}
+
+/**
+ * Replace a user's global role set (role.manage — Super Admin only in
+ * the catalog). Protections, each audited on denial:
+ * - an actor cannot modify their own roles;
+ * - SUPER_ADMIN cannot be removed from the last ACTIVE Super Admin;
+ * - granting SUPER_ADMIN requires the actor to be a Super Admin.
+ * The write and its `user.roles_updated` audit row (before/after role
+ * codes) commit in one transaction.
+ */
+export async function setUserRoles(
+  actor: ActorContext,
+  userId: string,
+  roleCodes: string[],
+): Promise<SetUserRolesResult> {
+  try {
+    requirePermission(actor, "role.manage");
+  } catch (error) {
+    if (error instanceof AuthorizationError) {
+      await auditAccessDenied(actor, "User", {
+        entityId: userId,
+        reason: "missing_permission:role.manage",
+      });
+    }
+    throw error;
+  }
+
+  const uniqueCodes = [...new Set(roleCodes)];
+  for (const code of uniqueCodes) {
+    if (!(ROLE_CODES as readonly string[]).includes(code)) {
+      throw new DomainValidationError(`Unknown role: ${code}`);
+    }
+  }
+
+  const deny = async (reason: string): Promise<never> => {
+    await auditAccessDenied(actor, "User", { entityId: userId, reason });
+    throw new DomainValidationError(reason);
+  };
+
+  if (userId === actor.userId) {
+    await deny("roles_self_edit_forbidden");
+    throw new DomainValidationError("You cannot modify your own roles");
+  }
+
+  const target = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { roles: { include: { role: true } } },
+  });
+  if (!target) throw new NotFoundError(`User not found: ${userId}`);
+  const beforeCodes = target.roles.map((r) => r.role.code).sort();
+
+  if (uniqueCodes.includes("SUPER_ADMIN") && actor.primaryRole !== "SUPER_ADMIN") {
+    await auditAccessDenied(actor, "User", {
+      entityId: userId,
+      reason: "roles_grant_super_admin_requires_super_admin",
+    });
+    throw new AuthorizationError("Only a Super Admin can grant the Super Admin role");
+  }
+
+  if (
+    beforeCodes.includes("SUPER_ADMIN") &&
+    !uniqueCodes.includes("SUPER_ADMIN") &&
+    target.status === "ACTIVE"
+  ) {
+    const otherActiveSuperAdmins = await prisma.user.count({
+      where: {
+        id: { not: userId },
+        status: "ACTIVE",
+        roles: { some: { role: { code: "SUPER_ADMIN" } } },
+      },
+    });
+    if (otherActiveSuperAdmins === 0) {
+      await deny("roles_last_super_admin_protected");
+      throw new DomainValidationError(
+        "Cannot remove Super Admin from the last active Super Admin account",
+      );
+    }
+  }
+
+  const roleRows = await prisma.role.findMany({
+    where: { code: { in: uniqueCodes } },
+  });
+  if (roleRows.length !== uniqueCodes.length) {
+    const found = new Set(roleRows.map((r) => r.code));
+    const missing = uniqueCodes.find((c) => !found.has(c));
+    throw new DomainValidationError(`Unknown role: ${missing}`);
+  }
+  const afterCodes = [...uniqueCodes].sort();
+
+  await prisma.$transaction(async (tx) => {
+    await tx.userRole.deleteMany({
+      where: { userId, roleId: { notIn: roleRows.map((r) => r.id) } },
+    });
+    for (const role of roleRows) {
+      await tx.userRole.upsert({
+        where: { userId_roleId: { userId, roleId: role.id } },
+        update: {},
+        create: { userId, roleId: role.id, assignedById: actor.userId },
+      });
+    }
+    await tx.auditLog.create({
+      data: {
+        actorId: actor.userId,
+        actorRole: actor.primaryRole,
+        action: "user.roles_updated",
+        entityType: "User",
+        entityId: userId,
+        before: { roles: beforeCodes },
+        after: { roles: afterCodes },
+      },
+    });
+  });
+  return { userId, roles: afterCodes };
 }

@@ -14,8 +14,10 @@ import {
   changePassword,
   reactivateUser,
   resetUserMfa,
+  setUserRoles,
   suspendUser,
   type ChangePasswordInput,
+  type SetUserRolesResult,
 } from "@/server/services/users";
 import type { ActionResult } from "@/server/actions/warehouses";
 
@@ -107,6 +109,34 @@ export async function reactivateUserAction(
     const data = await reactivateUser(actor, userId);
     revalidatePath("/admin/warehouses");
     revalidatePath("/super-admin/warehouses");
+    return { success: true, data };
+  } catch (error) {
+    if (
+      error instanceof AuthorizationError ||
+      error instanceof NotFoundError ||
+      error instanceof ConflictError ||
+      error instanceof DomainValidationError
+    ) {
+      return { success: false, error: error.message };
+    }
+    throw error;
+  }
+}
+
+/** Replace a user's role set (role.manage): the service enforces the
+ *  self-edit, last-Super-Admin, and Super-Admin-grant protections and
+ *  audits both the change and any denial. */
+export async function setUserRolesAction(
+  userId: string,
+  roleCodes: string[],
+): Promise<ActionResult<SetUserRolesResult>> {
+  const actor = await getActorContext();
+  if (!actor) return { success: false, error: "Authentication required" };
+  try {
+    requireAccessGranted(actor); // P2-3
+    const data = await setUserRoles(actor, userId, roleCodes);
+    revalidatePath("/admin/users");
+    revalidatePath("/super-admin/users");
     return { success: true, data };
   } catch (error) {
     if (

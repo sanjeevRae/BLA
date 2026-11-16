@@ -100,6 +100,63 @@ function saneValue(
   return value;
 }
 
+/** Field metadata for operator-facing surfaces (Phase 6 settings UI):
+ *  the same bounds resolveTrackingConfig enforces, exported so the UI
+ *  can render hints from the single source of truth. */
+export const TRACKING_CONFIG_FIELD_RULES = FIELD_RULES;
+
+export type TrackingConfigField = keyof TrackingConfig;
+
+export interface TrackingConfigPatchResult {
+  valid: boolean;
+  /** Field-level errors, keyed by config field (plus `_patch` for
+   *  whole-patch problems such as unknown keys). */
+  errors: Partial<Record<TrackingConfigField | "_patch", string>>;
+  /** The validated partial patch (only present fields), when valid. */
+  patch: Partial<TrackingConfig>;
+}
+
+/**
+ * Strict validator for an operator-supplied tracking.config patch
+ * (Phase 6 settings write path). Unlike resolveTrackingConfig — which
+ * silently falls back per field so a malformed stored row can never
+ * disable a gate — a WRITE must fail loudly: any unknown key,
+ * non-number, non-integer (for integer fields), or out-of-bounds value
+ * rejects the WHOLE patch with per-field errors, so an operator never
+ * believes a value was saved when it was not.
+ */
+export function validateTrackingConfigPatch(input: unknown): TrackingConfigPatchResult {
+  const errors: Partial<Record<TrackingConfigField | "_patch", string>> = {};
+  const patch: Partial<TrackingConfig> = {};
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    return { valid: false, errors: { _patch: "Tracking config patch must be an object" }, patch: {} };
+  }
+  const source = input as Record<string, unknown>;
+  for (const key of Object.keys(source)) {
+    if (!Object.hasOwn(FIELD_RULES, key)) {
+      errors._patch = `Unknown tracking config field: ${key}`;
+      continue;
+    }
+    const field = key as TrackingConfigField;
+    const rule = FIELD_RULES[field];
+    const value = source[key];
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      errors[field] = `${field} must be a number`;
+      continue;
+    }
+    if (rule.integer && !Number.isInteger(value)) {
+      errors[field] = `${field} must be a whole number`;
+      continue;
+    }
+    if (value < rule.min || value > rule.max) {
+      errors[field] = `${field} must be between ${rule.min} and ${rule.max}`;
+      continue;
+    }
+    patch[field] = value;
+  }
+  return { valid: Object.keys(errors).length === 0, errors, patch };
+}
+
 /**
  * Merge a parsed SystemSetting JSON value over the defaults.
  * `raw` is the already-parsed JSON (an object, or anything else —

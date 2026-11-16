@@ -49,6 +49,8 @@ model User {
   auditLogs         AuditLog[]
   rolesAssigned     UserRole[]            @relation("UserRoleAssignedBy")
   invitationsSent   UserInvitation[]      @relation("InvitationSentBy")
+  invitationsApproved UserInvitation[]    @relation("InvitationApprovedBy")
+  invitationsRejected UserInvitation[]    @relation("InvitationRejectedBy")
   vendorLinks       VendorUser[]
   customerProfile   Customer?
 
@@ -253,7 +255,11 @@ model WarehouseMembership {
 }
 
 /// Onboarding invitations. Only the token hash is stored.
-/// status: PENDING / ACCEPTED / EXPIRED / REVOKED.
+/// status: PENDING / PENDING_APPROVAL / ACCEPTED / EXPIRED / REVOKED /
+/// REJECTED. Privileged-role invitations (SUPER_ADMIN / ADMIN) land in
+/// PENDING_APPROVAL and become redeemable (PENDING) only after a second
+/// privileged approver approves them — the four-eyes gate deferred from
+/// V2 Phase 2 and built in V2 Phase 6 (docs/security-review.md).
 model UserInvitation {
   id          String    @id @default(uuid())
   email       String
@@ -268,13 +274,22 @@ model UserInvitation {
   expiresAt   DateTime
   acceptedAt  DateTime?
   status      String    @default("PENDING")
+  /// Four-eyes approval (Phase 6): set when a PENDING_APPROVAL
+  /// invitation is approved (→ PENDING) or rejected (→ REJECTED).
+  approvedById   String?
+  approvedAt     DateTime?
+  rejectedById   String?
+  rejectedAt     DateTime?
+  rejectionReason String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  role      Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  invitedBy User       @relation("InvitationSentBy", fields: [invitedById], references: [id], onDelete: Restrict)
-  warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  vendor    Vendor?    @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  invitedBy  User       @relation("InvitationSentBy", fields: [invitedById], references: [id], onDelete: Restrict)
+  approvedBy User?      @relation("InvitationApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  rejectedBy User?      @relation("InvitationRejectedBy", fields: [rejectedById], references: [id], onDelete: Restrict)
+  warehouse  Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  vendor     Vendor?    @relation(fields: [vendorId], references: [id], onDelete: Restrict)
 
   @@index([email, status])
   @@schema("app")

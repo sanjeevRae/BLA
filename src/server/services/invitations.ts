@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
+import type { Prisma } from "@prisma/client";
 import { hash as bcryptHash } from "bcryptjs";
 import { z } from "zod";
 
@@ -112,10 +113,20 @@ export interface CreatedInvitation {
   email: string;
   roleCode: string;
   vendorId: string | null;
+  /** PENDING, or PENDING_APPROVAL for privileged roles (four-eyes). */
+  status: string;
   /** The raw token — shown to the inviter once, never stored. */
   token: string;
   expiresAt: string;
 }
+
+/** Roles whose invitations require a second approver before the token
+ *  becomes redeemable (Phase 6 four-eyes; deferred from Phase 2 — see
+ *  docs/security-review.md). */
+export const PRIVILEGED_INVITATION_ROLES: ReadonlySet<string> = new Set([
+  "SUPER_ADMIN",
+  "ADMIN",
+]);
 
 export async function createInvitation(
   actor: ActorContext,
@@ -237,13 +248,24 @@ export async function createInvitation(
       `${email} already has an account — manage it from the Users module instead of inviting`,
     );
   }
+  // A live PENDING_APPROVAL invitation blocks a duplicate exactly like
+  // a PENDING one — otherwise a second privileged invitation could be
+  // minted while the first still waits for its approver.
   const pending = await prisma.userInvitation.findFirst({
-    where: { email, status: "PENDING", expiresAt: { gt: new Date() } },
+    where: {
+      email,
+      status: { in: ["PENDING", "PENDING_APPROVAL"] },
+      expiresAt: { gt: new Date() },
+    },
   });
   if (pending) {
     throw new ConflictError(`A pending invitation already exists for ${email}`);
   }
 
+  // Four-eyes (Phase 6): a privileged-role invitation is NOT redeemable
+  // on creation. It lands in PENDING_APPROVAL and only becomes PENDING
+  // when a second eligible approver approves it (approveInvitation).
+  const pendingApproval = PRIVILEGED_INVITATION_ROLES.has(roleCode);
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + INVITATION_TTL_MS);
   const invitation = await prisma.userInvitation.create({
@@ -256,7 +278,7 @@ export async function createInvitation(
       tokenHash: hashInvitationToken(token),
       invitedById: actor.userId,
       expiresAt,
-      status: "PENDING",
+      status: pendingApproval ? "PENDING_APPROVAL" : "PENDING",
     },
   });
   await prisma.auditLog.create({
@@ -272,6 +294,7 @@ export async function createInvitation(
         roleCode: parsed.data.roleCode,
         ...(vendorInviteId ? { vendorId: vendorInviteId, vendorRole: vendorInviteRole } : {}),
         expiresAt: expiresAt.toISOString(),
+        ...(pendingApproval ? { pendingApproval: true } : {}),
       },
     },
   });
@@ -280,6 +303,7 @@ export async function createInvitation(
     email,
     roleCode: parsed.data.roleCode,
     vendorId: vendorInviteId,
+    status: invitation.status,
     token,
     expiresAt: expiresAt.toISOString(),
   };
@@ -535,4 +559,346 @@ export async function acceptInvitation(
   }
   await recordInvitationAttempt(tokenHash, true, ipAddress);
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 (V2): invitation reads, four-eyes approval, and revocation
+// ---------------------------------------------------------------------------
+
+export interface InvitationView {
+  id: string;
+  email: string;
+  roleCode: string;
+  warehouseId: string | null;
+  vendorId: string | null;
+  vendorRole: string | null;
+  status: string;
+  invitedById: string;
+  invitedByName: string;
+  invitedByEmail: string;
+  approvedById: string | null;
+  approvedAt: string | null;
+  rejectedById: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
+  expiresAt: string;
+  acceptedAt: string | null;
+  createdAt: string;
+}
+
+const invitationInclude = {
+  role: true,
+  invitedBy: { select: { id: true, fullName: true, email: true } },
+} as const;
+
+type InvitationRow = Prisma.UserInvitationGetPayload<{ include: typeof invitationInclude }>;
+
+function toInvitationView(row: InvitationRow): InvitationView {
+  return {
+    id: row.id,
+    email: row.email,
+    roleCode: row.role.code,
+    warehouseId: row.warehouseId,
+    vendorId: row.vendorId,
+    vendorRole: row.vendorRole,
+    status: row.status,
+    invitedById: row.invitedById,
+    invitedByName: row.invitedBy.fullName,
+    invitedByEmail: row.invitedBy.email,
+    approvedById: row.approvedById,
+    approvedAt: row.approvedAt ? row.approvedAt.toISOString() : null,
+    rejectedById: row.rejectedById,
+    rejectedAt: row.rejectedAt ? row.rejectedAt.toISOString() : null,
+    rejectionReason: row.rejectionReason,
+    expiresAt: row.expiresAt.toISOString(),
+    acceptedAt: row.acceptedAt ? row.acceptedAt.toISOString() : null,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export interface ListInvitationsFilters {
+  status?: string;
+  search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ListInvitationsResult {
+  items: InvitationView[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+/**
+ * Read invitations (user.invite or user.manage). Company-wide inviters
+ * (user.manage — Super Admin / Admin) see every invitation; scoped
+ * inviters see only invitations into warehouses they are members of.
+ * The approval queue is this list with status = "PENDING_APPROVAL".
+ * The token hash is never projected.
+ */
+export async function listInvitations(
+  actor: ActorContext,
+  filters: ListInvitationsFilters = {},
+): Promise<ListInvitationsResult> {
+  if (!hasPermission(actor, "user.manage") && !hasPermission(actor, "user.invite")) {
+    await auditInvitationDenied(actor, { reason: "missing_permission:user.invite" });
+    throw new AuthorizationError("Missing required permission: user.invite");
+  }
+  const page = Math.max(1, Math.floor(filters.page ?? 1) || 1);
+  const pageSize = Math.min(100, Math.max(1, Math.floor(filters.pageSize ?? 25) || 25));
+
+  const where: Prisma.UserInvitationWhereInput = {};
+  if (!isCompanyWideInviter(actor)) {
+    where.warehouseId = { in: actor.warehouseIds };
+  }
+  if (filters.status) where.status = filters.status;
+  if (filters.search?.trim()) {
+    where.email = { contains: filters.search.trim(), mode: "insensitive" };
+  }
+
+  const [total, rows] = await Promise.all([
+    prisma.userInvitation.count({ where }),
+    prisma.userInvitation.findMany({
+      where,
+      include: invitationInclude,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+  ]);
+  return {
+    items: rows.map(toInvitationView),
+    total,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  };
+}
+
+async function auditInvitationActionDenied(
+  actor: ActorContext,
+  invitation: { id: string; warehouseId: string | null },
+  reason: string,
+): Promise<void> {
+  await prisma.auditLog.create({
+    data: {
+      actorId: actor.userId,
+      actorRole: actor.primaryRole,
+      action: "access.denied",
+      entityType: "UserInvitation",
+      entityId: invitation.id,
+      warehouseId: invitation.warehouseId,
+      after: { reason },
+    },
+  });
+}
+
+/**
+ * Shared four-eyes gate for approve/reject: the actor must hold
+ * user.manage, must not be the inviter (self-approval is refused and
+ * audited), and must mirror the invite rights for the invited role —
+ * a SUPER_ADMIN invitation can only be approved by a Super Admin.
+ */
+async function loadApprovableInvitation(
+  actor: ActorContext,
+  invitationId: string,
+): Promise<InvitationRow> {
+  try {
+    requirePermission(actor, "user.manage");
+  } catch (error) {
+    if (error instanceof AuthorizationError) {
+      await auditInvitationDenied(actor, { reason: "missing_permission:user.manage" });
+    }
+    throw error;
+  }
+  const invitation = await prisma.userInvitation.findUnique({
+    where: { id: invitationId },
+    include: invitationInclude,
+  });
+  if (!invitation) throw new NotFoundError(`Invitation not found: ${invitationId}`);
+  if (invitation.invitedById === actor.userId) {
+    await auditInvitationActionDenied(actor, invitation, "invitation_self_approval");
+    throw new DomainValidationError(
+      "You cannot approve or reject your own invitation — a second approver is required",
+    );
+  }
+  if (invitation.role.code === "SUPER_ADMIN" && actor.primaryRole !== "SUPER_ADMIN") {
+    await auditInvitationActionDenied(
+      actor,
+      invitation,
+      "super_admin_approval_requires_super_admin",
+    );
+    throw new AuthorizationError("Only a Super Admin can approve a Super Admin invitation");
+  }
+  if (invitation.status !== "PENDING_APPROVAL") {
+    throw new DomainValidationError(
+      `Invitation is ${invitation.status} — only PENDING_APPROVAL invitations can be decided`,
+    );
+  }
+  // Expiry (Phase 6 security review F9): an invitation that expired
+  // while awaiting its second approver can no longer be decided —
+  // flip it to EXPIRED (conditional on it still being
+  // PENDING_APPROVAL, so a racing decision is never overwritten) and
+  // refuse, audited like this loader's other denials. Applies to both
+  // approve and reject, which share this loader.
+  if (invitation.expiresAt.getTime() <= Date.now()) {
+    await prisma.userInvitation.updateMany({
+      where: { id: invitation.id, status: "PENDING_APPROVAL" },
+      data: { status: "EXPIRED" },
+    });
+    await auditInvitationActionDenied(actor, invitation, "invitation_expired");
+    throw new DomainValidationError(
+      "Invitation has expired — it can no longer be approved or rejected",
+    );
+  }
+  return invitation;
+}
+
+/**
+ * Approve a privileged invitation (four-eyes): PENDING_APPROVAL →
+ * PENDING via a conditional update, so two approvers racing the same
+ * row cannot both succeed. The token becomes redeemable only now.
+ */
+export async function approveInvitation(
+  actor: ActorContext,
+  invitationId: string,
+): Promise<InvitationView> {
+  const invitation = await loadApprovableInvitation(actor, invitationId);
+  const now = new Date();
+  const claimed = await prisma.userInvitation.updateMany({
+    where: { id: invitation.id, status: "PENDING_APPROVAL" },
+    data: { status: "PENDING", approvedById: actor.userId, approvedAt: now },
+  });
+  if (claimed.count !== 1) {
+    throw new DomainValidationError("Invitation was already decided by another approver");
+  }
+  await prisma.auditLog.create({
+    data: {
+      actorId: actor.userId,
+      actorRole: actor.primaryRole,
+      action: "user.invitation_approved",
+      entityType: "UserInvitation",
+      entityId: invitation.id,
+      warehouseId: invitation.warehouseId,
+      before: { status: "PENDING_APPROVAL" },
+      after: {
+        status: "PENDING",
+        email: invitation.email,
+        roleCode: invitation.role.code,
+        invitedById: invitation.invitedById,
+      },
+    },
+  });
+  const updated = await prisma.userInvitation.findUniqueOrThrow({
+    where: { id: invitation.id },
+    include: invitationInclude,
+  });
+  return toInvitationView(updated);
+}
+
+/**
+ * Reject a privileged invitation (four-eyes): PENDING_APPROVAL →
+ * REJECTED (terminal). A rejected token can never be redeemed —
+ * acceptance claims only PENDING rows.
+ */
+export async function rejectInvitation(
+  actor: ActorContext,
+  invitationId: string,
+  reason?: string,
+): Promise<InvitationView> {
+  const invitation = await loadApprovableInvitation(actor, invitationId);
+  const now = new Date();
+  const trimmedReason = reason?.trim() ? reason.trim().slice(0, 500) : null;
+  const claimed = await prisma.userInvitation.updateMany({
+    where: { id: invitation.id, status: "PENDING_APPROVAL" },
+    data: {
+      status: "REJECTED",
+      rejectedById: actor.userId,
+      rejectedAt: now,
+      rejectionReason: trimmedReason,
+    },
+  });
+  if (claimed.count !== 1) {
+    throw new DomainValidationError("Invitation was already decided by another approver");
+  }
+  await prisma.auditLog.create({
+    data: {
+      actorId: actor.userId,
+      actorRole: actor.primaryRole,
+      action: "user.invitation_rejected",
+      entityType: "UserInvitation",
+      entityId: invitation.id,
+      warehouseId: invitation.warehouseId,
+      before: { status: "PENDING_APPROVAL" },
+      after: {
+        status: "REJECTED",
+        email: invitation.email,
+        roleCode: invitation.role.code,
+        invitedById: invitation.invitedById,
+        ...(trimmedReason ? { reason: trimmedReason } : {}),
+      },
+    },
+  });
+  const updated = await prisma.userInvitation.findUniqueOrThrow({
+    where: { id: invitation.id },
+    include: invitationInclude,
+  });
+  return toInvitationView(updated);
+}
+
+/**
+ * Revoke a live invitation (PENDING or PENDING_APPROVAL → REVOKED).
+ * Company-wide inviters may revoke any invitation; scoped inviters
+ * only invitations into their own warehouses. Revocation is terminal —
+ * acceptance claims only PENDING rows, and a revoked PENDING_APPROVAL
+ * row can no longer be approved either.
+ */
+export async function revokeInvitation(
+  actor: ActorContext,
+  invitationId: string,
+): Promise<InvitationView> {
+  await requireInvitePermission(actor);
+  const invitation = await prisma.userInvitation.findUnique({
+    where: { id: invitationId },
+    include: invitationInclude,
+  });
+  if (!invitation) throw new NotFoundError(`Invitation not found: ${invitationId}`);
+  if (
+    !isCompanyWideInviter(actor) &&
+    !(invitation.warehouseId && actor.warehouseIds.includes(invitation.warehouseId))
+  ) {
+    await auditInvitationActionDenied(actor, invitation, "revoke_out_of_scope");
+    throw new AuthorizationError("Invitation is outside your assigned scope");
+  }
+  if (invitation.status !== "PENDING" && invitation.status !== "PENDING_APPROVAL") {
+    throw new DomainValidationError(
+      `Invitation is ${invitation.status} — only a pending invitation can be revoked`,
+    );
+  }
+  const claimed = await prisma.userInvitation.updateMany({
+    where: { id: invitation.id, status: invitation.status },
+    data: { status: "REVOKED" },
+  });
+  if (claimed.count !== 1) {
+    throw new DomainValidationError("Invitation changed while it was being revoked");
+  }
+  await prisma.auditLog.create({
+    data: {
+      actorId: actor.userId,
+      actorRole: actor.primaryRole,
+      action: "user.invitation_revoked",
+      entityType: "UserInvitation",
+      entityId: invitation.id,
+      warehouseId: invitation.warehouseId,
+      before: { status: invitation.status },
+      after: { status: "REVOKED", email: invitation.email, roleCode: invitation.role.code },
+    },
+  });
+  const updated = await prisma.userInvitation.findUniqueOrThrow({
+    where: { id: invitation.id },
+    include: invitationInclude,
+  });
+  return toInvitationView(updated);
 }

@@ -115,6 +115,7 @@ const GENERIC_TONES: Readonly<Record<string, StatusTone>> = {
   CRITICAL: "danger",
   HIGH: "danger",
   PENDING: "warning",
+  PENDING_APPROVAL: "warning",
   PENDING_VERIFICATION: "warning",
   UNDER_REVIEW: "warning",
   SUBMITTED: "warning",
