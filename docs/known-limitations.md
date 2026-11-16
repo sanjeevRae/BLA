@@ -101,6 +101,21 @@ existing bindings migrate to it.
 
 ## Standing transitional items
 
+- **Bulk booking has no idempotency key (Phase 8 finding).**
+  `POST /api/bookings/bulk` (and single booking creation) accept no
+  client submission identifier: if a client's request times out and
+  is retried, the retry creates a second, distinct booking — the
+  server cannot tell a retry from a genuinely new order. This is
+  documented behaviour, proven by a named test in
+  `tests/integration/phase8-api-validation.test.ts`, not a silent
+  defect. Closing it needs a design decision (a
+  `clientSubmissionId` on the booking payloads, unique per vendor,
+  with replay returning the original booking) — Meena's call when
+  vendor integrations or a public API make retries likely. The
+  in-app UI's submit buttons are single-shot per form render, so
+  the exposure today is API-level retries only. (Double-*approval*
+  is not affected: `approveBooking` refuses a second approval with
+  a ConflictError.)
 - **SMS notifications are intent-only.** Notification rows on the
   SMS channel record `NOT_SENT_NO_PROVIDER` until an SMS provider
   is connected (same for EMAIL). In-app and tracking-page channels
