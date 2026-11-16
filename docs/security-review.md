@@ -274,3 +274,43 @@ The reviewer's 9-test PoC suite is committed as
 fixes). Separately, the production run-through produced two
 client fixes (decision tick for sparse-fix platforms;
 ended-notice precedence) — see `docs/live-gps-tracking.md` §8.
+
+## V2 Phase 5 — Live Operations map (independent review, 2026-11-16)
+
+Scope: the new map pages/board and the server-side search added
+to `listLiveOperations`. The builder-independent reviewer ran 27
+adversarial PoCs (`tests/integration/phase5-security-review.test.ts`)
+against the claims that matter for a location board. Verdict: no
+High or Medium findings; claims on scope, composition, PII, COD
+gating, registry denial, cookie preselect, and freshness honesty
+all hold, with two Low findings fixed in-phase and their PoCs
+flipped to regressions (suite 27/27 after fixes):
+
+- **P5-S1 (Low)** — search `%` / `_` acted as unescaped Postgres
+  LIKE wildcards (Prisma `contains`/`startsWith` pass them
+  through): a match-all *within* the actor's already-authorized
+  scope and window — never a scope widening, since search is one
+  AND-ed condition beside the scope/window conditions, verified
+  by foreign-warehouse probes. Fixed: the service escapes LIKE
+  metacharacters so search terms match literally.
+- **P5-S3 (Low)** — `warehouseIcon` interpolated the warehouse
+  code raw into a Leaflet `divIcon` `html:` string (an innerHTML
+  sink). Not reachable today (creation enforces
+  `WH-[A-Z]{3}-\d{2}` and codes are immutable), but the DB column
+  carries no CHECK, so the sink is now escaped at the source as
+  defence in depth. Driver names never reach any `html:` string
+  (pin icons interpolate only enum classes + a constant letter).
+- **P5-S2 (Informational)** — a premise worth recording:
+  WAREHOUSE_ADMIN holds `cod.read` by catalog design, so WA
+  actors legitimately receive `codCollectedPaisa`. The gate
+  itself was verified with synthetic actors: holding neither
+  `finance.read` nor `cod.read` means the key is *absent* (not
+  null) from list and detail payloads, including under search.
+
+Also verified: WA detail access to a foreign session is refused
+and audit-logged; an ENDED session outside the recent window
+stays hidden even when its package ID is searched exactly;
+payloads carry no recipient names/phones/addresses in keys or
+values (fixture packages carried distinctive PII); the seven
+roles without `operations.live_view` get no registry item on any
+dashboard and are denied by the service on both read paths.
