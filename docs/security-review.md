@@ -458,3 +458,52 @@ be manifested from the UI. The picker now includes RECEIVED
 returns whose return destination matches the transfer
 destination; `addTransferItems` remains the authoritative gate
 (regression test in `phase7-returns-cross-warehouse.test.ts`).
+
+---
+
+## V2 Phase 8 — open-item disposition: L-1 (vehicle read scope)
+
+**Disposition: ACCEPTED — vehicle reads remain global for fleet
+permission holders. No code change.** This closes the Phase 2
+confirm-or-scope item with the re-review it asked for.
+
+Why scoping vehicle *reads* by warehouse is not enforceable without
+breaking legitimate work:
+
+- The `Vehicle` model carries **no warehouse ownership** — only a
+  nullable `homeWarehouseId` hint. There is no ownership relation to
+  scope by; the hint is not custody (a vehicle is physically wherever
+  its current trip is).
+- Vehicles move between warehouses by design. A Warehouse Admin
+  receiving an inbound transfer legitimately needs the inbound
+  vehicle — homed at the *origin* warehouse — for crew assignment
+  and arrival handling. Home-warehouse read scoping would hide
+  exactly the vehicles a WA is about to receive.
+- A vehicle record is operational fleet data (registration, type,
+  capacity, status, home-warehouse hint): no personal data, no
+  customer data, no financial data. The exposure from a fleet
+  permission holder seeing the whole fleet list is minimal.
+
+Compensating controls (all verified in code at Phase 8):
+
+- Reads are permission-gated: `listVehicles`/`getVehicle` require
+  `vehicle.manage`, `vehicle.assign`, or `transfer.create`. Roles
+  without a fleet function (Rider, Line-haul, Vendor, Customer,
+  Finance, Support, Warehouse Staff) cannot read vehicles at all.
+- The one vehicle **write** a scoped actor holds —
+  `assignVehicleDriver` (`vehicle.assign`, Warehouse Admin) — is
+  membership-scoped since the Phase 6 F7 fix: for actors without
+  `vehicle.manage`, both the vehicle's and the driver's home
+  warehouse must be in the actor's memberships, with denials
+  audit-logged.
+- All other vehicle writes (`createVehicle`, `updateVehicle`,
+  `setVehicleStatus`, `recordVehicleMaintenance`) require
+  `vehicle.manage`, held only by the global roles (Admin, Super
+  Admin).
+- Transfer crew assignment consumes `driver.assign` +
+  `vehicle.assign` inside the transfer's own warehouse scope checks
+  (`assignTransferCrew`), so assignment power never exceeds the
+  transfer's scope.
+
+Re-open this only if vehicles gain a true ownership/custody model or
+vehicle records start carrying sensitive data.
