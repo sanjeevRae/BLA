@@ -88,7 +88,6 @@ let adminActor: Awaited<ReturnType<typeof actorFor>>;
 let waAActor: Awaited<ReturnType<typeof actorFor>>;
 let staffAActor: Awaited<ReturnType<typeof actorFor>>;
 let waBActor: Awaited<ReturnType<typeof actorFor>>;
-let staffBActor: Awaited<ReturnType<typeof actorFor>>;
 let linehaulActor: Awaited<ReturnType<typeof actorFor>>;
 let riderAActor: Awaited<ReturnType<typeof actorFor>>;
 let serviceCode: string;
@@ -468,7 +467,6 @@ beforeAll(async () => {
   waAActor = await actorFor(fx.waA);
   staffAActor = await actorFor(fx.staffA);
   waBActor = await actorFor(fx.waB);
-  staffBActor = await actorFor(fx.staffB);
 
   fx.linehaulUser = await makeUser("linehaul", "LINEHAUL_DRIVER");
   const linehaul = await driversSvc.createDriverProfile(adminActor, {

@@ -880,7 +880,7 @@ describe("Phase 7 chain — local delivery with partial success", () => {
     if (!returnId) {
       const initiated = await returnsSvc.initiateReturn(waBActor, {
         packageId: parcels.P6.packageId,
-        reason: "CUSTOMER_REFUSAL",
+        reason: "RECIPIENT_REFUSED",
       });
       returnId = initiated.id;
     }
