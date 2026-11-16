@@ -12,10 +12,12 @@ import {
   completeReturnAction,
   confirmDeliveryAction,
   confirmPickupAction,
+  confirmPickupCollectionAction,
   createDeliveryBatchAction,
   initiateReturnAction,
   inspectReturnAction,
   recordDeliveryAttemptAction,
+  recordPickupAttemptAction,
   reassignAssignmentAction,
   reassignBatchAction,
   regenerateOtpAction,
@@ -682,6 +684,149 @@ export function PickupForm({
           {busy ? "Confirming…" : "Confirm pickup"}
         </button>
       </div>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Rider vendor-pickup collection (PICKUP batches only)
+// ---------------------------------------------------------------------------
+
+export function PickupCollectionForm({
+  batchId,
+  pending,
+}: {
+  batchId: string;
+  pending: { assignmentId: string; trackingId: string }[];
+}) {
+  const router = useRouter();
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(pending.map((p) => p.trackingId)),
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  function toggle(trackingId: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(trackingId)) next.delete(trackingId);
+      else next.add(trackingId);
+      return next;
+    });
+  }
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    setNotes([]);
+    const result = await confirmPickupCollectionAction(batchId, {
+      trackingIds: [...selected],
+    });
+    setBusy(false);
+    if (!result.success) {
+      setError(result.error);
+      return;
+    }
+    sendTrackingEventUpdate();
+    const extra: string[] = [];
+    if (result.data.taken.length > 0) {
+      extra.push(
+        `Collected: ${result.data.taken.map((t) => t.trackingId).join(", ")} — bring them to the origin warehouse for the receiving scan.`,
+      );
+    }
+    if (result.data.shortages.length > 0) {
+      extra.push(
+        `Not collected yet (still assigned to you): ${result.data.shortages.map((s) => s.trackingId).join(", ")}`,
+      );
+    }
+    if (result.data.failed.length > 0) {
+      extra.push(
+        `Could not collect: ${result.data.failed.map((f) => `${f.trackingId} (${f.reason})`).join("; ")}`,
+      );
+    }
+    setNotes(extra);
+    router.refresh();
+  }
+
+  if (pending.length === 0) return null;
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-3">
+      <p className="text-[13px] text-slate2">
+        Tick every package you are physically collecting from the sender. Anything unticked
+        stays assigned to you as a shortage — never silently dropped.
+      </p>
+      <div className="grid gap-2">
+        {pending.map((p) => (
+          <label
+            key={p.assignmentId}
+            className="flex cursor-pointer items-center gap-3 rounded-md border border-line bg-page px-3 py-2"
+          >
+            <input
+              type="checkbox"
+              checked={selected.has(p.trackingId)}
+              onChange={() => toggle(p.trackingId)}
+            />
+            <span className="font-mono text-[13px] font-semibold text-ink">{p.trackingId}</span>
+          </label>
+        ))}
+      </div>
+      {error ? <ErrorBox message={error} /> : null}
+      {notes.map((n) => (
+        <OkBox key={n} message={n} />
+      ))}
+      <div>
+        <button type="submit" className={primaryButtonClass} disabled={busy}>
+          {busy ? "Confirming…" : "Confirm collection"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function PickupFailedForm({ assignmentId }: { assignmentId: string }) {
+  const router = useRouter();
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (reason.trim().length < 3) {
+      setError("Give a short reason (at least 3 characters).");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    const res = await recordPickupAttemptAction(assignmentId, { reason: reason.trim() });
+    setBusy(false);
+    if (!res.success) {
+      setError(res.error);
+      return;
+    }
+    sendTrackingEventUpdate();
+    setNotice("Pickup failure recorded — the warehouse will reschedule.");
+    router.refresh();
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          className={inputClass}
+          placeholder="Pickup failed — reason (sender unavailable, not ready…)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+        />
+        <button type="submit" className={dangerButtonClass} disabled={busy}>
+          {busy ? "Recording…" : "Pickup failed"}
+        </button>
+      </div>
+      {error ? <span className="text-[12px] text-red">{error}</span> : null}
+      {notice ? <OkBox message={notice} /> : null}
     </form>
   );
 }

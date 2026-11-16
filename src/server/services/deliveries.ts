@@ -43,6 +43,8 @@ import {
 import {
   createNotificationInTx,
   notifyUsersInTx,
+  vendorUserIds,
+  warehouseAdminUserIds,
 } from "@/server/services/notifications";
 import { raiseIncidentInTx } from "@/server/services/incidents";
 import { endTrackingSessionsInTx } from "@/server/services/tracking";
@@ -110,6 +112,8 @@ const STATUS_READY_FOR_DELIVERY: OperationalStatus = "READY_FOR_DELIVERY";
 const STATUS_RECEIVED_AT_DESTINATION: OperationalStatus = "RECEIVED_AT_DESTINATION";
 const STATUS_READY_FOR_DISPATCH: OperationalStatus = "READY_FOR_DISPATCH";
 const STATUS_DELIVERY_ASSIGNED: OperationalStatus = "DELIVERY_ASSIGNED";
+const STATUS_BOOKED: OperationalStatus = "BOOKED";
+const STATUS_PICKUP_ASSIGNED: OperationalStatus = "PICKUP_ASSIGNED";
 
 // ---------------------------------------------------------------------------
 // Views
@@ -551,8 +555,13 @@ export async function addBatchPackages(
   input: AddBatchPackagesInput,
 ): Promise<AddBatchPackagesResult> {
   const data = parse(addBatchPackagesSchema, input);
-  await requirePermAudited(actor, "delivery.assign", "DeliveryBatch");
   const batch = await loadBatchOr404(batchId);
+  const isPickupBatch = batch.kind === "PICKUP";
+  await requirePermAudited(
+    actor,
+    isPickupBatch ? "pickup.assign" : "delivery.assign",
+    "DeliveryBatch",
+  );
   await assertWarehouseScope(actor, batch.warehouseId, "DeliveryBatch", batch.id);
   if (batch.status !== "OPEN") {
     throw new ConflictError(`Batch is ${batch.status} — packages can only be added to an OPEN batch`);
@@ -569,6 +578,7 @@ export async function addBatchPackages(
           where: { id: packageId },
           include: {
             shipment: { select: { destinationWarehouseId: true } },
+            order: { select: { pickupMethod: true, vendorId: true } },
             inventoryRecords: {
               where: { releasedAt: null },
               select: { warehouseId: true },
@@ -601,11 +611,6 @@ export async function addBatchPackages(
             `Package ${pkg.trackingId} is at another warehouse`,
           );
         }
-        if (pkg.deliveryAssignments.length > 0) {
-          throw new DomainValidationError(
-            `Package ${pkg.trackingId} already has an open delivery assignment`,
-          );
-        }
         if (pkg.returnRequests.length > 0) {
           throw new DomainValidationError(
             `Package ${pkg.trackingId} is under an open return and cannot be assigned`,
@@ -616,6 +621,104 @@ export async function addBatchPackages(
         ) {
           throw new DomainValidationError(
             `Package ${pkg.trackingId} is blocked by exception ${pkg.exceptionStatus}`,
+          );
+        }
+
+        // ---- PICKUP branch (vendor-pickup leg, delivery-workflow §2) ----
+        // Pickup method lives on the Order (Order.pickupMethod);
+        // the package reaches it via package.order. Pickup packages
+        // are BOOKED at the origin warehouse with no stock and no
+        // custody yet — stock is created only by the receiving scan
+        // after collection, so there is deliberately no stock gate.
+        if (isPickupBatch) {
+          if (pkg.order.pickupMethod !== "RIDER_PICKUP") {
+            throw new DomainValidationError(
+              `Package ${pkg.trackingId} is not a rider-pickup booking (pickup method is ${pkg.order.pickupMethod})`,
+            );
+          }
+          const activePickup = await tx.deliveryAssignment.findFirst({
+            where: {
+              packageId: pkg.id,
+              kind: "PICKUP",
+              status: { in: [...ACTIVE_ASSIGNMENT_STATUSES] },
+            },
+            select: { id: true },
+          });
+          if (activePickup) {
+            throw new DomainValidationError(
+              `Package ${pkg.trackingId} already has an open pickup assignment`,
+            );
+          }
+          const isBooked = pkg.operationalStatus === STATUS_BOOKED;
+          const isReassignable =
+            pkg.operationalStatus === STATUS_PICKUP_ASSIGNED;
+          if (!isBooked && !isReassignable) {
+            throw new DomainValidationError(
+              `Package ${pkg.trackingId} is ${pkg.operationalStatus} — not ready for pickup assignment`,
+            );
+          }
+          if (isReassignable) {
+            // Re-assignment after a failed pickup only: every prior
+            // PICKUP assignment must be FAILED (the package stayed
+            // PICKUP_ASSIGNED with exception PICKUP_FAILED).
+            const history = await tx.deliveryAssignment.findMany({
+              where: { packageId: pkg.id, kind: "PICKUP" },
+              select: { status: true },
+            });
+            if (
+              history.length === 0 ||
+              !history.every((h) => h.status === "FAILED")
+            ) {
+              throw new DomainValidationError(
+                `Package ${pkg.trackingId} is PICKUP_ASSIGNED — it can only be re-assigned after a failed pickup`,
+              );
+            }
+          }
+          const pickupAssignment = await tx.deliveryAssignment.create({
+            data: {
+              packageId: pkg.id,
+              driverId: batch.riderId,
+              batchId: batch.id,
+              kind: "PICKUP",
+              status: "PENDING",
+              assignedById: actor.userId,
+            },
+          });
+          if (isBooked) {
+            await transitionPackageInTx(tx, actor, pkg.id, "PICKUP_ASSIGNED", {
+              deliveryAssignmentId: pickupAssignment.id,
+              warehouseId: batch.warehouseId,
+            });
+          }
+          // A successful (re-)assignment clears ONLY the pickup-failed
+          // flag, in the same transaction as the assignment event.
+          if (pkg.exceptionStatus === "PICKUP_FAILED") {
+            await tx.package.update({
+              where: { id: pkg.id },
+              data: { exceptionStatus: "NONE" },
+            });
+          }
+          const pickupRider = await tx.driver.findUnique({
+            where: { id: batch.riderId },
+            select: { userId: true },
+          });
+          if (pickupRider?.userId && pickupRider.userId !== actor.userId) {
+            await notifyUsersInTx(tx, [pickupRider.userId], {
+              category: "DELIVERY_ASSIGNED",
+              title: `Pickup assigned: ${pkg.trackingId}`,
+              body: `Package ${pkg.trackingId} was added to your pickup batch.`,
+              entityType: "DeliveryAssignment",
+              entityId: pickupAssignment.id,
+              dedupeKey: `pickup-assigned:${pickupAssignment.id}`,
+            });
+          }
+          return pickupAssignment.id;
+        }
+
+        // ---- DELIVERY / MIXED branch (unchanged behaviour) ----
+        if (pkg.deliveryAssignments.length > 0) {
+          throw new DomainValidationError(
+            `Package ${pkg.trackingId} already has an open delivery assignment`,
           );
         }
         const stockedHere = pkg.inventoryRecords.some(
@@ -1609,6 +1712,342 @@ export async function confirmPickup(
     },
   });
   return { batch: toBatchView(await loadBatchOr404(batchId)), taken, shortages, failed };
+}
+
+// ---------------------------------------------------------------------------
+// Vendor pickup collection — the rider collects from the sender
+// (delivery-workflow §2). Distinct from confirmPickup above, which
+// is the DELIVERY handout (warehouse → rider, OTP generation).
+// Collection moves PICKUP_ASSIGNED → PICKUP_IN_PROGRESS →
+// PICKED_UP, opens rider custody, completes the assignment, and
+// notifies the vendor — NO OTP is generated for pickups.
+// ---------------------------------------------------------------------------
+
+export const confirmPickupCollectionSchema = confirmPickupSchema;
+export type ConfirmPickupCollectionInput = ConfirmPickupInput;
+
+export interface PickupCollectionItem {
+  assignmentId: string;
+  trackingId: string;
+}
+
+export interface ConfirmPickupCollectionResult {
+  batch: DeliveryBatchView;
+  taken: PickupCollectionItem[];
+  shortages: { assignmentId: string; trackingId: string }[];
+  failed: { assignmentId: string; trackingId: string; reason: string }[];
+}
+
+export async function confirmPickupCollection(
+  actor: ActorContext,
+  batchId: string,
+  input: ConfirmPickupCollectionInput,
+): Promise<ConfirmPickupCollectionResult> {
+  const data = parse(confirmPickupSchema, input);
+  await requirePermAudited(actor, "pickup.confirm", "DeliveryBatch");
+  const batch = await loadBatchOr404(batchId);
+  if (batch.kind !== "PICKUP") {
+    throw new DomainValidationError(
+      "This batch is not a PICKUP batch — use the delivery pickup confirmation for delivery batches",
+    );
+  }
+  await assertAssignedRider(actor, { id: batch.id, driverId: batch.riderId }, "pickup_collection_not_own_batch");
+  if (batch.status !== "OPEN" && batch.status !== "IN_PROGRESS") {
+    throw new ConflictError(`Batch is ${batch.status} — pickup collection is no longer possible`);
+  }
+  const pending = await prisma.deliveryAssignment.findMany({
+    where: { batchId: batch.id, kind: "PICKUP", status: { in: ["PENDING", "ACCEPTED"] } },
+    include: { package: { select: { trackingId: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  const scanned = new Set(data.trackingIds.map((t) => t.trim()));
+  const taken: PickupCollectionItem[] = [];
+  const failed: ConfirmPickupCollectionResult["failed"] = [];
+  const shortages: ConfirmPickupCollectionResult["shortages"] = [];
+
+  for (const assignment of pending) {
+    if (!scanned.has(assignment.package.trackingId)) {
+      // Shortage for a pickup means "not collected yet" — the
+      // assignment stays PENDING so the rider can collect it on a
+      // later pass over the same batch (unlike the delivery
+      // handout, where a shortage is terminal for that run).
+      shortages.push({ assignmentId: assignment.id, trackingId: assignment.package.trackingId });
+      continue;
+    }
+    try {
+      await prisma.$transaction(async (tx) => {
+        await lockPackageRow(tx, assignment.packageId);
+        const fresh = await tx.deliveryAssignment.findUniqueOrThrow({
+          where: { id: assignment.id },
+          select: { status: true, kind: true },
+        });
+        if (fresh.kind !== "PICKUP") {
+          throw new ConflictError("Assignment is not a pickup assignment");
+        }
+        if (fresh.status !== "PENDING" && fresh.status !== "ACCEPTED") {
+          throw new ConflictError(`Assignment is ${fresh.status}`);
+        }
+        const pkg = await tx.package.findUniqueOrThrow({
+          where: { id: assignment.packageId },
+        });
+        if (pkg.operationalStatus !== "PICKUP_ASSIGNED") {
+          throw new ConflictError(`Package is ${pkg.operationalStatus}, not PICKUP_ASSIGNED`);
+        }
+        const now = new Date();
+        const started: TransitionInTxResult = await transitionPackageInTx(
+          tx,
+          actor,
+          pkg.id,
+          "PICKUP_IN_PROGRESS",
+          {
+            deliveryAssignmentId: assignment.id,
+            warehouseId: batch.warehouseId,
+            source: "MOBILE",
+          },
+        );
+        if (!started.transitioned || !started.eventId) {
+          throw new ConflictError("Package could not be moved to PICKUP_IN_PROGRESS");
+        }
+        const collected: TransitionInTxResult = await transitionPackageInTx(
+          tx,
+          actor,
+          pkg.id,
+          "PICKED_UP",
+          {
+            deliveryAssignmentId: assignment.id,
+            warehouseId: batch.warehouseId,
+            source: "MOBILE",
+          },
+        );
+        if (!collected.transitioned || !collected.eventId) {
+          throw new ConflictError("Package could not be moved to PICKED_UP");
+        }
+        // Custody: sender → rider. Pickup packages have no open
+        // custody before collection; close any stray row first so
+        // the chain stays single-open (mirrors confirmPickup).
+        await tx.packageCustody.updateMany({
+          where: { packageId: pkg.id, endedAt: null },
+          data: { endedAt: now },
+        });
+        await tx.packageCustody.create({
+          data: {
+            packageId: pkg.id,
+            custodianType: "USER",
+            custodianUserId: actor.userId,
+            trackingEventId: collected.eventId,
+          },
+        });
+        await tx.deliveryAssignment.update({
+          where: { id: assignment.id },
+          data: {
+            status: "COMPLETED",
+            startedAt: now,
+            completedAt: now,
+            version: { increment: 1 },
+          },
+        });
+        // Vendor confirmation, in-transaction (delivery-workflow
+        // §2 step 5: sender receives a confirmation). Category
+        // GENERAL is the existing suitable in-app category — no
+        // pickup-specific category exists in the vocabulary.
+        const order = await tx.order.findUnique({
+          where: { id: pkg.orderId },
+          select: { vendorId: true },
+        });
+        if (order?.vendorId) {
+          const recipients = (await vendorUserIds(tx, order.vendorId)).filter(
+            (id) => id !== actor.userId,
+          );
+          if (recipients.length > 0) {
+            await notifyUsersInTx(tx, recipients, {
+              category: "GENERAL",
+              title: `Pickup collected: ${pkg.trackingId}`,
+              body: `Package ${pkg.trackingId} was collected by the rider and is on its way to the origin warehouse.`,
+              entityType: "DeliveryAssignment",
+              entityId: assignment.id,
+              dedupeKey: `pickup-collected:${assignment.id}`,
+            });
+          }
+        }
+      });
+      taken.push({ assignmentId: assignment.id, trackingId: assignment.package.trackingId });
+    } catch (err) {
+      if (err instanceof ConflictError || err instanceof DomainValidationError) {
+        failed.push({
+          assignmentId: assignment.id,
+          trackingId: assignment.package.trackingId,
+          reason: err.message,
+        });
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  if (taken.length > 0 && batch.status === "OPEN") {
+    await prisma.deliveryBatch.update({
+      where: { id: batch.id },
+      data: { status: "IN_PROGRESS" },
+    });
+    await prisma.driver.update({
+      where: { id: batch.riderId },
+      data: { availabilityStatus: "ON_DELIVERY" },
+    });
+  }
+  await auditOps(actor, "pickup.collection_confirmed", "DeliveryBatch", batch.id, {
+    warehouseId: batch.warehouseId,
+    after: {
+      taken: taken.map((t) => t.trackingId),
+      shortages: shortages.map((s) => s.trackingId),
+      failed: failed.map((f) => ({ trackingId: f.trackingId, reason: f.reason })),
+    },
+  });
+  return { batch: toBatchView(await loadBatchOr404(batchId)), taken, shortages, failed };
+}
+
+export const recordPickupAttemptSchema = z.object({
+  reason: z.string().min(3).max(500),
+});
+export type RecordPickupAttemptInput = z.input<typeof recordPickupAttemptSchema>;
+
+export interface RecordPickupAttemptResult {
+  assignment: DeliveryAssignmentView;
+}
+
+/**
+ * Failed pickup (delivery-workflow §2): the assigned rider records
+ * why collection failed. The assignment ends FAILED, the package
+ * stays PICKUP_ASSIGNED with exceptionStatus PICKUP_FAILED (an
+ * EXCEPTION_RAISED event preserves the reason), and warehouse
+ * admins + vendor users are notified in-transaction so the WA can
+ * reschedule — a later addBatchPackages to a new PICKUP batch
+ * clears the flag (see the PICKUP branch there).
+ */
+export async function recordPickupAttempt(
+  actor: ActorContext,
+  assignmentId: string,
+  input: RecordPickupAttemptInput,
+): Promise<RecordPickupAttemptResult> {
+  const data = parse(recordPickupAttemptSchema, input);
+  const reason = data.reason.trim();
+  if (reason.length < 3) {
+    throw new DomainValidationError("A reason of at least 3 characters is required");
+  }
+  await requirePermAudited(actor, "pickup.confirm", "DeliveryAssignment");
+  const assignment = await loadAssignmentOr404(assignmentId);
+  await assertAssignedRider(actor, assignment, "pickup_attempt_not_own_assignment");
+  if (assignment.kind !== "PICKUP") {
+    throw new DomainValidationError("This assignment is not a pickup assignment");
+  }
+  const batch = assignment.batchId ? await loadBatchOr404(assignment.batchId) : null;
+  if (!batch || batch.kind !== "PICKUP") {
+    throw new DomainValidationError("This assignment does not belong to a PICKUP batch");
+  }
+  if (assignment.status !== "PENDING" && assignment.status !== "ACCEPTED") {
+    throw new ConflictError(
+      `Assignment is ${assignment.status} — a pickup attempt can only be recorded for a pending pickup`,
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await lockPackageRow(tx, assignment.packageId);
+    await lockAssignmentRow(tx, assignment.id);
+    const fresh = await tx.deliveryAssignment.findUniqueOrThrow({
+      where: { id: assignment.id },
+      select: { status: true, kind: true },
+    });
+    if (fresh.kind !== "PICKUP") {
+      throw new ConflictError("Assignment is not a pickup assignment");
+    }
+    if (fresh.status !== "PENDING" && fresh.status !== "ACCEPTED") {
+      throw new ConflictError(
+        `Assignment is ${fresh.status} — a pickup attempt can only be recorded for a pending pickup`,
+      );
+    }
+    const pkg = await tx.package.findUniqueOrThrow({
+      where: { id: assignment.packageId },
+    });
+    if (pkg.operationalStatus !== "PICKUP_ASSIGNED") {
+      throw new ConflictError(
+        `Package is ${pkg.operationalStatus} — no pickup attempt can be recorded`,
+      );
+    }
+    const priorAttempts = await tx.deliveryAttempt.count({
+      where: { packageId: pkg.id },
+    });
+    await tx.deliveryAttempt.create({
+      data: {
+        assignmentId: assignment.id,
+        packageId: pkg.id,
+        attemptNumber: priorAttempts + 1,
+        result: "PICKUP_FAILED",
+        failureReason: reason,
+        nextAction: "REDELIVER",
+        notes: reason,
+        recordedById: actor.userId,
+      },
+    });
+    const now = new Date();
+    await tx.deliveryAssignment.update({
+      where: { id: assignment.id },
+      data: {
+        status: "FAILED",
+        completedAt: now,
+        failureNote: reason,
+        version: { increment: 1 },
+      },
+    });
+    await tx.package.update({
+      where: { id: pkg.id },
+      data: { exceptionStatus: "PICKUP_FAILED" },
+    });
+    await tx.trackingEvent.create({
+      data: {
+        packageId: pkg.id,
+        shipmentId: pkg.shipmentId,
+        orderId: pkg.orderId,
+        subjectType: "PACKAGE",
+        eventType: "EXCEPTION_RAISED",
+        previousStatus: pkg.operationalStatus,
+        newStatus: pkg.operationalStatus,
+        actorId: actor.userId,
+        actorRole: actor.primaryRole,
+        warehouseId: batch.warehouseId,
+        deliveryAssignmentId: assignment.id,
+        source: "MOBILE",
+        notes: `Pickup failed: ${reason}`,
+      },
+    });
+    // WA (batch warehouse) + vendor users, in-transaction.
+    const order = await tx.order.findUnique({
+      where: { id: pkg.orderId },
+      select: { vendorId: true },
+    });
+    const recipients = new Set<string>();
+    for (const id of await warehouseAdminUserIds(tx, batch.warehouseId)) {
+      recipients.add(id);
+    }
+    if (order?.vendorId) {
+      for (const id of await vendorUserIds(tx, order.vendorId)) recipients.add(id);
+    }
+    recipients.delete(actor.userId);
+    if (recipients.size > 0) {
+      await notifyUsersInTx(tx, recipients, {
+        category: "GENERAL",
+        title: `Pickup failed: ${pkg.trackingId}`,
+        body: `Pickup for package ${pkg.trackingId} failed: ${reason}. The warehouse will reschedule.`,
+        entityType: "DeliveryAssignment",
+        entityId: assignment.id,
+        dedupeKey: `pickup-failed:${assignment.id}`,
+      });
+    }
+  });
+
+  await auditOps(actor, "pickup.attempt_recorded", "DeliveryAssignment", assignment.id, {
+    warehouseId: batch.warehouseId,
+    after: { reason },
+  });
+  return { assignment: toAssignmentView(await loadAssignmentOr404(assignmentId)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -2907,6 +3346,116 @@ export async function listEligibleDeliveryPackages(
     {
       deliveryAssignments: {
         none: { kind: "DELIVERY", status: { in: [...ACTIVE_ASSIGNMENT_STATUSES] } },
+      },
+    },
+    {
+      returnRequests: {
+        none: {
+          status: {
+            in: [
+              "REQUESTED",
+              "APPROVED",
+              "COLLECTION_ASSIGNED",
+              "COLLECTED",
+              "IN_TRANSIT",
+              "RECEIVED",
+              "INSPECTED",
+            ],
+          },
+        },
+      },
+    },
+  ];
+  if (query.search) {
+    const term = query.search.trim();
+    if (term) {
+      conditions.push({
+        OR: [
+          { trackingId: { contains: term, mode: "insensitive" } },
+          { recipientName: { contains: term, mode: "insensitive" } },
+          { recipientPhone: { contains: term } },
+        ],
+      });
+    }
+  }
+  const where: Prisma.PackageWhereInput = { AND: conditions };
+  const { skip, take, page, pageSize } = pageArgs(query.page ?? 1, query.pageSize ?? 25);
+  const [total, rows] = await Promise.all([
+    prisma.package.count({ where }),
+    prisma.package.findMany({
+      where,
+      orderBy: { updatedAt: "asc" },
+      skip,
+      take,
+      select: {
+        id: true,
+        trackingId: true,
+        operationalStatus: true,
+        recipientName: true,
+        deliveryCity: true,
+        deliveryDistrict: true,
+        codAmountPaisa: true,
+      },
+    }),
+  ]);
+  return {
+    items: rows.map((r) => ({
+      packageId: r.id,
+      trackingId: r.trackingId,
+      status: r.operationalStatus,
+      recipientName: r.recipientName,
+      destinationCity: r.deliveryCity,
+      destinationDistrict: r.deliveryDistrict,
+      codAmountPaisa: r.codAmountPaisa.toString(),
+    })),
+    meta: pageMeta(total, page, pageSize),
+  };
+}
+
+/** Packages that can be assigned for vendor pickup at a warehouse
+ *  right now (delivery-workflow §2): BOOKED (or PICKUP_ASSIGNED
+ *  after a failed pickup, ready to reschedule), pickup method
+ *  RIDER_PICKUP on the order, routed to this warehouse as origin
+ *  (currentWarehouseId), not blocked by an exception, not already
+ *  actively pickup-assigned, not under an open return. No stock
+ *  requirement — stock is created by the receiving scan after
+ *  collection. Mirrors listEligibleDeliveryPackages. */
+export async function listEligiblePickupPackages(
+  actor: ActorContext,
+  warehouseId: string,
+  query: ListEligibleQuery = {},
+): Promise<{
+  items: {
+    packageId: string;
+    trackingId: string;
+    status: string;
+    recipientName: string;
+    destinationCity: string | null;
+    destinationDistrict: string | null;
+    codAmountPaisa: string;
+  }[];
+  meta: ReturnType<typeof pageMeta>;
+}> {
+  await requirePermAudited(actor, "pickup.assign", "DeliveryBatch");
+  await assertWarehouseScope(actor, warehouseId, "DeliveryBatch");
+  const conditions: Prisma.PackageWhereInput[] = [
+    { currentWarehouseId: warehouseId },
+    { order: { pickupMethod: "RIDER_PICKUP" } },
+    {
+      OR: [
+        { operationalStatus: STATUS_BOOKED },
+        {
+          AND: [
+            { operationalStatus: STATUS_PICKUP_ASSIGNED },
+            { exceptionStatus: "PICKUP_FAILED" },
+          ],
+        },
+      ],
+    },
+    { exceptionStatus: { notIn: [...ASSIGNMENT_BLOCKING_EXCEPTIONS] } },
+    {
+      deliveryAssignments: {
+        none: { kind: "PICKUP", status: { in: [...ACTIVE_ASSIGNMENT_STATUSES] } },
       },
     },
     {

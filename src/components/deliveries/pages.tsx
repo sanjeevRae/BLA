@@ -12,6 +12,7 @@ import {
   listDeliveryBatches,
   listDeliveryRiders,
   listEligibleDeliveryPackages,
+  listEligiblePickupPackages,
   listRiderBatches,
   type DeliveryBatchView,
 } from "@/server/services/deliveries";
@@ -36,6 +37,8 @@ import {
   CreateBatchForm,
   DeliverForm,
   InspectReturnForm,
+  PickupCollectionForm,
+  PickupFailedForm,
   PickupForm,
   ReassignBatchForm,
   ReassignForm,
@@ -245,10 +248,15 @@ export async function DeliveryBatchDetailPage({
   batchId: string;
 }) {
   const { batch, assignments } = await getDeliveryBatch(actor, batchId);
-  const canAssign = hasPermission(actor, "delivery.assign");
+  const isPickupBatch = batch.kind === "PICKUP";
+  const canAssign = isPickupBatch
+    ? hasPermission(actor, "pickup.assign")
+    : hasPermission(actor, "delivery.assign");
   const eligible =
     canAssign && batch.status === "OPEN"
-      ? (await listEligibleDeliveryPackages(actor, batch.warehouseId, { pageSize: 100 })).items
+      ? isPickupBatch
+        ? (await listEligiblePickupPackages(actor, batch.warehouseId, { pageSize: 100 })).items
+        : (await listEligibleDeliveryPackages(actor, batch.warehouseId, { pageSize: 100 })).items
       : [];
   const riders =
     canAssign && (batch.status === "OPEN" || batch.status === "IN_PROGRESS")
@@ -290,7 +298,13 @@ export async function DeliveryBatchDetailPage({
       ) : null}
 
       {canAssign && batch.status === "OPEN" ? (
-        <SectionCard title="Add packages ready at this warehouse">
+        <SectionCard
+          title={
+            isPickupBatch
+              ? "Add packages awaiting rider pickup at this warehouse"
+              : "Add packages ready at this warehouse"
+          }
+        >
           <AddPackagesForm batchId={batch.id} eligible={eligible} />
         </SectionCard>
       ) : null}
@@ -590,6 +604,7 @@ export async function RiderBatchPage({
 }) {
   const { batch, assignments } = await getRiderBatch(actor, batchId);
   const canReportIncident = hasPermission(actor, "incident.report");
+  const isPickupBatch = batch.kind === "PICKUP";
   const pending = assignments.filter(
     (a) => a.status === "PENDING" || a.status === "ACCEPTED",
   );
@@ -604,16 +619,26 @@ export async function RiderBatchPage({
             {batch.warehouseCode} · {batch.batchDate}
           </h1>
           <DeliveryStatusBadge status={batch.status} />
+          {isPickupBatch ? <DeliveryStatusBadge status="PICKUP" /> : null}
         </div>
       </div>
 
       {pending.length > 0 ? (
-        <SectionCard title="Confirm pickup">
-          <PickupForm
-            batchId={batch.id}
-            pending={pending.map((a) => ({ assignmentId: a.id, trackingId: a.trackingId }))}
-          />
-        </SectionCard>
+        isPickupBatch ? (
+          <SectionCard title="Confirm collection from sender">
+            <PickupCollectionForm
+              batchId={batch.id}
+              pending={pending.map((a) => ({ assignmentId: a.id, trackingId: a.trackingId }))}
+            />
+          </SectionCard>
+        ) : (
+          <SectionCard title="Confirm pickup">
+            <PickupForm
+              batchId={batch.id}
+              pending={pending.map((a) => ({ assignmentId: a.id, trackingId: a.trackingId }))}
+            />
+          </SectionCard>
+        )
       ) : null}
 
       {assignments.map((a) => (
@@ -659,7 +684,10 @@ export async function RiderBatchPage({
               </div>
             </dl>
             {a.failureNote ? <p className="text-[12px] text-slate2">{a.failureNote}</p> : null}
-            {a.status === "IN_PROGRESS" ? (
+            {isPickupBatch && (a.status === "PENDING" || a.status === "ACCEPTED") ? (
+              <PickupFailedForm assignmentId={a.id} />
+            ) : null}
+            {!isPickupBatch && a.status === "IN_PROGRESS" ? (
               <div className="grid gap-4">
                 <DeliverForm assignment={a} />
                 <AttemptForm assignment={a} />

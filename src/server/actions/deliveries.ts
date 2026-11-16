@@ -17,10 +17,12 @@ import {
   closeBatch,
   confirmDelivery,
   confirmPickup,
+  confirmPickupCollection,
   createDeliveryBatch,
   reassignAssignment,
   reassignBatch,
   recordDeliveryAttempt,
+  recordPickupAttempt,
   regenerateOtp,
   scanBackPackage,
   type AddBatchPackagesInput,
@@ -29,6 +31,8 @@ import {
   type CloseBatchResult,
   type ConfirmDeliveryInput,
   type ConfirmDeliveryResult,
+  type ConfirmPickupCollectionInput,
+  type ConfirmPickupCollectionResult,
   type ConfirmPickupInput,
   type ConfirmPickupResult,
   type CreateDeliveryBatchInput,
@@ -39,6 +43,8 @@ import {
   type ReassignBatchResult,
   type RecordAttemptInput,
   type RecordAttemptResult,
+  type RecordPickupAttemptInput,
+  type RecordPickupAttemptResult,
   type ScanBackInput,
   type ScanBackResult,
 } from "@/server/services/deliveries";
@@ -168,6 +174,24 @@ export async function confirmPickupAction(
   input: ConfirmPickupInput,
 ): Promise<ActionResult<ConfirmPickupResult>> {
   const result = await withActor((actor) => confirmPickup(actor, batchId, input));
+  if (result.success) revalidateDeliverySurfaces();
+  return result;
+}
+
+export async function confirmPickupCollectionAction(
+  batchId: string,
+  input: ConfirmPickupCollectionInput,
+): Promise<ActionResult<ConfirmPickupCollectionResult>> {
+  const result = await withActor((actor) => confirmPickupCollection(actor, batchId, input));
+  if (result.success) revalidateDeliverySurfaces();
+  return result;
+}
+
+export async function recordPickupAttemptAction(
+  assignmentId: string,
+  input: RecordPickupAttemptInput,
+): Promise<ActionResult<RecordPickupAttemptResult>> {
+  const result = await withActor((actor) => recordPickupAttempt(actor, assignmentId, input));
   if (result.success) revalidateDeliverySurfaces();
   return result;
 }
