@@ -2,6 +2,7 @@ import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { SectionCard } from "@/components/warehouses/ui";
 import { LoadScanForm, TripProgressForms } from "@/components/transfers/forms";
+import { DriverTripIncidentForm } from "@/components/operations/forms";
 import { getDriver } from "@/server/services/drivers";
 import { getTransfer, type TransferView } from "@/server/services/transfers";
 import { getMyActiveTrip, listTrips, type TripView } from "@/server/services/trips";
@@ -266,6 +267,18 @@ export async function LinehaulHomePage({ actor }: { actor: ActorContext }) {
             ) : null}
 
             <TripActions actor={actor} trip={activeTrip} transfer={transfer} />
+
+            {hasPermission(actor, "incident.report") ? (
+              <div className="border-t border-line pt-3">
+                <DriverTripIncidentForm
+                  tripId={activeTrip.id}
+                  packages={activeTrip.packages.map((p) => ({
+                    packageId: p.packageId,
+                    trackingId: p.trackingId,
+                  }))}
+                />
+              </div>
+            ) : null}
           </div>
         ) : (
           <p className="text-[14px] text-ink">

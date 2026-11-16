@@ -34,6 +34,7 @@ import {
   closeIncidentAction,
   closeTicketAction,
   createIncidentAction,
+  createIncidentFollowUpTaskAction,
   createTaskAction,
   escalateIncidentAction,
   escalateTicketAction,
@@ -163,6 +164,264 @@ export function ReportIncidentForm({ warehouses }: { warehouses: WarehouseOption
       <div>
         <button type="submit" className={primaryButtonClass} disabled={busy}>
           {busy ? "Reporting…" : "Report incident"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** Driver-relevant incident categories (Phase 7): the subset a
+ *  rider / line-haul driver can plausibly hit on the road. The
+ *  service accepts the full catalog; the driver surfaces offer
+ *  only what a driver can act on. */
+export const DRIVER_INCIDENT_CATEGORIES = [
+  "DRIVER_BREAKDOWN",
+  "VEHICLE_ACCIDENT",
+  "DELAYED_SHIPMENT",
+  "DAMAGED_PACKAGE",
+  "MISSING_PACKAGE",
+  "DELIVERY_FAILURE",
+  "PICKUP_FAILURE",
+  "INCORRECT_ADDRESS",
+  "CUSTOMER_REFUSAL",
+] as const;
+
+/** Rider "Report problem" form for one delivery assignment
+ *  (Phase 7). Posts to createIncident with the assignment +
+ *  package links; the service validates the assignment is the
+ *  reporting driver's own. */
+export function DriverAssignmentIncidentForm({
+  assignmentId,
+  packageId,
+}: {
+  assignmentId: string;
+  packageId: string;
+}) {
+  const { busy, error, notice, run } = useActionRunner();
+  const [category, setCategory] = useState<string>("DELIVERY_FAILURE");
+  const [description, setDescription] = useState("");
+
+  return (
+    <form
+      className="grid gap-2 border-t border-line pt-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run(
+          () =>
+            createIncidentAction({
+              category: category as never,
+              description,
+              packageId,
+              deliveryAssignmentId: assignmentId,
+            }),
+          "Problem reported — dispatch has the incident",
+        ).then((r) => {
+          if (r) setDescription("");
+        });
+      }}
+    >
+      <span className={labelClass}>Report a problem with this delivery</span>
+      <div className="flex flex-wrap gap-2">
+        <select
+          className={inputClass}
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          aria-label="Problem category"
+        >
+          {DRIVER_INCIDENT_CATEGORIES.map((c) => (
+            <option key={c} value={c}>{c.replaceAll("_", " ")}</option>
+          ))}
+        </select>
+      </div>
+      <textarea
+        className={inputClass}
+        rows={2}
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        placeholder="What happened?"
+        required
+        minLength={5}
+      />
+      <Feedback error={error} notice={notice} />
+      <div>
+        <button
+          type="submit"
+          className={subtleButtonClass}
+          disabled={busy || description.trim().length < 5}
+        >
+          {busy ? "Reporting…" : "Report problem"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** Line-haul "Report problem" form at trip level (Phase 7). Posts
+ *  to createIncident with the trip link and an optional package
+ *  from the trip manifest; the service validates the trip is the
+ *  reporting driver's own. The trip delay form is a separate,
+ *  unchanged flow — this raises a formal incident. */
+export function DriverTripIncidentForm({
+  tripId,
+  packages,
+}: {
+  tripId: string;
+  packages: { packageId: string; trackingId: string }[];
+}) {
+  const { busy, error, notice, run } = useActionRunner();
+  const [category, setCategory] = useState<string>("DRIVER_BREAKDOWN");
+  const [description, setDescription] = useState("");
+  const [packageId, setPackageId] = useState("");
+
+  return (
+    <form
+      className="grid gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run(
+          () =>
+            createIncidentAction({
+              category: category as never,
+              description,
+              tripId,
+              packageId: packageId || undefined,
+            }),
+          "Problem reported — dispatch has the incident",
+        ).then((r) => {
+          if (r) setDescription("");
+        });
+      }}
+    >
+      <span className={labelClass}>Report a problem on this trip</span>
+      <div className="flex flex-wrap gap-2">
+        <select
+          className={inputClass}
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          aria-label="Problem category"
+        >
+          {DRIVER_INCIDENT_CATEGORIES.map((c) => (
+            <option key={c} value={c}>{c.replaceAll("_", " ")}</option>
+          ))}
+        </select>
+        {packages.length > 0 ? (
+          <select
+            className={inputClass}
+            value={packageId}
+            onChange={(e) => setPackageId(e.target.value)}
+            aria-label="Package (optional)"
+          >
+            <option value="">Whole trip (no single package)</option>
+            {packages.map((p) => (
+              <option key={p.packageId} value={p.packageId}>{p.trackingId}</option>
+            ))}
+          </select>
+        ) : null}
+      </div>
+      <textarea
+        className={inputClass}
+        rows={2}
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        placeholder="What happened?"
+        required
+        minLength={5}
+      />
+      <Feedback error={error} notice={notice} />
+      <div>
+        <button
+          type="submit"
+          className={subtleButtonClass}
+          disabled={busy || description.trim().length < 5}
+        >
+          {busy ? "Reporting…" : "Report problem"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** Incident → follow-up task (Phase 7). Shown only to
+ *  incident.manage holders (the page gates it); the service
+ *  re-checks the permission and validates the assignee as staff. */
+export function IncidentFollowUpTaskForm({
+  incidentId,
+  users,
+}: {
+  incidentId: string;
+  users: StaffUserOption[];
+}) {
+  const { busy, error, notice, run } = useActionRunner();
+  const [assigneeId, setAssigneeId] = useState("");
+  const [title, setTitle] = useState("");
+  const [priority, setPriority] = useState("NORMAL");
+  const [dueAt, setDueAt] = useState("");
+
+  return (
+    <form
+      className="grid gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run(
+          () =>
+            createIncidentFollowUpTaskAction(incidentId, {
+              assigneeId,
+              title: title.trim() || undefined,
+              priority: priority as never,
+              dueAt: dueAt ? new Date(dueAt) : undefined,
+            }),
+          "Follow-up task created",
+        ).then((r) => {
+          if (r) {
+            setTitle("");
+            setAssigneeId("");
+          }
+        });
+      }}
+    >
+      <span className={labelClass}>Create a follow-up task for this incident</span>
+      <div className="flex flex-wrap gap-2">
+        <select
+          className={inputClass}
+          value={assigneeId}
+          onChange={(e) => setAssigneeId(e.target.value)}
+          required
+          aria-label="Task assignee"
+        >
+          <option value="">Select staff…</option>
+          {users.map((u) => (
+            <option key={u.id} value={u.id}>{u.fullName} ({u.roles.join(", ")})</option>
+          ))}
+        </select>
+        <select
+          className={inputClass}
+          value={priority}
+          onChange={(e) => setPriority(e.target.value)}
+          aria-label="Task priority"
+        >
+          {["LOW", "NORMAL", "HIGH", "URGENT"].map((p) => (
+            <option key={p} value={p}>{p}</option>
+          ))}
+        </select>
+        <input
+          type="datetime-local"
+          className={inputClass}
+          value={dueAt}
+          onChange={(e) => setDueAt(e.target.value)}
+          aria-label="Task due (optional)"
+        />
+      </div>
+      <input
+        className={inputClass}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        placeholder="Task title (defaults to “Follow up incident …”)"
+        minLength={3}
+      />
+      <Feedback error={error} notice={notice} />
+      <div>
+        <button type="submit" className={subtleButtonClass} disabled={busy || !assigneeId}>
+          Create follow-up task
         </button>
       </div>
     </form>
@@ -459,6 +718,11 @@ export function TaskWorkflowForms({
   const [comment, setComment] = useState("");
   const [assigneeId, setAssigneeId] = useState("");
   const [reason, setReason] = useState("");
+  // Phase 7: the service requires a reason note when moving to
+  // BLOCKED (it persists as a task comment). The note is offered
+  // for every transition and required for the blocked ones.
+  const [statusNote, setStatusNote] = useState("");
+  const blockedNoteOk = statusNote.replace(/\s/g, "").length >= 3;
   const next = TASK_NEXT[status] ?? [];
   const terminal = status === "CLOSED" || status === "CANCELLED";
 
@@ -466,18 +730,48 @@ export function TaskWorkflowForms({
     <div className="grid gap-4">
       <Feedback error={error} notice={notice} />
       {next.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {next.map((n) => (
-            <button
-              key={n.status}
-              type="button"
-              className={n.status === "SUBMITTED" || n.status === "VERIFIED" || n.status === "CLOSED" ? primaryButtonClass : subtleButtonClass}
-              disabled={busy}
-              onClick={() => void run(() => updateTaskStatusAction(taskId, { status: n.status as never }), `Task moved to ${n.status}`)}
-            >
-              {n.label}
-            </button>
-          ))}
+        <div className="grid gap-2">
+          <label className="grid gap-1">
+            <span className={labelClass}>
+              Note for the status change (required when marking blocked)
+            </span>
+            <input
+              className={inputClass}
+              value={statusNote}
+              onChange={(e) => setStatusNote(e.target.value)}
+              placeholder="e.g. Waiting on the vendor to confirm the count"
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {next.map((n) => (
+              <button
+                key={n.status}
+                type="button"
+                className={n.status === "SUBMITTED" || n.status === "VERIFIED" || n.status === "CLOSED" ? primaryButtonClass : subtleButtonClass}
+                disabled={busy || (n.status === "BLOCKED" && !blockedNoteOk)}
+                onClick={() =>
+                  void run(
+                    () =>
+                      updateTaskStatusAction(taskId, {
+                        status: n.status as never,
+                        note: statusNote.trim() || undefined,
+                      }),
+                    `Task moved to ${n.status}`,
+                  ).then((r) => {
+                    if (r) setStatusNote("");
+                  })
+                }
+              >
+                {n.label}
+              </button>
+            ))}
+          </div>
+          {next.some((n) => n.status === "BLOCKED") && !blockedNoteOk ? (
+            <p className="text-[12px] text-slate2">
+              Add a reason above to enable “Mark blocked” — a blocked task must say what it is
+              waiting on.
+            </p>
+          ) : null}
         </div>
       ) : null}
 

@@ -17,12 +17,14 @@ import {
   assignIncident,
   closeIncident,
   createIncident,
+  createIncidentFollowUpTask,
   escalateIncident,
   proposeIncidentResolution,
   resolveIncident,
   type AddEvidenceInput,
   type AddIncidentNoteInput,
   type AssignIncidentInput,
+  type CreateIncidentFollowUpTaskInput,
   type CreateIncidentInput,
   type EscalateIncidentInput,
   type ProposeResolutionInput,
@@ -159,6 +161,15 @@ export async function resolveIncidentAction(incidentId: string, input: ResolveIn
 
 export async function closeIncidentAction(incidentId: string) {
   const result = await withActor((actor) => closeIncident(actor, incidentId));
+  if (result.success) revalidateOps();
+  return result;
+}
+
+export async function createIncidentFollowUpTaskAction(
+  incidentId: string,
+  input: CreateIncidentFollowUpTaskInput,
+) {
+  const result = await withActor((actor) => createIncidentFollowUpTask(actor, incidentId, input));
   if (result.success) revalidateOps();
   return result;
 }

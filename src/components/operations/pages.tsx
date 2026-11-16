@@ -26,6 +26,7 @@ import {
 } from "@/server/services/tasks";
 import {
   CreateTaskForm,
+  IncidentFollowUpTaskForm,
   IncidentWorkflowForms,
   MarkAllReadButton,
   MarkReadButton,
@@ -213,6 +214,12 @@ export async function IncidentDetailPage({
             users={users}
             hasPackage={Boolean(incident.packageId)}
           />
+        </SectionCard>
+      ) : null}
+
+      {canManage ? (
+        <SectionCard title="Follow-up task">
+          <IncidentFollowUpTaskForm incidentId={incident.id} users={users} />
         </SectionCard>
       ) : null}
 

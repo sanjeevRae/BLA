@@ -425,6 +425,21 @@ export async function updateTaskStatus(
   await assertTaskAccessible(actor, row);
   const target = data.status as TaskStatus;
 
+  // Phase 7: BLOCKED must carry a reason. A blocked task with no
+  // recorded blocker is unactionable — nobody can tell what would
+  // unblock it. The note persists as a TaskComment in the transition
+  // transaction below (the existing note path), so the reason is
+  // part of the task's permanent thread. Checked before the
+  // transaction so a refused block leaves the state untouched.
+  if (target === "BLOCKED") {
+    const nonSpaceChars = (data.note ?? "").replace(/\s/g, "").length;
+    if (nonSpaceChars < 3) {
+      throw new DomainValidationError(
+        "Moving a task to BLOCKED requires a reason (note) of at least 3 characters",
+      );
+    }
+  }
+
   await prisma.$transaction(async (tx) => {
     await lockTaskRow(tx, taskId);
     const fresh = await tx.task.findUniqueOrThrow({

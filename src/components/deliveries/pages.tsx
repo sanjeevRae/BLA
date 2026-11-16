@@ -42,6 +42,7 @@ import {
   ScanBackForm,
   type WarehouseOption,
 } from "@/components/deliveries/forms";
+import { DriverAssignmentIncidentForm } from "@/components/operations/forms";
 
 /**
  * Phase 6 delivery + returns screens (warehouse admin + staff
@@ -579,6 +580,7 @@ export async function RiderBatchPage({
   batchId: string;
 }) {
   const { batch, assignments } = await getRiderBatch(actor, batchId);
+  const canReportIncident = hasPermission(actor, "incident.report");
   const pending = assignments.filter(
     (a) => a.status === "PENDING" || a.status === "ACCEPTED",
   );
@@ -653,6 +655,9 @@ export async function RiderBatchPage({
                 <DeliverForm assignment={a} />
                 <AttemptForm assignment={a} />
               </div>
+            ) : null}
+            {canReportIncident ? (
+              <DriverAssignmentIncidentForm assignmentId={a.id} packageId={a.packageId} />
             ) : null}
           </div>
         </SectionCard>

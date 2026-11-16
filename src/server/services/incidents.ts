@@ -24,6 +24,7 @@ import {
   INCIDENT_SEVERITIES,
   INCIDENT_STATUSES,
   INCIDENT_TEAMS,
+  TASK_PRIORITIES,
   defaultTeamForCategory,
   type IncidentCategory,
   type IncidentSeverity,
@@ -39,11 +40,13 @@ import {
   auditOps,
   isUnscoped,
 } from "@/server/services/warehouse-ops-shared";
+import { ACTIVE_TRIP_STATUSES } from "@/lib/transfers/domain";
 import {
   notifyUsersInTx,
   userIdsWithRoles,
   warehouseAdminUserIds,
 } from "@/server/services/notifications";
+import { createTaskInTx } from "@/server/services/tasks";
 
 /**
  * Incidents / exceptions register (docs/exception-management.md;
@@ -367,6 +370,11 @@ export const createIncidentSchema = z.object({
   packageId: z.string().uuid().optional(),
   orderId: z.string().uuid().optional(),
   transferId: z.string().uuid().optional(),
+  // Phase 7 (V2): driver reporting links. The Incident model has
+  // always carried both columns; manual reports may now set them,
+  // with driver-actor scope validated in createIncident below.
+  tripId: z.string().uuid().optional(),
+  deliveryAssignmentId: z.string().uuid().optional(),
   responsibleTeam: z.enum(INCIDENT_TEAMS).optional(),
 });
 export type CreateIncidentInput = z.input<typeof createIncidentSchema>;
@@ -387,10 +395,123 @@ export async function createIncident(
   }
 
   // Validate links + reporter scope over them.
-  let warehouseId = data.warehouseId ?? null;
-  if (data.packageId) {
+  //
+  // Phase 7 (V2) driver scope: riders / line-haul drivers hold
+  // incident.report but (usually) no warehouse memberships — their
+  // scope is their work, not a warehouse. For a driver actor
+  // (driverId set, not vendor/customer/unscoped) each link is
+  // validated against the driver's own assignments / trips:
+  //  - tripId: the trip must be the driver's own.
+  //  - deliveryAssignmentId: the assignment must be the driver's own.
+  //  - packageId: the driver must hold an active delivery assignment
+  //    for the package, or the package must be manifested on a
+  //    transfer whose (active) trip is the driver's own.
+  // A driver who passes one of these checks is NOT denied by the
+  // warehouse-membership checks below (their package may sit in a
+  // warehouse they are not a member of — that is the normal case
+  // mid-route). Every denial is audit-logged like the other links.
+  const isDriverActor =
+    Boolean(actor.driverId) && !actor.vendorId && !actor.customerId && !isUnscoped(actor);
+  let driverLinkValidated = false;
+  let tripOriginWarehouseId: string | null = null;
+  let assignmentWarehouseId: string | null = null;
+  // An assignment link implies its package when none is named.
+  let effectivePackageId = data.packageId ?? null;
+
+  if (data.tripId) {
+    const trip = await prisma.trip.findUnique({
+      where: { id: data.tripId },
+      select: {
+        id: true,
+        driverId: true,
+        transfer: { select: { originWarehouseId: true, destinationWarehouseId: true } },
+      },
+    });
+    if (!trip) throw new NotFoundError("Linked trip not found");
+    if (actor.customerId || actor.vendorId) {
+      await auditAccessDenied(actor, "Incident", { reason: "trip_link_not_raiser_side" });
+      throw new AuthorizationError("Only staff and drivers can report incidents against trips");
+    }
+    if (isDriverActor) {
+      if (trip.driverId !== actor.driverId) {
+        await auditAccessDenied(actor, "Incident", {
+          entityId: trip.id,
+          reason: "trip_not_own_driver",
+        });
+        throw new AuthorizationError("Drivers can only report incidents on their own trips");
+      }
+      driverLinkValidated = true;
+    } else if (
+      !isUnscoped(actor) &&
+      !actor.warehouseIds.includes(trip.transfer.originWarehouseId) &&
+      !actor.warehouseIds.includes(trip.transfer.destinationWarehouseId)
+    ) {
+      await auditAccessDenied(actor, "Incident", {
+        warehouseId: trip.transfer.destinationWarehouseId,
+        reason: "trip_out_of_scope",
+      });
+      throw new AuthorizationError("Trip is outside your warehouse scope");
+    }
+    tripOriginWarehouseId = trip.transfer.originWarehouseId;
+  }
+
+  if (data.deliveryAssignmentId) {
+    const assignment = await prisma.deliveryAssignment.findUnique({
+      where: { id: data.deliveryAssignmentId },
+      select: {
+        id: true,
+        driverId: true,
+        packageId: true,
+        batch: { select: { warehouseId: true } },
+      },
+    });
+    if (!assignment) throw new NotFoundError("Linked delivery assignment not found");
+    if (actor.customerId || actor.vendorId) {
+      await auditAccessDenied(actor, "Incident", { reason: "assignment_link_not_raiser_side" });
+      throw new AuthorizationError(
+        "Only staff and drivers can report incidents against delivery assignments",
+      );
+    }
+    if (isDriverActor) {
+      if (assignment.driverId !== actor.driverId) {
+        await auditAccessDenied(actor, "Incident", {
+          entityId: assignment.id,
+          reason: "assignment_not_own_driver",
+        });
+        throw new AuthorizationError(
+          "Drivers can only report incidents on their own delivery assignments",
+        );
+      }
+      driverLinkValidated = true;
+    } else if (
+      !isUnscoped(actor) &&
+      assignment.batch &&
+      !actor.warehouseIds.includes(assignment.batch.warehouseId)
+    ) {
+      await auditAccessDenied(actor, "Incident", {
+        entityId: assignment.id,
+        warehouseId: assignment.batch.warehouseId,
+        reason: "assignment_out_of_scope",
+      });
+      throw new AuthorizationError("Delivery assignment is outside your warehouse scope");
+    }
+    if (effectivePackageId && effectivePackageId !== assignment.packageId) {
+      throw new DomainValidationError(
+        "The linked package does not belong to the linked delivery assignment",
+      );
+    }
+    effectivePackageId = effectivePackageId ?? assignment.packageId;
+    assignmentWarehouseId = assignment.batch?.warehouseId ?? null;
+  }
+
+  // Warehouse derivation preference (Phase 7): the trip's transfer
+  // origin, then the assignment's batch warehouse, then the
+  // package's current warehouse — applied by validating the links
+  // in that order with `??=` semantics below.
+  let warehouseId = data.warehouseId ?? tripOriginWarehouseId ?? assignmentWarehouseId;
+  if (effectivePackageId) {
     const pkg = await prisma.package.findUnique({
-      where: { id: data.packageId },
+      where: { id: effectivePackageId },
       select: {
         id: true,
         currentWarehouseId: true,
@@ -407,10 +528,53 @@ export async function createIncident(
       await auditAccessDenied(actor, "Incident", { reason: "package_not_own_customer" });
       throw new AuthorizationError("Customers can only report incidents on their own packages");
     }
+    // Driver package access (Phase 7): an active delivery assignment
+    // for the package, or a manifest line on one of the driver's own
+    // active trips. Either one validates the link for a driver.
+    let driverHasPackageAccess = false;
+    if (isDriverActor) {
+      const ownAssignment = await prisma.deliveryAssignment.findFirst({
+        where: {
+          packageId: pkg.id,
+          driverId: actor.driverId!,
+          status: { in: ["PENDING", "ACCEPTED", "IN_PROGRESS"] },
+        },
+        select: { id: true },
+      });
+      if (ownAssignment) {
+        driverHasPackageAccess = true;
+      } else {
+        const manifested = await prisma.transferItem.findFirst({
+          where: {
+            packageId: pkg.id,
+            transfer: {
+              OR: [
+                {
+                  executedTrip: {
+                    driverId: actor.driverId!,
+                    status: { in: [...ACTIVE_TRIP_STATUSES] },
+                  },
+                },
+                {
+                  trip: {
+                    driverId: actor.driverId!,
+                    status: { in: [...ACTIVE_TRIP_STATUSES] },
+                  },
+                },
+              ],
+            },
+          },
+          select: { id: true },
+        });
+        driverHasPackageAccess = manifested !== null;
+      }
+      if (driverHasPackageAccess) driverLinkValidated = true;
+    }
     if (
       !isUnscoped(actor) &&
       !actor.vendorId &&
       !actor.customerId &&
+      !driverHasPackageAccess &&
       pkg.currentWarehouseId &&
       !actor.warehouseIds.includes(pkg.currentWarehouseId)
     ) {
@@ -490,7 +654,16 @@ export async function createIncident(
       warehouseId = transfer.originWarehouseId;
     }
   }
-  if (warehouseId && !isUnscoped(actor) && !actor.vendorId && !actor.customerId) {
+  if (
+    warehouseId &&
+    !isUnscoped(actor) &&
+    !actor.vendorId &&
+    !actor.customerId &&
+    // A driver whose trip / assignment / package link validated
+    // above is scoped by that work, not by warehouse membership —
+    // the derived warehouse is where their work sits.
+    !driverLinkValidated
+  ) {
     if (!actor.warehouseIds.includes(warehouseId)) {
       await auditAccessDenied(actor, "Incident", {
         warehouseId,
@@ -508,9 +681,11 @@ export async function createIncident(
       reporterId: actor.userId,
       warehouseId,
       responsibleTeam: data.responsibleTeam ?? null,
-      packageId: data.packageId ?? null,
+      packageId: effectivePackageId,
       orderId: data.orderId ?? null,
       transferId: data.transferId ?? null,
+      tripId: data.tripId ?? null,
+      deliveryAssignmentId: data.deliveryAssignmentId ?? null,
     }),
   );
   const view = toIncidentView(await loadIncidentOr404(incidentId));
@@ -519,6 +694,89 @@ export async function createIncident(
     after: { incidentNumber: view.incidentNumber, category, severity: view.severity },
   });
   return view;
+}
+
+// ---------------------------------------------------------------------------
+// Follow-up tasks (Phase 7)
+// ---------------------------------------------------------------------------
+
+export const createIncidentFollowUpTaskSchema = z.object({
+  assigneeId: z.string().uuid(),
+  title: z.string().min(3).max(200).optional(),
+  dueAt: z.coerce.date().optional(),
+  priority: z.enum(TASK_PRIORITIES).optional(),
+});
+export type CreateIncidentFollowUpTaskInput = z.input<
+  typeof createIncidentFollowUpTaskSchema
+>;
+
+export interface IncidentFollowUpTaskView {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  assigneeId: string;
+  warehouseId: string | null;
+  relatedIncidentId: string | null;
+  dueAt: string | null;
+}
+
+/**
+ * Open a follow-up task on an incident (Phase 7). Requires
+ * incident.manage (+ visibility, via assertIncidentManageable);
+ * the task is created through the task service's transactional
+ * core, so the staff-assignee validation is exactly the one every
+ * other task creation path applies. The task inherits the
+ * incident's warehouse and links back via relatedIncidentId.
+ */
+export async function createIncidentFollowUpTask(
+  actor: ActorContext,
+  incidentId: string,
+  input: CreateIncidentFollowUpTaskInput,
+): Promise<IncidentFollowUpTaskView> {
+  const data = parse(createIncidentFollowUpTaskSchema, input);
+  const row = await loadIncidentOr404(incidentId);
+  await assertIncidentManageable(actor, row);
+  const title = data.title ?? `Follow up incident ${row.incidentNumber}`;
+  const created = await prisma.$transaction((tx) =>
+    createTaskInTx(tx, {
+      title,
+      description: `Follow-up for incident ${row.incidentNumber} (${row.category}): ${row.description.slice(0, 500)}`,
+      createdById: actor.userId,
+      assigneeId: data.assigneeId,
+      warehouseId: row.warehouseId,
+      priority: data.priority ?? "NORMAL",
+      dueAt: data.dueAt ?? null,
+      relatedIncidentId: incidentId,
+    }),
+  );
+  const task = await prisma.task.findUniqueOrThrow({
+    where: { id: created.id },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      priority: true,
+      assigneeId: true,
+      warehouseId: true,
+      relatedIncidentId: true,
+      dueAt: true,
+    },
+  });
+  await auditOps(actor, "incident.follow_up_task_created", "Incident", incidentId, {
+    warehouseId: row.warehouseId,
+    after: { taskId: task.id, assigneeId: data.assigneeId, title },
+  });
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    priority: task.priority,
+    assigneeId: task.assigneeId,
+    warehouseId: task.warehouseId,
+    relatedIncidentId: task.relatedIncidentId,
+    dueAt: task.dueAt?.toISOString() ?? null,
+  };
 }
 
 // ---------------------------------------------------------------------------
