@@ -8,7 +8,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.{ts,tsx}"],
     environment: "node",
     // Integration suites run against a real database (with bcrypt work in
     // the auth/delivery paths) on a small shared-CPU VM; the 5s default

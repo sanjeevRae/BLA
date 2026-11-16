@@ -1,0 +1,180 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/warehouse/inventory",
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
+
+// The bell pulls server actions (and through them the service layer);
+// the shell contract under test is navigation, not notifications.
+vi.mock("@/components/operations/bell", () => ({
+  NotificationsBell: () => <button type="button" aria-label="Notifications">Bell</button>,
+}));
+
+// The warehouse selector's action imports the auth chain; stub it.
+vi.mock("@/server/actions/shell", () => ({
+  setWarehouseScopeAction: vi.fn(async () => undefined),
+}));
+
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+
+afterEach(() => cleanup());
+
+import { ROLE_PERMISSIONS, type RoleCode } from "@/lib/permissions/catalog";
+import {
+  groupNavItems,
+  toNavGroupViews,
+  visibleNavItems,
+  visibleQuickActions,
+  ROLE_TO_DASHBOARD,
+  type NavItemView,
+} from "@/lib/navigation/registry";
+import { ShellFrame, type ShellFrameProps } from "@/components/layout/ShellFrame";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { DataTable } from "@/components/ui/DataTable";
+
+function framePropsFor(role: RoleCode): ShellFrameProps {
+  const dashboard = ROLE_TO_DASHBOARD[role];
+  const permissions = new Set(ROLE_PERMISSIONS[role]);
+  const items = visibleNavItems(permissions, dashboard);
+  const toView = (item: (typeof items)[number]): NavItemView => ({
+    id: item.id,
+    label: item.label,
+    href: item.href,
+    icon: item.icon,
+  });
+  return {
+    title: "Test Dashboard",
+    dashboardHomeHref: `/${dashboard}`,
+    groups: toNavGroupViews(groupNavItems(items)),
+    quickActions: visibleQuickActions(permissions, dashboard).map(toView),
+    searchItems: items.map(toView),
+    warehouses: null,
+    selectedWarehouseId: null,
+    canSelectAllWarehouses: false,
+    userName: "Test User",
+    userEmail: "test@bla.test",
+    notificationsHref: `/${dashboard}/notifications`,
+    signOut: <button type="button">Sign out</button>,
+    children: <p>Page body</p>,
+  };
+}
+
+function navLinks(container: HTMLElement): string[] {
+  const nav = container.querySelector("aside nav") ?? container.querySelector("nav");
+  if (!nav) return [];
+  return within(nav as HTMLElement)
+    .getAllByRole("link")
+    .map((link) => link.getAttribute("href") ?? "");
+}
+
+describe("ShellFrame — role navigation rendering", () => {
+  it("Super Admin sidebar links the full module tree incl. previously unreachable modules", () => {
+    const { container } = render(<ShellFrame {...framePropsFor("SUPER_ADMIN")} />);
+    const hrefs = navLinks(container);
+    for (const expected of [
+      "/super-admin/warehouses",
+      "/super-admin/vendors",
+      "/super-admin/customers",
+      "/super-admin/drivers",
+      "/super-admin/settlements",
+      "/super-admin/reports",
+      "/super-admin/adjustments",
+    ]) {
+      expect(hrefs).toContain(expected);
+    }
+    // Quick action renders as a top-bar link.
+    expect(screen.getAllByRole("link", { name: /new booking/i }).length).toBeGreaterThan(0);
+    expect(screen.getByText("Page body")).toBeTruthy();
+  });
+
+  it("Warehouse Staff sidebar has no create/dispatch links and no quick actions", () => {
+    const { container } = render(<ShellFrame {...framePropsFor("WAREHOUSE_STAFF")} />);
+    const hrefs = navLinks(container);
+    expect(hrefs).toContain("/staff/inventory");
+    expect(hrefs).not.toContain("/staff/transfers/new");
+    expect(hrefs).not.toContain("/staff/deliveries/new");
+    expect(screen.queryByRole("link", { name: /new transfer/i })).toBeNull();
+  });
+
+  it("Customer sidebar shows packages + tickets and (until Phase 2) no notifications link", () => {
+    const { container } = render(<ShellFrame {...framePropsFor("CUSTOMER")} />);
+    const hrefs = navLinks(container);
+    expect(hrefs).toEqual(["/customer", "/customer/tickets"]);
+  });
+
+  it("the current route's nav item is marked aria-current", () => {
+    const { container } = render(<ShellFrame {...framePropsFor("WAREHOUSE_ADMIN")} />);
+    const current = container.querySelector('a[aria-current="page"]');
+    expect(current?.getAttribute("href")).toBe("/warehouse/inventory");
+  });
+
+  it("profile menu button is labelled with the user name", () => {
+    render(<ShellFrame {...framePropsFor("FINANCE")} />);
+    expect(screen.getByRole("button", { name: /account menu for test user/i })).toBeTruthy();
+  });
+});
+
+describe("StatusBadge — shared component", () => {
+  it("renders the operational domain tone for DELIVERED", () => {
+    render(<StatusBadge domain="operational" status="DELIVERED" />);
+    const badge = screen.getByText("DELIVERED");
+    expect(badge.className).toContain("bg-greenbg");
+    expect(badge.className).toContain("text-greendeep");
+  });
+
+  it("renders exception MISSING as danger and payment COD_DUE as warning", () => {
+    render(
+      <>
+        <StatusBadge domain="exception" status="MISSING" />
+        <StatusBadge domain="payment" status="COD_DUE" />
+      </>,
+    );
+    expect(screen.getByText("MISSING").className).toContain("bg-redbg");
+    expect(screen.getByText("COD DUE").className).toContain("bg-amberbg");
+  });
+});
+
+describe("DataTable — foundation behaviour", () => {
+  it("renders rows, search wiring, and pagination bounds", () => {
+    const onSearch = vi.fn();
+    const onPageChange = vi.fn();
+    render(
+      <DataTable
+        ariaLabel="Packages"
+        columns={[
+          { key: "code", header: "Code" },
+          { key: "status", header: "Status" },
+        ]}
+        rows={[
+          { id: "1", code: "BLA-1", status: "BOOKED" },
+          { id: "2", code: "BLA-2", status: "DELIVERED" },
+        ]}
+        rowKey={(row) => row.id}
+        search={{ value: "", onChange: onSearch, placeholder: "Search packages" }}
+        pagination={{ page: 1, pageSize: 10, total: 25, onPageChange }}
+      />,
+    );
+    expect(screen.getByText("BLA-1")).toBeTruthy();
+    expect(screen.getByText("BLA-2")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Search packages")).toBeTruthy();
+    expect(screen.getByText(/showing 1–10 of 25/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+    expect(onPageChange).toHaveBeenCalledWith(2);
+  });
+
+  it("renders the empty state when there are no rows", () => {
+    render(
+      <DataTable
+        ariaLabel="Empty table"
+        columns={[{ key: "code", header: "Code" }]}
+        rows={[] as { id: string; code: string }[]}
+        rowKey={(row) => row.id}
+      />,
+    );
+    expect(screen.getByText("No records")).toBeTruthy();
+  });
+});
