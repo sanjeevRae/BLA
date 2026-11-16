@@ -1,0 +1,114 @@
+/*
+ * Live Operations map styling (V2 Phase 5). Colours come ONLY from
+ * the design-token variables defined in src/app/globals.css
+ * (@theme emits them on :root) — no raw hex values here.
+ *
+ * Pin language:
+ *  - shape = movement type (square = line-haul, circle = pickup,
+ *    teardrop = delivery), letter initial inside as a second cue;
+ *  - colour = freshness (brand = fresh, amber = delayed,
+ *    red muted = stale, cream/gray = offline at reduced opacity).
+ *  A stale/offline marker is never styled as live.
+ */
+
+.bla-pin-wrap {
+  background: transparent;
+  border: none;
+}
+
+.bla-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--color-surface);
+  box-shadow: 0 1px 4px rgb(15 23 42 / 0.35);
+  color: var(--color-surface);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.bla-pin-linehaul {
+  border-radius: var(--radius-sm);
+}
+
+.bla-pin-pickup {
+  border-radius: 9999px;
+}
+
+.bla-pin-delivery {
+  border-radius: 50% 50% 50% 4px;
+  transform: rotate(-45deg);
+}
+
+.bla-pin-delivery .bla-pin-letter {
+  transform: rotate(45deg);
+}
+
+.bla-pin-fresh {
+  background: var(--color-brand);
+}
+
+.bla-pin-delayed {
+  background: var(--color-amber);
+  color: var(--color-ink);
+  box-shadow:
+    0 0 0 3px var(--color-amberbg),
+    0 1px 4px rgb(15 23 42 / 0.35);
+}
+
+.bla-pin-stale {
+  background: var(--color-red);
+  opacity: 0.55;
+}
+
+.bla-pin-offline {
+  background: var(--color-cream);
+  color: var(--color-slate2);
+  opacity: 0.6;
+}
+
+.bla-pin-selected {
+  outline: 3px solid var(--color-ink);
+  outline-offset: 1px;
+}
+
+.bla-wh-wrap {
+  background: transparent;
+  border: none;
+}
+
+.bla-wh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 22px;
+  padding: 0 5px;
+  border: 2px solid var(--color-ink);
+  border-radius: var(--radius-sm);
+  background: var(--color-cream);
+  color: var(--color-ink);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* SVG path styling for the accuracy circle and the straight-line
+ * connector (Leaflet applies `className` to the rendered path). */
+.bla-accuracy {
+  stroke: var(--color-brand);
+  stroke-width: 1.5;
+  fill: var(--color-brand);
+  fill-opacity: 0.08;
+}
+
+.bla-connector {
+  stroke: var(--color-slate2);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 6;
+  fill: none;
+}

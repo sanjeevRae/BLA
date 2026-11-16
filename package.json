@@ -18,11 +18,13 @@
     "@auth/prisma-adapter": "^2.11.3",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
+    "leaflet": "^1.9.4",
     "next": "16.4.6",
     "next-auth": "^5.0.0-beta.32",
     "qrcode": "^1.5.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-leaflet": "^5.0.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -30,6 +32,7 @@
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/bcryptjs": "^2.4.6",
+    "@types/leaflet": "^1.9.22",
     "@types/node": "^24.19.2",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",

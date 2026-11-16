@@ -53,6 +53,7 @@ describe("navigation registry — per-role visibility", () => {
       "/super-admin/bookings",
       "/super-admin/bookings/new",
       "/super-admin/warehouses",
+      "/super-admin/live-operations",
       "/super-admin/incidents",
       "/super-admin/tickets",
       "/super-admin/vendors",
@@ -70,7 +71,8 @@ describe("navigation registry — per-role visibility", () => {
     expect(hrefs).toContain("/admin/bookings");
     expect(hrefs).toContain("/admin/warehouses");
     expect(hrefs).not.toContain("/admin/adjustments");
-    expect(hrefs).toHaveLength(14);
+    expect(hrefs).toContain("/admin/live-operations");
+    expect(hrefs).toHaveLength(15);
   });
 
   it("Warehouse Admin sees the full warehouse operations tree", () => {
@@ -83,6 +85,7 @@ describe("navigation registry — per-role visibility", () => {
       "/warehouse/inventory",
       "/warehouse/transfers",
       "/warehouse/transfers/new",
+      "/warehouse/live-operations",
       "/warehouse/deliveries",
       "/warehouse/deliveries/new",
       "/warehouse/handovers",
@@ -113,6 +116,8 @@ describe("navigation registry — per-role visibility", () => {
     ]);
     // The dead Staff create routes (audit M-7) must stay unlinked.
     expect(hrefs).not.toContain("/staff/transfers/new");
+    // Live Operations is warehouse-dashboard only; Staff never gets it.
+    expect(hrefs).not.toContain("/staff/live-operations");
     expect(hrefs).not.toContain("/staff/deliveries/new");
   });
 

@@ -13,8 +13,9 @@ import type { RoleCode } from "@/lib/permissions/catalog";
  * removes access.
  *
  * Every `href` below names a route that exists today. Pages a later
- * phase will add (Live Operations, Super Admin users/settings/audit)
- * are deliberately absent — no placeholder or dead links.
+ * phase will add (Super Admin users/settings/audit) are deliberately
+ * absent — no placeholder or dead links. (Live Operations landed in
+ * V2 Phase 5 and is registered below.)
  */
 
 export type DashboardId =
@@ -82,7 +83,8 @@ export type NavIconName =
   | "undo"
   | "wallet"
   | "file"
-  | "user";
+  | "user"
+  | "map";
 
 export interface NavItemDef {
   id: string;
@@ -134,6 +136,10 @@ function adminItems(dashboard: "admin" | "super-admin"): NavItemDef[] {
     {
       path: "/warehouses", label: "Warehouses", group: "operations", icon: "warehouse",
       anyOf: ["warehouse.read_all"],
+    },
+    {
+      path: "/live-operations", label: "Live Operations", group: "operations", icon: "map",
+      anyOf: ["operations.live_view"],
     },
     {
       path: "/incidents", label: "Incidents", group: "operations", icon: "alert",
@@ -213,6 +219,14 @@ function warehouseItems(dashboard: "warehouse" | "staff"): NavItemDef[] {
           {
             path: "/transfers/new", label: "New transfer", group: "operations", icon: "swap",
             anyOf: ["transfer.create"], quickAction: true,
+          } as ItemSpec,
+        ]
+      : []),
+    ...(dashboard === "warehouse"
+      ? [
+          {
+            path: "/live-operations", label: "Live Operations", group: "operations", icon: "map",
+            anyOf: ["operations.live_view"],
           } as ItemSpec,
         ]
       : []),
