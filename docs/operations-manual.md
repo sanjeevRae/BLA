@@ -1,8 +1,12 @@
 # BLA — Operations Manual
 
 Day-to-day running of the BLA logistics platform for Admins, Warehouse
-Admins and Finance staff. Written for the system as specified; procedures
-will be verified against the built application in Phase 10.
+Admins and Finance staff. **Refreshed against the built V2 application
+in Phase 8 (2026-11-16): §9 is the built-UI runbook** — role homes,
+route names and the who-does-what table are taken from the navigation
+registry (`src/lib/navigation/registry.ts`) and the permission catalog
+(`src/lib/permissions/catalog.ts`). Sections 1–8 remain the standing
+procedures; where §9 names a concrete screen, §9 governs.
 
 **Golden rules (apply all day, every day):**
 - A package's location changes only through a recorded movement — never by
@@ -170,3 +174,151 @@ backups are configured, take the daily database backup
   denials from a warehouse user probing another warehouse): suspend the
   account (§6), then investigate from the audit log. The log is the record;
   do not delete or edit it.
+
+---
+
+## 9. The built V2 runbook (Phase 8)
+
+### 9.1 Role homes — where each role starts
+
+Every sign-in lands on the primary role's home (`ROLE_LANDING_PATH`
+in the permission catalog; dashboard trees in the navigation
+registry). There is one login for all roles.
+
+| Role | Home | First screens of the day (registry labels) |
+|---|---|---|
+| Super Admin | `/super-admin` | Overview · Tasks · Notifications · Live Operations · Incidents · Users & Roles · Settings · Audit Logs |
+| Admin | `/admin` | Overview · Tasks · Notifications · Bookings · Live Operations · Incidents · Support tickets · Settlements · Reports |
+| Warehouse Admin | `/warehouse` | Overview · Receive & scan · Arrivals · Inventory · Transfers (+ New transfer) · Deliveries (+ New delivery batch) · Handovers · Returns · Live Operations · Drivers · Vehicles · Reports |
+| Warehouse Staff | `/staff` | Overview · Receive & scan · Arrivals · Inventory · Transfers · Deliveries · Handovers · Supplies · Returns · Incidents |
+| Rider | `/rider` (home **is** the batch list) | Batch detail (`/rider/batches/[id]`) · COD (`/rider/cod`) · Tasks · My performance · Notifications |
+| Line-haul Driver | `/transport-driver` | Home (assigned trips) · Tasks · My performance · Notifications |
+| Vendor | `/vendor` | Home · Bookings (+ New booking; bulk at `/vendor/bookings/bulk`) · Billing · Reports · Profile |
+| Customer | `/customer` | My packages · My invoices (`/customer/billing`) · Support tickets · My incidents · Notifications · Profile |
+| Finance | `/finance` | Overview · Invoices · Ledger · COD remittances · Settlements · Adjustments & refunds · Reports · Tasks |
+| Support | `/support` | Home · Support tickets · Incidents · Tasks · Notifications |
+
+Public tracking (no login) lives at `/track`; it shows milestones
+only — never driver positions or internal detail.
+
+### 9.2 Starting the day, per role
+
+- **Warehouse Admin / Staff:** open Overview, then work the queues
+  in order: **Incidents** (yesterday's shortage is today's first
+  job) → **Arrivals** (transfers expected today) → **Receive &
+  scan** backlog → **Inventory** exceptions → **Transfers /
+  Deliveries** to prepare. Confirm rider/vehicle availability
+  (Drivers / Vehicles) and the capacity indicator before accepting
+  a large inbound transfer (§5).
+- **Admin / Super Admin:** Overview first (pending pickups,
+  in-transit transfers, out-for-delivery, open exceptions), then
+  **Live Operations** (§9.4) for anything already moving, then
+  vendor verifications and the invitation approval queue — 
+  privileged invitations wait in `PENDING_APPROVAL` until a
+  *second* approver decides them (four-eyes; the inviter cannot
+  approve their own).
+- **Rider / Line-haul Driver:** home shows today's batches/trips.
+  Start the tracking session from the tracking panel when the run
+  starts (it is driver-started only, foreground-only — §9.4), and
+  work scans/attempts from the batch/trip detail, not from chat
+  or paper.
+- **Finance:** yesterday's unreconciled COD list is the first task
+  (§9.5), then Settlements and Adjustments & refunds queues.
+- **Support:** Support tickets and Incidents queues; address
+  corrections and redelivery requests are raised from the ticket —
+  Support never touches custody or money directly.
+- **Vendor / Customer:** self-service only (own bookings, billing,
+  tickets, incidents). Anything outside their scope is a Support
+  ticket, not a phone workaround.
+
+### 9.3 Exception handling (built flow)
+
+1. **Report** in **Incidents** (any role with `incident.report`;
+  drivers also report from the trip/batch — breakdown, accident,
+  delay). Link the package/transfer/trip, describe what physically
+  happened, attach evidence. Auto-created incidents (transfer
+  shortage/excess, handover discrepancy, COD discrepancy) arrive
+  pre-linked — start from those links.
+2. **Triage:** the responsible team (WAREHOUSE / FINANCE / SUPPORT /
+  OPERATIONS, derived from the category) acknowledges and assigns.
+  Statuses run `REPORTED → ACKNOWLEDGED → ASSIGNED → INVESTIGATING
+  → AWAITING_INFORMATION / ESCALATED → RESOLUTION_PROPOSED →
+  RESOLUTION_APPROVED → RESOLVED → CLOSED`.
+3. **Money/loss rule:** incidents involving money or package
+  write-off (COD discrepancy, payment dispute, missing package,
+  theft suspicion, transfer shortage) need an approver different
+  from the proposer; the record, not a chat thread, is the
+  resolution.
+4. **End of day:** anything unresolved is escalated, not carried
+  silently (§3). A missing package stays an open discrepancy in
+  inventory until the investigation concludes.
+
+### 9.4 Live Operations monitoring
+
+- Who watches: Super Admin / Admin (all movements) and Warehouse
+  Admin (movements whose origin **or** destination is their
+  warehouse) — **Live Operations** in the registry, gated on
+  `operations.live_view`. Warehouse Staff, drivers, vendors and
+  customers have no live map.
+- The board polls every ~50 s while visible and shows, per
+  movement: driver, type (transfer / pickup / delivery), route,
+  package count, last update and a freshness badge (Fresh /
+  Delayed / Stale / Offline — always read it *with* the
+  last-update time). A movement with no fix yet says "Waiting for
+  first location" and has no marker.
+- **Foreground-only discipline:** a Stale/Offline marker usually
+  means the driver's app is backgrounded, the screen is locked, or
+  the phone lost signal — it does **not** mean the driver stopped
+  working. Call the driver; do not conclude anything from GPS
+  alone. GPS never proves delivery and never changes custody.
+- A supervisor may **End** a stuck tracking session from the
+  detail view (audited, `endReason = SUPERVISOR`). Supervisors
+  cannot start or pause a driver's session.
+- Straight-line connector on the detail map is labelled
+  "not a road route" — there are no ETAs. Plan from trip/batch
+  checkpoints and expected-arrival times, not from the line.
+
+### 9.5 COD close of day (built screens)
+
+The §4 routine, on the built UI:
+
+1. **Rider side:** collections are recorded per package at delivery
+   confirmation (amount + method; a difference is a `MISMATCH` with
+   a required explanation — never edited later). The rider checks
+   their position in **COD** (`/rider/cod`) and submits the day's
+   remittance.
+2. **Finance side:** verify remittances in **COD remittances**
+   (`/finance/remittances`): counted amount vs collected. Match →
+   verified; the cash moves toward vendor settlement. Shortfall →
+   resolve the remittance as a discrepancy the same day: the
+   collection record stays as-is, a finance incident opens, and
+   the shortfall is blocked from settlement until resolved.
+3. **Adjustments** (write-offs / corrections) go through
+   **Adjustments & refunds** (`/finance/adjustments`) as linked
+   adjustments created by one Finance user and approved by a
+   *different* user — money is never corrected by editing a
+   payment (§4, golden rules).
+4. **Settlements** are generated from the ledger in
+   **Settlements** (`/finance/settlements`), approved, then paid.
+   Note the open decision: there is currently **no monetary
+   approval threshold** on settlements (known limitation F12c) —
+   until Meena sets one, the prepare/approve/pay separation
+   between Finance and Admin is the control.
+5. Close the day only when the unreconciled list is empty or every
+   remainder has a named owner for the morning.
+
+### 9.6 Who does what (built permissions, summary)
+
+| Job | Does it | Never |
+|---|---|---|
+| Receive / inspect / sort / put away | Warehouse Staff, Warehouse Admin (own warehouse) | Finance, Support, vendors |
+| Create / dispatch / reconcile transfers | Warehouse Admin (origin creates/dispatches; destination receives/reconciles) | Line-haul driver (no receiving action exists for drivers) |
+| Assign pickups / deliveries / trips | Warehouse Admin (own), Admin | Riders self-assigning |
+| Start / pause / resume GPS tracking | The assigned driver only | Supervisors (end-only, audited) |
+| Confirm delivery + collect COD | Assigned rider | Anyone else on that assignment |
+| Verify COD, prepare/pay settlements, record payments | Finance | Warehouse roles (Warehouse Admin sees own-warehouse COD via `cod.read` only) |
+| Approve settlements | Admin / Super Admin | Finance (prepares and pays; does not approve) |
+| Approve financial adjustments | A different user than the creator (Finance or Super Admin) | The creator (self-approval refused) |
+| Invite users (privileged roles) | Inviter + a second approver (four-eyes) | Self-approval |
+| Manage settings / roles | Super Admin (Settings; Users & Roles) | Admin (no `settings.manage`) |
+| Tickets / customer follow-up | Support | Support touching custody or money |

@@ -165,3 +165,32 @@ The tone for a status value is defined once in `src/lib/status/status-tones.ts` 
 - **Critical operational feedback is persistent** (§1): failed scans, rejected OTPs, and blocked actions stay visible until resolved or explicitly dismissed — never auto-expiring toasts.
 - **Loading:** use skeletons (`Skeleton` / `SkeletonRows`) shaped like the content they replace, not spinners over blank space for panels and tables.
 - **Empty states:** say what would appear here and offer the permitted next action ("No packages awaiting inspection. New receipts appear here when a transfer arrives."). An empty state with no explanation and no action is a dead end.
+
+---
+
+## Addendum — V2 final state (Phase 8, 2026-11-16)
+
+This document remains the durable Phase 1 design-system reference
+and has **not** been rewritten. What changed since it was written:
+
+- **All ten role homes are built** on the shell and navigation
+  registry this document specifies (Phase 6 completed the set:
+  Super Admin users/settings/audit surfaces, Warehouse Admin fleet
+  and booking-create, Finance/Support tasks, Customer
+  self-service). Navigation is derived solely from
+  `src/lib/navigation/registry.ts` — there is still no second
+  hand-maintained menu.
+- **Two V2 surfaces follow these rules and extend the examples,
+  not the tokens:** the driver Location Tracking Panel (≥48 px
+  touch targets; tracking state, last-update time and accuracy
+  always visible; a signal problem flips the panel to an
+  unmistakable problem state immediately — urgency is never
+  visually quiet, §1) and the Live Operations board (freshness is
+  always paired with its last-update time; stale/offline markers
+  are visually muted and never look live). See
+  `docs/live-gps-tracking.md` §§8/10.
+- **Verification caveat:** the §7 instruction to check screens at
+  ~390 px / tablet / desktop stands. On-device pixel checks at
+  390 / 768 / 1440 px for the GPS surfaces are part of the
+  pre-production real-device checklist and are **not yet
+  verified** — see `docs/known-limitations.md`.

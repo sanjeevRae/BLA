@@ -128,10 +128,12 @@ existing bindings migrate to it.
   it through an approved financial adjustment (write-off) or when
   the cash is recovered and adjusted.
 - **No GPS-based reporting.** The legacy `gps_tracking` table and
-  its cleanup workflow were retired with the old backend. The new
-  platform records trip checkpoints (TripStop rows) as operational
-  data; no report consumes them and no retention job prunes them
-  (see the deployment guide §8 for the retention position).
+  its cleanup workflow were retired with the old backend. V2 adds
+  live GPS *visibility* (TrackingSession / DriverLocationPing /
+  DriverCurrentLocation + the Live Operations board — see
+  `docs/live-gps-tracking.md`), but no management *report* consumes
+  location history, and TripStop checkpoints remain operational
+  data retained with their trips (see the deployment guide §8).
 - **Customer/counter invoice *generation* is out of scope.**
   Invoices are generated for vendor orders from snapshotted
   booking charges; ad-hoc counter invoices for walk-in customers
@@ -147,6 +149,64 @@ existing bindings migrate to it.
   described in docs/gps-privacy-and-retention.md §6 (driver
   notice/acknowledgement text, 30-day ping retention, access
   expectations) must be completed before GPS is enabled in
-  production. The retention prune and abandoned-session expiry
-  services exist but are not yet scheduled (Phase 8 wires the
-  schedule); until then they are run operationally.
+  production. The retention prune (daily) and abandoned-session
+  expiry (hourly) services are scheduled as of Phase 8 via
+  `scripts/tracking-maintenance.ts` (see
+  docs/live-gps-tracking.md §11); the schedule must be verified
+  running in the production environment at go-live.
+
+## Pre-production real-device GPS checklist — NOT yet verified (Phase 8)
+
+Everything in this section is **unverified**. The GPS backend, the
+driver panel, and the Live Operations board were verified on the
+production build with headless Chrome (CDP geolocation override +
+permission grant) — see `docs/live-gps-tracking.md` §8. **No item
+below has been checked on a real device, and no coverage is implied
+for any of them.** Each item must be performed on physical hardware
+and its result recorded before GPS is relied on in production:
+
+- [ ] **Android Chrome — background behaviour:** start a session,
+  background the app / switch apps, and confirm updates stop and
+  freshness degrades honestly (no apparently-live stale marker);
+  return to the foreground and confirm the watch restarts and a
+  catch-up fix is sent.
+- [ ] **Android Chrome — screen-lock behaviour:** lock the screen
+  mid-session for several cadence intervals; confirm the same
+  stop/degrade/resume behaviour as backgrounding, and that the
+  panel's "no update for X" watchdog fires.
+- [ ] **iOS Safari — `watchPosition` behaviour:** confirm fixes are
+  delivered at a usable cadence while the page is visible, how
+  delivery behaves across tab suspension and screen lock, and that
+  the panel recovers without a reload.
+- [ ] **iOS Safari — permission UX:** first-run permission prompt
+  wording/timing from the panel's Start flow; denial path (session
+  must NOT start; re-enable instructions shown must match current
+  Safari UI).
+- [ ] **Real fix cadence and jitter:** on a moving vehicle, compare
+  actual ping intervals against the configured cadences (rider
+  150 s / line-haul 240 s / heartbeat 600 s, 25 m movement
+  threshold), and observe GPS jitter at standstill — in particular
+  whether stationary heartbeats register as new fixes or are
+  deduplicated as bit-identical (the honest DELAYED/STALE outcome
+  described in `docs/live-gps-tracking.md` §8).
+- [ ] **Per-browser permission re-enable flows:** deny permission,
+  then follow each browser's real steps to re-enable it (Android
+  Chrome site settings; iOS Safari / iOS Settings location
+  services) and confirm the panel's instructions match and the
+  flow ends in a working session.
+- [ ] **Panel pixel checks at 390 / 768 / 1440 px:** driver
+  tracking panel and Live Operations board rendered at phone
+  (390 px), tablet (768 px) and desktop (1440 px) widths — touch
+  targets, freshness badges paired with last-update times, paused /
+  signal-problem states, and the map/list selection sync all
+  visually inspected. (Build-level layout was verified from
+  rendered structure; these are the on-device pixel checks.)
+- [ ] **OSM tile rendering on a real network:** Live Operations map
+  tiles load over a real mobile/office connection (not the build
+  sandbox), attribution is visible, pan/zoom stay responsive at
+  pilot data volumes, and tile failure degrades to the list view
+  without breaking the board.
+
+Until this checklist is complete, GPS in production is a pilot
+aid: manual checkpoints and scans remain the operational record,
+exactly as `docs/driver-operations.md` states.

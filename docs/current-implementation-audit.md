@@ -311,3 +311,37 @@ Both question sets from Appendix A were run independently by the parent agent: C
 **Adopted — Phases 1/5/6 (UI):** navigation grouped by operations with contextual actions on the work queues themselves; urgency never visually quiet (failed scans get unmistakable feedback, not vanishing toasts); quick actions as a compact permission-filtered toolbar rather than card walls; rider targets 44–48px and few-tap flows; a GPS indicator must never look active when permission is revoked or tracking is paused; the live map leads with freshness, synchronises marker↔list selection, and never shows historical pings, phone numbers, or financial data.
 
 **Considered and rejected (with reason):** ShipmentLeg/PackageRelation lineage entities (not in the V2 spec; the Transfer/Trip model covers movements — future consideration only); PostgreSQL row-level security (fragile with Prisma + pooled connections; service scoping + adversarial tests are the V2 control); offline/local-first rider queues and device attestation (impossible or out of scope for a foreground, online-by-design browser app — GPS and delivery evidence stay indicative, never proof, per spec §5.2); removing Recent Activity from dashboards (conflicts with spec §10.4); hash-chained audit logs (disproportionate here). Points where a reviewer assumed a missing structure that already exists (PackageItem junction, returns flow, transactional notifications, atomic transfer transactions) were verified against the schema and are re-verification items in Phases 2/7, not rebuilds.
+
+---
+
+## Addendum — V2 final state (Phase 8, 2026-11-16)
+
+This audit describes the platform as found at V2 Phase 0
+(`main` @ `84f3f00`, V1 complete). It is a point-in-time record and
+has **not** been rewritten. What changed since, in brief:
+
+- The Phase 1–7 build programme this audit scoped is **complete**:
+  the navigation-registry shell (Phase 1), core validation and
+  hardening (Phase 2), the GPS backend (Phase 3), the driver
+  tracking panel (Phase 4), the Live Operations map (Phase 5),
+  role-home completion and four-eyes invitations (Phase 6), and
+  the Phase 7 completions (pickup leg, cross-warehouse returns,
+  `REASSIGNED` tracking end, POD evidence hash-binding, bulk
+  booking) are all built. Defect references (H-*, M-*, L-*, T-*)
+  in this audit should be read as *findings at Phase 0*; their
+  dispositions live in the phase records and in
+  `docs/security-review.md` / `docs/known-limitations.md`.
+- Generated final-state counts (Phase 8): **84 Prisma models,
+  10 roles, 100 permissions, 98 API Route Handler files** — lists
+  in `docs/database-schema.md` §14,
+  `docs/role-permission-matrix.md` §7 and
+  `docs/api-reference.md` §21.
+- The canonical workflow references are now
+  `docs/warehouse-transfers.md`, `docs/driver-operations.md` and
+  `docs/delivery-operations.md`; the stack/cost position is in
+  `docs/free-technology-stack.md`; production gating items are in
+  `docs/deployment-guide.md` (Production Readiness Checklist).
+- Still open at Phase 8 (unchanged by this addendum): the
+  pre-production real-device GPS checklist and the Nepal Privacy
+  Act 2075 legal review (`docs/known-limitations.md`), plus the
+  open decisions listed in the deployment guide.
