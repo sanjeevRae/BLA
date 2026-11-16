@@ -412,6 +412,9 @@ model Warehouse {
   transfersDest   Transfer[]     @relation("TransferDestinationWarehouse")
   transferScans   TransferScan[] @relation("TransferScanWarehouse")
 
+  trackingSessionsOrigin      TrackingSession[] @relation("TrackingSessionOriginWarehouse")
+  trackingSessionsDestination TrackingSession[] @relation("TrackingSessionDestinationWarehouse")
+
   deliveryBatches DeliveryBatch[] @relation("DeliveryBatchWarehouse")
   returnRequests  ReturnRequest[] @relation("ReturnWarehouse")
   tasks           Task[]          @relation("TaskWarehouse")
@@ -1373,6 +1376,9 @@ model Driver {
   deliveryAssignments DeliveryAssignment[] @relation("DeliveryAssignmentDriver")
   financeAccount      FinancialAccount?    @relation("DriverFinanceAccount")
   codRemittances      CodRemittance[]      @relation("RemittanceDriver")
+  trackingSessions    TrackingSession[]
+  locationPings       DriverLocationPing[]
+  currentLocation     DriverCurrentLocation?
 
   @@index([homeWarehouseId, availabilityStatus])
   @@index([licenseExpiry])
@@ -1600,6 +1606,8 @@ model Trip {
   currentForDriver Driver[]        @relation("DriverCurrentTrip")
   trackingEvents   TrackingEvent[]
   incidents        Incident[]      @relation("IncidentTrip")
+  trackingSessions TrackingSession[]
+  currentLocations DriverCurrentLocation[]
 
   @@index([driverId, status])
   @@index([vehicleId, status])
@@ -1658,8 +1666,10 @@ model DeliveryBatch {
   serviceArea    ServiceArea?            @relation(fields: [serviceAreaId], references: [id], onDelete: Restrict)
   createdBy      User                    @relation("DeliveryBatchCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   closedBy       User?                   @relation("DeliveryBatchClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
-  assignments    DeliveryAssignment[]
-  codCollections DeliveryCodCollection[]
+  assignments      DeliveryAssignment[]
+  codCollections   DeliveryCodCollection[]
+  trackingSessions TrackingSession[]
+  currentLocations DriverCurrentLocation[]
 
   @@index([riderId, batchDate])
   @@index([warehouseId, status])
@@ -2648,5 +2658,119 @@ model NotificationPreference {
   user User @relation("NotificationPreferenceUser", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, category, channel])
+  @@schema("app")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 (V2) — GPS tracking: driver tracking sessions, location pings
+// and the current-location projection. Vocabulary CHECK constraints,
+// the exactly-one-assignment / type-consistency / ended-shape CHECKs
+// and the one-active-session-per-driver partial unique index live in
+// the Phase 3 GPS hardening migration (Prisma cannot express partial
+// indexes or cross-column CHECKs).
+//
+// Coordinates here intentionally use Float, not Decimal: GPS pings are
+// machine-generated, high-volume and JSON-native, and no money or
+// human-entered precision depends on them. TripStop's Decimal(10,7)
+// latitude/longitude are for manual checkpoints, where the entered
+// value itself is the record — a different contract.
+// ---------------------------------------------------------------------------
+
+/// One driver's continuous GPS tracking for exactly one assignment:
+/// either a line-haul Trip (trackingType LINEHAUL) or a DeliveryBatch
+/// (trackingType PICKUP / DELIVERY) — never both, never neither
+/// (enforced by CHECK constraints in the hardening migration).
+/// Lifecycle: ACTIVE / PAUSED / ENDED; at most one ACTIVE session per
+/// driver (partial unique index in the hardening migration).
+model TrackingSession {
+  id                       String    @id @default(uuid())
+  driverId                 String
+  tripId                   String?
+  deliveryBatchId          String?
+  trackingType             String
+  originWarehouseId        String
+  destinationWarehouseId   String?
+  status                   String    @default("ACTIVE")
+  startedAt                DateTime  @default(now())
+  endedAt                  DateTime?
+  startReason              String
+  endReason                String?
+  permissionAcknowledgedAt DateTime
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  driver               Driver          @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  trip                 Trip?           @relation(fields: [tripId], references: [id], onDelete: Restrict)
+  deliveryBatch        DeliveryBatch?  @relation(fields: [deliveryBatchId], references: [id], onDelete: Restrict)
+  originWarehouse      Warehouse       @relation("TrackingSessionOriginWarehouse", fields: [originWarehouseId], references: [id], onDelete: Restrict)
+  destinationWarehouse Warehouse?      @relation("TrackingSessionDestinationWarehouse", fields: [destinationWarehouseId], references: [id], onDelete: Restrict)
+  pings                DriverLocationPing[]
+  currentLocations     DriverCurrentLocation[]
+
+  @@index([driverId, status])
+  @@index([tripId])
+  @@index([deliveryBatchId])
+  @@index([originWarehouseId, status])
+  @@index([destinationWarehouseId, status])
+  @@schema("app")
+}
+
+/// One GPS fix reported by the driver's browser. Append-only in
+/// practice: `sequenceId` is the client's per-session monotonic
+/// counter and (trackingSessionId, sequenceId) is unique, so a
+/// retried report collides instead of double-recording. `recordedAt`
+/// is the device clock; `receivedAt` is the server clock — freshness
+/// and ordering decisions use the server clock.
+model DriverLocationPing {
+  id                   String   @id @default(uuid())
+  trackingSessionId    String
+  driverId             String
+  latitude             Float
+  longitude            Float
+  accuracyMeters       Float
+  speedMetersPerSecond Float?
+  headingDegrees       Float?
+  recordedAt           DateTime
+  receivedAt           DateTime @default(now())
+  sequenceId           Int
+  source               String   @default("BROWSER")
+  createdAt            DateTime @default(now())
+
+  trackingSession TrackingSession @relation(fields: [trackingSessionId], references: [id], onDelete: Restrict)
+  driver          Driver          @relation(fields: [driverId], references: [id], onDelete: Restrict)
+
+  @@unique([trackingSessionId, sequenceId])
+  @@index([trackingSessionId, recordedAt(sort: Desc)])
+  @@index([driverId, receivedAt])
+  @@schema("app")
+}
+
+/// The latest known position per driver — a projection of
+/// DriverLocationPing, one row per driver, upserted on every accepted
+/// ping so live views never scan the ping ledger. `freshnessState`
+/// (FRESH / DELAYED / STALE / OFFLINE) is derived from
+/// lastReceivedAt and the session status by the tracking service.
+/// activeTripId / activeBatchId mirror the live session's assignment
+/// and are SetNull if that assignment row is ever removed.
+model DriverCurrentLocation {
+  id                String   @id @default(uuid())
+  driverId          String   @unique
+  trackingSessionId String
+  latitude          Float
+  longitude         Float
+  accuracyMeters    Float
+  lastRecordedAt    DateTime
+  lastReceivedAt    DateTime
+  freshnessState    String   @default("FRESH")
+  activeTripId      String?
+  activeBatchId     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  driver          Driver          @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  trackingSession TrackingSession @relation(fields: [trackingSessionId], references: [id], onDelete: Restrict)
+  activeTrip      Trip?           @relation(fields: [activeTripId], references: [id], onDelete: SetNull)
+  activeBatch     DeliveryBatch?  @relation(fields: [activeBatchId], references: [id], onDelete: SetNull)
+
   @@schema("app")
 }
