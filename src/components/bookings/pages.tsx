@@ -54,9 +54,16 @@ export async function BookingsListPage({
           <p className="text-[13px] text-faint">{meta.total} bookings</p>
         </div>
         {canCreate ? (
-          <Link href={`${basePath}/bookings/new`} className={subtleButtonClass}>
-            New booking
-          </Link>
+          <div className="flex gap-2">
+            {basePath === "/vendor" ? (
+              <Link href={`${basePath}/bookings/bulk`} className={subtleButtonClass}>
+                Bulk booking
+              </Link>
+            ) : null}
+            <Link href={`${basePath}/bookings/new`} className={subtleButtonClass}>
+              New booking
+            </Link>
+          </div>
         ) : null}
       </div>
       <SectionCard title="Bookings">

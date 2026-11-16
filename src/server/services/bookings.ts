@@ -214,10 +214,29 @@ function dec(value: number): Prisma.Decimal {
   return new Prisma.Decimal(value.toFixed(3));
 }
 
-async function createBookingOnce(
+/**
+ * Everything a booking needs resolved BEFORE its transaction opens:
+ * the vendor (with the vendor-actor ownership + role guards), the
+ * shipping service, and the COD split. Shared by the single-booking
+ * path and the Phase 7 bulk path — the bulk path runs this for EVERY
+ * row up front, so a bulk submission is fully validated before any
+ * row is created. The drop-off scope pre-check also lives here: it
+ * runs before the transaction opens so the denial audit never
+ * depends on transaction state. (The authoritative origin-scope
+ * chokepoint remains inside the transaction, once the origin
+ * warehouse is fully resolved — see createBookingInTx.)
+ */
+export interface PrecomputedBooking {
+  vendor: Prisma.VendorGetPayload<object> | null;
+  service: Prisma.ShippingServiceGetPayload<object>;
+  vendorSubmitted: boolean;
+  codSplit: bigint[];
+}
+
+async function validateBookingPreTx(
   actor: ActorContext,
   data: ParsedBooking,
-): Promise<BookingView> {
+): Promise<PrecomputedBooking> {
   // --- Resolve the vendor / sender -----------------------------------
   let vendor: Prisma.VendorGetPayload<object> | null = null;
   const vendorId = actor.vendorId ?? data.vendorId ?? null;
@@ -276,7 +295,34 @@ async function createBookingOnce(
     }
   }
 
-  const view = await prisma.$transaction(async (tx) => {
+  return { vendor, service, vendorSubmitted, codSplit };
+}
+
+interface CreatedBooking {
+  view: BookingView;
+  routeKind: string;
+  orderId: string;
+  orderNumber: string;
+}
+
+/**
+ * The in-transaction creation core, shared by single booking
+ * (createBookingOnce) and bulk booking (createBulkBookings): people,
+ * origin resolution + the Phase 6 origin-scope chokepoint,
+ * destination routing, the pricing snapshot, and Order → Shipment →
+ * Packages (+ invoice-side charge snapshot on the shipment). It only
+ * ever writes through `tx`, so a caller running several rows in one
+ * transaction gets all-or-nothing semantics for free. The booking
+ * audit row is NOT written here — it belongs after the transaction
+ * commits (the caller's job), exactly as the single path always did.
+ */
+async function createBookingInTx(
+  tx: Prisma.TransactionClient,
+  actor: ActorContext,
+  data: ParsedBooking,
+  precomputed: PrecomputedBooking,
+): Promise<CreatedBooking> {
+  const { vendor, service, vendorSubmitted, codSplit } = precomputed;
     // --- People: duplicate-aware customer records ---------------------
     const recipientCustomer = await findOrCreateCustomer(
       tx,
@@ -595,7 +641,16 @@ async function createBookingOnce(
       include: orderInclude,
     });
     return { view: toBookingView(full), routeKind, orderId: order.id, orderNumber: order.orderNumber };
-  });
+}
+
+async function createBookingOnce(
+  actor: ActorContext,
+  data: ParsedBooking,
+): Promise<BookingView> {
+  const precomputed = await validateBookingPreTx(actor, data);
+  const view = await prisma.$transaction(async (tx) =>
+    createBookingInTx(tx, actor, data, precomputed),
+  );
 
   await prisma.auditLog.create({
     data: {
@@ -627,6 +682,141 @@ export async function createBooking(
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       return await createBookingOnce(actor, data);
+    } catch (error) {
+      if (isUniqueViolationOn(error, "trackingId") && attempt < 2) continue;
+      throw error;
+    }
+  }
+  throw new ConflictError("Could not allocate unique tracking IDs — please retry");
+}
+
+// ---------------------------------------------------------------------------
+// Bulk creation (Phase 7: vendor bulk booking)
+// ---------------------------------------------------------------------------
+
+export const createBulkBookingsSchema = z.object({
+  orders: z.array(createBookingSchema).min(1).max(50),
+});
+export type CreateBulkBookingsInput = z.input<typeof createBulkBookingsSchema>;
+
+/** Re-throw a per-row failure with its 1-based row number prefixed,
+ *  preserving the error class (a scope denial stays a 403, a vendor
+ *  conflict stays a 409, a validation failure stays a 400). */
+function withRowContext(error: unknown, rowIndex: number): unknown {
+  const prefix = `Row ${rowIndex + 1}: `;
+  if (error instanceof AuthorizationError) return new AuthorizationError(prefix + error.message);
+  if (error instanceof ConflictError) return new ConflictError(prefix + error.message);
+  if (error instanceof NotFoundError) return new NotFoundError(prefix + error.message);
+  if (error instanceof DomainValidationError) {
+    return new DomainValidationError(prefix + error.message);
+  }
+  return error;
+}
+
+/**
+ * Bulk booking: 1–50 bookings created all-or-nothing.
+ *
+ * Semantics (identical scoping/pricing to single booking, per row):
+ *  1. Every row is schema-parsed first — a failure aborts the whole
+ *     submission with a DomainValidationError naming the row
+ *     ("Row 3: …") and nothing is created.
+ *  2. Every row then runs the same pre-transaction validations as
+ *     createBookingOnce (vendor ownership/role, vendor approval,
+ *     service, drop-off scope) — again, any failure aborts all rows.
+ *  3. All rows are created inside ONE transaction through the shared
+ *     createBookingInTx core (which re-checks origin scope per row
+ *     once the origin is resolved), so any in-transaction failure —
+ *     including a later row's scope denial — rolls back every row:
+ *     zero orders/packages persist from a failed bulk call.
+ *  4. A tracking-ID collision retries the WHOLE bulk (up to 3
+ *     attempts), mirroring createBooking.
+ * Pricing is the shared core's pricing path, so a bulk row charges
+ * exactly what the same input charges as a single booking.
+ */
+export async function createBulkBookings(
+  actor: ActorContext,
+  input: CreateBulkBookingsInput,
+): Promise<BookingView[]> {
+  await requirePermAudited(actor, "booking.create", "Order");
+  const rawOrders: unknown = (input as { orders?: unknown } | null)?.orders;
+  if (!Array.isArray(rawOrders) || rawOrders.length < 1) {
+    throw new DomainValidationError(
+      "Bulk booking needs at least one row — orders must be a non-empty array",
+    );
+  }
+  if (rawOrders.length > 50) {
+    throw new DomainValidationError(
+      `Bulk booking is limited to 50 rows per submission — received ${rawOrders.length}`,
+    );
+  }
+
+  // Phase 1: schema-parse every row before anything is created.
+  const parsedRows: ParsedBooking[] = [];
+  for (let i = 0; i < rawOrders.length; i++) {
+    const result = createBookingSchema.safeParse(rawOrders[i]);
+    if (!result.success) {
+      const issue = result.error.issues[0];
+      const where = issue?.path?.length ? `${issue.path.join(".")}: ` : "";
+      throw new DomainValidationError(
+        `Row ${i + 1}: ${where}${issue?.message ?? "Invalid input"}`,
+      );
+    }
+    parsedRows.push(result.data);
+  }
+
+  // Phase 2: the single-booking pre-transaction validations, per row.
+  const precomputed: PrecomputedBooking[] = [];
+  for (let i = 0; i < parsedRows.length; i++) {
+    try {
+      precomputed.push(await validateBookingPreTx(actor, parsedRows[i]));
+    } catch (error) {
+      throw withRowContext(error, i);
+    }
+  }
+
+  // Phase 3: one transaction for all rows; retry the whole bulk on a
+  // tracking-ID collision, exactly like createBooking.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const created = await prisma.$transaction(
+        async (tx) => {
+          const results: CreatedBooking[] = [];
+          for (let i = 0; i < parsedRows.length; i++) {
+            try {
+              results.push(await createBookingInTx(tx, actor, parsedRows[i], precomputed[i]));
+            } catch (error) {
+              // Keep tracking collisions unwrapped so the outer
+              // retry check can recognise them.
+              if (isUniqueViolationOn(error, "trackingId")) throw error;
+              throw withRowContext(error, i);
+            }
+          }
+          return results;
+        },
+        { timeout: 120_000, maxWait: 20_000 },
+      );
+      // Booking audits are written after the commit, mirroring the
+      // single-booking path.
+      for (const view of created) {
+        await prisma.auditLog.create({
+          data: {
+            actorId: actor.userId,
+            actorRole: actor.primaryRole,
+            action: view.routeKind === "UNROUTED" ? "booking.create_unrouted" : "booking.create",
+            entityType: "Order",
+            entityId: view.orderId,
+            warehouseId: view.view.originWarehouseId,
+            after: {
+              orderNumber: view.orderNumber,
+              routeKind: view.routeKind,
+              destinationDistrict: view.view.destinationDistrict,
+              packages: view.view.shipments.reduce((n, s) => n + s.packages.length, 0),
+              bulk: true,
+            },
+          },
+        });
+      }
+      return created.map((c) => c.view);
     } catch (error) {
       if (isUniqueViolationOn(error, "trackingId") && attempt < 2) continue;
       throw error;
