@@ -562,11 +562,19 @@ describe("P6-R1 closure — no non-recipient surface exposes the code", () => {
       });
       expect(otpList.items, `${label} can list DELIVERY_OTP rows`).toHaveLength(0);
     }
-    // The customer-recipient holds no notification inbox permission:
-    // the bell service refuses rather than serving recipient rows.
-    await expect(
-      notificationsSvc.listMyNotifications(customerActor, { pageSize: 10 }),
-    ).rejects.toBeInstanceOf(actorErrors.AuthorizationError);
+    // V2 Phase 2 (H-3): CUSTOMER now holds notification.read_own, so
+    // the customer-recipient CAN list their own inbox — the closure
+    // property is that the recipient (userId-NULL) TRACKING row and
+    // its code never surface in it.
+    const customerList = await notificationsSvc.listMyNotifications(customerActor, {
+      pageSize: 100,
+    });
+    expect(JSON.stringify(customerList), "customer notification list leaks the code").not.toContain(code);
+    const customerOtpList = await notificationsSvc.listMyNotifications(customerActor, {
+      pageSize: 100,
+      category: "DELIVERY_OTP" as never,
+    });
+    expect(customerOtpList.items, "customer can list DELIVERY_OTP rows").toHaveLength(0);
 
     // Nobody but the (userId-NULL) recipient addressing can mark the
     // TRACKING row read — rider and even admin are refused + audited.
@@ -583,6 +591,11 @@ describe("P6-R1 closure — no non-recipient surface exposes the code", () => {
     ).rejects.toBeInstanceOf(actorErrors.AuthorizationError);
     await expect(
       notificationsSvc.markNotificationRead(adminActor, trackingNote.id),
+    ).rejects.toBeInstanceOf(actorErrors.AuthorizationError);
+    // The customer-recipient (who now holds notification.read_own)
+    // is refused on ownership: the TRACKING row is not theirs.
+    await expect(
+      notificationsSvc.markNotificationRead(customerActor, trackingNote.id),
     ).rejects.toBeInstanceOf(actorErrors.AuthorizationError);
     const denial = await prisma.auditLog.findFirst({
       where: {

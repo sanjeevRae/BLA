@@ -990,9 +990,11 @@ describe("Phase 7 finance", { timeout: 120000 }, () => {
       reason: "Goodwill credit for a delayed delivery",
     });
     expect(adjustment.status).toBe("REQUESTED");
-    // Finance cannot approve adjustments at all (catalog grant).
+    // V2 Phase 2 (M-1): FINANCE now holds finance.approve_adjustment,
+    // so the creator's own approval attempt reaches the four-eyes
+    // check and is refused there — a different approver is required.
     await expect(adjustmentsSvc.approveAdjustment(financeActor, adjustment.id)).rejects.toBeInstanceOf(
-      actorErrors.AuthorizationError,
+      errors.DomainValidationError,
     );
     const applied = await adjustmentsSvc.approveAdjustment(superAdminActor, adjustment.id);
     expect(applied.status).toBe("APPLIED");

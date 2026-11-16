@@ -341,10 +341,9 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
     { path: "", label: "My packages", group: "workspace", icon: "package" },
     { path: "/tickets", label: "Support tickets", group: "workspace", icon: "ticket" },
     {
-      // CUSTOMER is not granted notification.read_own today (audit
-      // H-3, fixed in Phase 2): until the catalog grants it, this
-      // item correctly stays hidden rather than linking to a page
-      // whose service calls would 403.
+      // CUSTOMER holds notification.read_own (audit H-3, granted in
+      // V2 Phase 2), so this item renders for customers and the
+      // notifications service calls behind it are authorised.
       path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
       anyOf: ["notification.read_own"],
     },

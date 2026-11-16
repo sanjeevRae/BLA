@@ -149,8 +149,12 @@ describe("navigation registry — per-role visibility", () => {
     ]);
   });
 
-  it("Customer sees packages + tickets; notifications stay hidden until the catalog grants notification.read_own (audit H-3)", () => {
-    expect(hrefsFor("CUSTOMER")).toEqual(["/customer", "/customer/tickets"]);
+  it("Customer sees packages, tickets and notifications (notification.read_own granted in Phase 2, audit H-3)", () => {
+    expect(hrefsFor("CUSTOMER")).toEqual([
+      "/customer",
+      "/customer/tickets",
+      "/customer/notifications",
+    ]);
   });
 
   it("Finance sees the finance tree; custody modules never appear", () => {

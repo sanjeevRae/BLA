@@ -275,6 +275,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     "profile.update_own", "tracking.read_public",
     "package.return_initiate", "delivery.reschedule_request",
     "invoice.read", "payment.dispute.raise", "incident.report",
+    "notification.read_own",
   ],
   FINANCE: [
     "audit.read", "profile.update_own",
@@ -282,6 +283,7 @@ export const ROLE_PERMISSIONS: Record<RoleCode, string[]> = {
     "booking.read_all", "package.read_all", "tracking.read_public",
     "vendor.read_all",
     "finance.read", "invoice.create", "invoice.read", "finance.record_payment", "finance.adjust",
+    "finance.approve_adjustment",
     "cod.verify", "cod.read",
     "settlement.read", "settlement.prepare", "settlement.pay", "refund.process",
     "task.create", "task.assign", "task.update_own", "task.verify",

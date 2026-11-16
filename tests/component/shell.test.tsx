@@ -36,9 +36,10 @@ import { ShellFrame, type ShellFrameProps } from "@/components/layout/ShellFrame
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { DataTable } from "@/components/ui/DataTable";
 
-function framePropsFor(role: RoleCode): ShellFrameProps {
+function framePropsFor(role: RoleCode, stripPermissions: string[] = []): ShellFrameProps {
   const dashboard = ROLE_TO_DASHBOARD[role];
   const permissions = new Set(ROLE_PERMISSIONS[role]);
+  for (const code of stripPermissions) permissions.delete(code);
   const items = visibleNavItems(permissions, dashboard);
   const toView = (item: (typeof items)[number]): NavItemView => ({
     id: item.id,
@@ -102,17 +103,20 @@ describe("ShellFrame — role navigation rendering", () => {
     expect(screen.queryByRole("link", { name: /new transfer/i })).toBeNull();
   });
 
-  it("Customer sidebar shows packages + tickets and (until Phase 2) no notifications link", () => {
+  it("Customer sidebar shows packages, tickets and notifications (notification.read_own granted in Phase 2, audit H-3)", () => {
     const { container } = render(<ShellFrame {...framePropsFor("CUSTOMER")} />);
     const hrefs = navLinks(container);
-    expect(hrefs).toEqual(["/customer", "/customer/tickets"]);
+    expect(hrefs).toEqual(["/customer", "/customer/tickets", "/customer/notifications"]);
   });
 
-  it("notifications chrome (bell) renders only for roles holding notification.read_own", () => {
-    render(<ShellFrame {...framePropsFor("CUSTOMER")} />);
+  it("notifications chrome (bell) renders only for actors holding notification.read_own", () => {
+    // Every role holds the grant since Phase 2 (H-3), so the negative
+    // case is a synthetic actor whose permission set lacks it — the
+    // F3 chrome gate itself is what is under test.
+    render(<ShellFrame {...framePropsFor("CUSTOMER", ["notification.read_own"])} />);
     expect(screen.queryByRole("button", { name: "Notifications" })).toBeNull();
     cleanup();
-    render(<ShellFrame {...framePropsFor("FINANCE")} />);
+    render(<ShellFrame {...framePropsFor("CUSTOMER")} />);
     expect(screen.getByRole("button", { name: "Notifications" })).toBeTruthy();
   });
 
