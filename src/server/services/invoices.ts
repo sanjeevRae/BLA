@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 
@@ -569,6 +571,83 @@ export type PaymentView = {
 };
 
 /**
+ * Phase 2 (V2) C3 — request fingerprint for idempotent payments.
+ * SHA-256 hex of a canonical JSON payload built from the
+ * CLIENT-CONTROLLED fields only: amountPaisa (string), method,
+ * transactionRef (null when absent), allocations sorted by
+ * invoiceId as [{ invoiceId, amountPaisa (string) }], and paidAt
+ * (security review F-1): a client-supplied paidAt is stored on the
+ * payment and becomes the journal's occurredAt, so it is part of
+ * the payload identity — two requests differing only in paidAt are
+ * different payments. When the client omits paidAt the canonical
+ * value is null: the stored value is server-defaulted at creation,
+ * and a faithful retry reproduces the omission, so legitimate
+ * retries still match.
+ */
+function paymentRequestFingerprint(data: {
+  amountPaisa: bigint;
+  method: string;
+  transactionRef?: string | null;
+  paidAt?: Date | null;
+  allocations: { invoiceId: string; amountPaisa: bigint }[];
+}): string {
+  const canonical = {
+    amountPaisa: data.amountPaisa.toString(),
+    method: data.method,
+    transactionRef: data.transactionRef ?? null,
+    paidAt: data.paidAt ? data.paidAt.toISOString() : null,
+    allocations: [...data.allocations]
+      .sort((a, b) => (a.invoiceId < b.invoiceId ? -1 : a.invoiceId > b.invoiceId ? 1 : 0))
+      .map((a) => ({ invoiceId: a.invoiceId, amountPaisa: a.amountPaisa.toString() })),
+  };
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
+/**
+ * Phase 2 (V2) C3 — when an idempotency replay finds an existing
+ * payment, the stored fingerprint decides: a match returns the
+ * original payment exactly as before; a mismatch means the key was
+ * reused with a DIFFERENT payload — a conflict, not a replay.
+ *
+ * Security review F-2: rows recorded before fingerprints existed
+ * carry requestFingerprint = NULL and are NOT exempt — amount,
+ * method, transactionRef and allocations are all persisted, so the
+ * expected fingerprint is derived from the stored row and compared
+ * against the incoming request's legacy fingerprint. paidAt is
+ * excluded on BOTH sides for legacy rows only: a legacy row cannot
+ * distinguish a client-supplied paidAt from the server default, so
+ * that one field is uncheckable for them; every money-bearing
+ * field is checked.
+ */
+function assertFingerprintMatches(
+  existing: {
+    requestFingerprint: string | null;
+    amountPaisa: bigint;
+    method: string;
+    transactionRef: string | null;
+    allocations: { invoiceId: string; amountPaisa: bigint }[];
+  },
+  computed: string,
+  computedLegacy: string,
+) {
+  const matches =
+    existing.requestFingerprint !== null
+      ? existing.requestFingerprint === computed
+      : paymentRequestFingerprint({
+          amountPaisa: existing.amountPaisa,
+          method: existing.method,
+          transactionRef: existing.transactionRef,
+          paidAt: null,
+          allocations: existing.allocations,
+        }) === computedLegacy;
+  if (!matches) {
+    throw new ConflictError(
+      "Idempotency key was reused with a different payment payload — the original payment was recorded with different amount, method, transaction reference, payment date or allocations",
+    );
+  }
+}
+
+/**
  * Record a payment and allocate it across invoices
  * (financial-workflow §3). One transaction: idempotency replay
  * returns the original payment untouched (Scenario 12); invoice rows
@@ -599,6 +678,16 @@ export async function recordPayment(actor: ActorContext, input: unknown): Promis
     seenInvoices.add(allocation.invoiceId);
   }
 
+  // Phase 2 (V2) C3: fingerprint of this request's client-controlled
+  // payload — compared at every replay checkpoint below and stored
+  // on the created payment so a later reuse of the key can be told
+  // apart from a faithful retry.
+  const requestFingerprint = paymentRequestFingerprint(data);
+  // Security review F-2: the legacy comparison fingerprint — the
+  // same canonical payload with paidAt excluded, used only when the
+  // existing row predates fingerprints (see assertFingerprintMatches).
+  const legacyRequestFingerprint = paymentRequestFingerprint({ ...data, paidAt: null });
+
   try {
     return await prisma.$transaction(async (tx) => {
       if (data.idempotencyKey) {
@@ -607,6 +696,10 @@ export async function recordPayment(actor: ActorContext, input: unknown): Promis
           include: { allocations: true },
         });
         if (existing) {
+          // Phase 2 (V2) C3: a replay is only a replay when the
+          // payload matches — a reused key with a different payload
+          // is a conflict (see assertFingerprintMatches).
+          assertFingerprintMatches(existing, requestFingerprint, legacyRequestFingerprint);
           return {
             id: existing.id,
             amountPaisa: existing.amountPaisa.toString(),
@@ -641,11 +734,17 @@ export async function recordPayment(actor: ActorContext, input: unknown): Promis
         // committed; serialized here, the winner's payment is now
         // visible and the replay returns it instead of dying on the
         // (now zero) outstanding-balance check.
+        // Phase 2 (V2) C3 extends the re-check: the winner is only
+        // returned when this request's fingerprint matches the
+        // winner's — concurrent submissions that share a key but
+        // carry different payloads conflict here instead of silently
+        // collapsing into whichever payment won the race.
         const winner = await tx.payment.findUnique({
           where: { idempotencyKey: data.idempotencyKey },
           include: { allocations: true },
         });
         if (winner) {
+          assertFingerprintMatches(winner, requestFingerprint, legacyRequestFingerprint);
           return {
             id: winner.id,
             amountPaisa: winner.amountPaisa.toString(),
@@ -699,6 +798,7 @@ export async function recordPayment(actor: ActorContext, input: unknown): Promis
           status: "PAID",
           transactionRef: data.transactionRef ?? null,
           idempotencyKey: data.idempotencyKey ?? null,
+          requestFingerprint,
           paidAt,
           recordedById: actor.userId,
           allocations: {
@@ -797,6 +897,11 @@ export async function recordPayment(actor: ActorContext, input: unknown): Promis
           include: { allocations: true },
         });
         if (existing) {
+          // Phase 2 (V2) C3: the unique-index loser path obeys the
+          // same fingerprint rule as the in-transaction checkpoints
+          // — a different payload under the winner's key conflicts
+          // rather than returning the winner's payment.
+          assertFingerprintMatches(existing, requestFingerprint, legacyRequestFingerprint);
           return {
             id: existing.id,
             amountPaisa: existing.amountPaisa.toString(),
