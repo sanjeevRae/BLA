@@ -375,6 +375,16 @@ export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver"
     // ENDED
     engine?.detach();
     registerTrackingEngine(null);
+    // The session can never accept pings again, so its sequence
+    // counter has no reason to linger in sessionStorage (Phase 4
+    // security review O1). While a session is live the counter
+    // MUST persist across remounts — that is what keeps the
+    // sequence strictly increasing.
+    try {
+      window.sessionStorage.removeItem(`bla.tracking.seq.${sessionId}`);
+    } catch {
+      // Storage unavailable — nothing to clean up.
+    }
   }, [sessionId, sessionStatus, session?.trackingType, data, fetchCurrent, syncEngineUi]);
 
   // Unmount: stop everything.

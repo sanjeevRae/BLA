@@ -422,6 +422,28 @@ describe("Phase 4 — pause/resume ownership (route service layer)", () => {
     expect(state.lastPing?.freshnessState).toBe("FRESH");
   });
 
+  it("resume refuses a session whose assignment went terminal while paused (F1 regression)", async () => {
+    const session2 = await trackingSvc.startTrackingSession(rider2Actor, {
+      deliveryBatchId: fx.batch2,
+      permissionAcknowledged: true,
+    });
+    await trackingSvc.pauseTrackingSession(rider2Actor, session2.id);
+    // Simulate a terminal transition that did not run the
+    // auto-end hook (direct write, as an admin correction would).
+    await prisma.deliveryBatch.update({
+      where: { id: fx.batch2 },
+      data: { status: "COMPLETED" },
+    });
+    await expect(trackingSvc.resumeTrackingSession(rider2Actor, session2.id)).rejects.toThrow(
+      /no longer active/,
+    );
+    const state = await trackingSvc.getOwnTrackingState(rider2Actor);
+    expect(state.session?.status).toBe("PAUSED");
+    // Cleanup: the owner can still stop the paused session.
+    const stopped = await trackingSvc.stopTrackingSession(rider2Actor, session2.id);
+    expect(stopped.status).toBe("ENDED");
+  });
+
   it("pause/resume reject wrong-state transitions", async () => {
     await expect(trackingSvc.resumeTrackingSession(rider1Actor, fx.session1)).rejects.toThrow(
       /PAUSED/,

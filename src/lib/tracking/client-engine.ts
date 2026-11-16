@@ -150,6 +150,8 @@ export interface SendDecision {
  * - an event send always goes out (the server deduplicates and
  *   rate-limits authoritatively);
  * - the first fix of a session always goes out;
+ * - nothing else goes out inside the server minimum interval —
+ *   the floor beats every other rule below;
  * - identical coordinates never go out twice (the server
  *   deduplicates them too) — unless the stationary heartbeat has
  *   elapsed, in which case the fix is offered as a liveness
@@ -157,8 +159,7 @@ export interface SendDecision {
  *   fix server-side);
  * - otherwise a fix goes out when the device has moved beyond
  *   the distance threshold AND the moving interval has elapsed,
- *   or when the stationary heartbeat has elapsed;
- * - nothing goes out inside the server minimum interval.
+ *   or when the stationary heartbeat has elapsed.
  */
 export function decidePingSend(input: {
   lastSent: { latitude: number; longitude: number; at: number } | null;
@@ -174,12 +175,16 @@ export function decidePingSend(input: {
   if (input.force) return { send: true, reason: "event" };
   if (!lastSent) return { send: true, reason: "initial" };
   const elapsed = now - lastSent.at;
+  // The server minimum interval is a hard floor for every
+  // non-event send — including the identical-coordinate heartbeat
+  // (Phase 4 security review F2: a legal config can set the
+  // heartbeat below the floor, and the floor must win).
+  if (elapsed < input.minIntervalMs) return { send: false, reason: "too-soon" };
   const identical = fix.latitude === lastSent.latitude && fix.longitude === lastSent.longitude;
   if (identical) {
     if (elapsed >= input.heartbeatMs) return { send: true, reason: "heartbeat" };
     return { send: false, reason: "duplicate" };
   }
-  if (elapsed < input.minIntervalMs) return { send: false, reason: "too-soon" };
   const distance = haversineMeters(lastSent.latitude, lastSent.longitude, fix.latitude, fix.longitude);
   if (distance >= input.thresholdMeters) {
     if (elapsed >= input.movingIntervalMs) return { send: true, reason: "moved" };

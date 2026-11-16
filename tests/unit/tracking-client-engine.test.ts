@@ -130,6 +130,19 @@ describe("decidePingSend", () => {
     expect(d).toEqual({ send: true, reason: "heartbeat" });
   });
 
+  it("the server floor beats the identical-coordinate heartbeat (F2 regression)", () => {
+    // Legal config combination: heartbeat 600 s < floor 3600 s.
+    // The heartbeat must NOT produce a send inside the floor.
+    const d = decidePingSend({
+      ...base,
+      minIntervalMs: 3_600_000,
+      lastSent,
+      fix: fix(),
+      now: 1_000_000 + 600_000,
+    });
+    expect(d).toEqual({ send: false, reason: "too-soon" });
+  });
+
   it("event sends always go out", () => {
     const d = decidePingSend({
       ...base,

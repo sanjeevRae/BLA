@@ -792,6 +792,36 @@ export async function resumeTrackingSession(
       if (fresh.status !== "PAUSED") {
         throw new ConflictError(`Only a PAUSED session can be resumed (current: ${fresh.status})`);
       }
+      // Re-validate the assignment under the lock (Phase 4
+      // security review F1): a session whose trip/batch reached a
+      // terminal state while paused — via any path that did not
+      // run the auto-end hook — must not be resurrected. The ping
+      // gate would refuse its locations anyway; resume refuses
+      // first so the driver is not left holding a zombie ACTIVE
+      // session that blocks a legitimate start.
+      if (fresh.tripId) {
+        const trip = await tx.trip.findUnique({
+          where: { id: fresh.tripId },
+          select: { status: true },
+        });
+        if (
+          !trip ||
+          !(ACTIVE_TRIP_STATUSES_FOR_TRACKING as readonly string[]).includes(trip.status)
+        ) {
+          throw new ConflictError("The trip is no longer active for tracking");
+        }
+      } else if (fresh.deliveryBatchId) {
+        const batch = await tx.deliveryBatch.findUnique({
+          where: { id: fresh.deliveryBatchId },
+          select: { status: true },
+        });
+        if (
+          !batch ||
+          !(ACTIVE_BATCH_STATUSES_FOR_TRACKING as readonly string[]).includes(batch.status)
+        ) {
+          throw new ConflictError("The batch is no longer active for tracking");
+        }
+      }
       const row = await tx.trackingSession.update({
         where: { id: sessionId },
         data: { status: "ACTIVE" },
