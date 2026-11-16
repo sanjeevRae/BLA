@@ -50,10 +50,22 @@ function pinIcon(item: LiveOperationItem, selected: boolean): L.DivIcon {
   });
 }
 
+/** Leaflet assigns divIcon html via innerHTML, so any text that
+ *  reaches it must be escaped at the sink (Phase 5 review P5-S3 —
+ *  warehouse codes are pattern-validated at creation, but the sink
+ *  does not rely on that). */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function warehouseIcon(coords: WarehouseCoords): L.DivIcon {
   return L.divIcon({
     className: "bla-wh-wrap",
-    html: `<span class="bla-wh">${coords.code}</span>`,
+    html: `<span class="bla-wh">${escapeHtml(coords.code)}</span>`,
     iconSize: [38, 22],
     iconAnchor: [19, 11],
   });

@@ -400,7 +400,16 @@ export async function listLiveOperations(
       ],
     });
   }
-  const search = query.search?.trim();
+  // Escape LIKE metacharacters: Prisma contains/startsWith compile
+  // to Postgres LIKE, which would otherwise treat % and _ in a
+  // user's search as wildcards (Phase 5 review P5-S1). The escaped
+  // term matches literally; scope composition is unaffected either
+  // way (the OR below stays inside one AND-ed condition).
+  const search = query.search
+    ?.trim()
+    .replace(/\\/g, "\\\\")
+    .replace(/%/g, "\\%")
+    .replace(/_/g, "\\_");
   if (search) {
     // Search is ONE additional AND-ed condition: it narrows the
     // already-scoped, status-windowed, warehouse-filtered set and
