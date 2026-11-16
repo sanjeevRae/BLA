@@ -110,3 +110,12 @@ SystemSetting key plus one check in `approveSettlement`.
   1970-01-01 because the legacy system stored no expiry. The
   drivers are blocked from assignment until the real dates are
   entered (see the migration runbook, deployment guide §4).
+- **GPS legal review is a production gate (V2 Phase 3).** The
+  live-tracking backend collects driver location only during
+  active assignments, but the Nepal Privacy Act 2075 review
+  described in docs/gps-privacy-and-retention.md §6 (driver
+  notice/acknowledgement text, 30-day ping retention, access
+  expectations) must be completed before GPS is enabled in
+  production. The retention prune and abandoned-session expiry
+  services exist but are not yet scheduled (Phase 8 wires the
+  schedule); until then they are run operationally.
