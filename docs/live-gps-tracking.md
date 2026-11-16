@@ -80,12 +80,11 @@ audit-logged when it disagrees with the actor).
 | `POST /api/tracking/session/start` | driver (`tracking.manage_own`) | Body names `tripId` **or** `deliveryBatchId` plus `permissionAcknowledged: true`. Server verifies the assignment belongs to this driver and is in an active state, derives origin/destination from the assignment (never from the client), refuses a second concurrent session. |
 | `POST /api/tracking/location` | driver (`tracking.manage_own`) | Body: `trackingSessionId`, coordinates, `accuracyMeters`, optional speed/heading, `recordedAt`, `sequenceId`. See §4 for the ingest transaction. |
 | `POST /api/tracking/session/stop` | owning driver, or supervisor (`operations.live_view`, scoped) | Driver stop ends with `endReason: DRIVER`. Supervisor stop (Super Admin / Admin globally; Warehouse Admin only for sessions touching their warehouse) ends with `SUPERVISOR` and is always audit-logged (`tracking.session_stopped_supervisor`). |
+| `POST /api/tracking/session/pause` | owning driver (`tracking.manage_own`) | ACTIVE → PAUSED. Pings are refused while PAUSED. Owner only — there is no supervisor pause. |
+| `POST /api/tracking/session/resume` | owning driver (`tracking.manage_own`) | PAUSED → ACTIVE. Inside the row-lock transaction the assignment's trackable status is re-validated (Phase 4 review F1): a session whose trip/batch went terminal while paused cannot be resurrected. |
+| `GET /api/tracking/session/current` | driver (`tracking.manage_own`) | The actor's **own** tracking state for the driver panel: latest session (any status), its assignment summary, eligible assignments (labels + package counts only — no recipient PII), the last accepted fix from the snapshot (timestamps/accuracy/freshness — **not** coordinates), and the client cadence config (§7). Every query is keyed by the actor's own driver id; actors without a driver profile get an empty state. |
 | `GET /api/live-operations` | `operations.live_view` | Snapshot-based list of active movements + sessions ended inside the recent window (30 min default). Optional `warehouseId` query filter is a *requested* scope, intersected with authority — it can narrow, never widen. |
 | `GET /api/live-operations/[trackingSessionId]` | `operations.live_view` | One movement's detail including the authorized package list — tracking IDs and statuses only, no recipient names, phones, or addresses. |
-
-Service-only (Phase 4 will add routes): `pauseTrackingSession` /
-`resumeTrackingSession` — owner-driver only; pings are refused
-while PAUSED.
 
 ### Live-operations scope
 
@@ -180,12 +179,141 @@ be overridden by a `SystemSetting` row with key `tracking.config`
 | `maxAccuracyMeters` | 10000 | fixes with worse claimed accuracy are rejected |
 | `futureTimestampToleranceSeconds` | 300 | device clock lead tolerated |
 | `preStartToleranceSeconds` | 60 | device clock lag tolerated before session start |
+| `riderMovingIntervalSeconds` | 150 | client cadence: pickup/delivery moving interval (Phase 4) |
+| `linehaulMovingIntervalSeconds` | 240 | client cadence: line-haul moving interval (Phase 4) |
+| `stationaryHeartbeatSeconds` | 600 | client cadence: stationary liveness interval (Phase 4) |
+| `movementThresholdMeters` | 25 | client cadence: minimum movement that counts as "moved" (Phase 4) |
 
-Spec reporting cadence (Phase 4 client behaviour): riders ~2–3
-min moving, line-haul ~3–5 min, ~10 min stationary, plus immediate
-event pings — the 30 s server floor sits safely below all of them.
+The four client-cadence values are projected to the driver panel
+via `GET /api/tracking/session/current` (`toTrackingClientConfig`)
+— the server config is the single source of truth and the client
+never hardcodes a second copy. Each is range-checked like the
+rest (moving 30–3600 s, heartbeat 60–3600 s, threshold 5–1000 m);
+out-of-range overrides fall back to defaults. The 30 s server
+floor sits safely below every cadence, and the client enforces
+the floor itself for every non-event send (§8).
 
-## 8. Cost
+## 8. The driver interface (Phase 4)
+
+One shared component — `src/components/tracking/LocationTrackingPanel.tsx`
+— mounted at the top of **both** driver dashboards (rider and
+line-haul/transport-driver layouts, above the page content so it
+is visible without digging and survives in-dashboard navigation).
+Labels are role-aware (batch/run vs trip). All controls are
+≥ 48 px touch targets. The panel polls `GET
+/api/tracking/session/current` every 30 s while a session is
+ACTIVE/PAUSED and on visibility return, so a supervisor stop or
+an assignment auto-end is reflected without a reload.
+
+### Panel state model
+
+- **No eligible assignment** — explains tracking starts when a
+  trip/batch begins; no controls are offered and nothing is
+  collected.
+- **Eligible, not started** — assignment summary plus the consent
+  explanation *before any browser prompt* (location is shared
+  only while the assignment runs, visible to admins and the
+  assignment's warehouse admins, stops automatically when the
+  assignment completes — per `gps-privacy-and-retention.md`).
+- **Permission flow** — Start first requests a browser fix via
+  `getCurrentPosition`; **only on grant** does the panel call
+  `session/start` with `permissionAcknowledged: true`, and the
+  granted fix becomes the session's first ping. On denial the
+  session is **not** started and the panel shows how to
+  re-enable permission in the browser. Geolocation unsupported
+  or a non-secure context shows GPS unavailable and disables
+  Start.
+- **ACTIVE** — "Tracking on", assignment, last successful update
+  (live relative time), last fix accuracy (± m), network state
+  (online/offline), an unsent-position warning when a send is
+  outstanding, and Pause / End controls. The panel states
+  plainly that updates pause while the app is in the background
+  — there is no background tracking.
+- **PAUSED** — clear paused state ("no location is sent while
+  paused") with Resume / End.
+- **Signal problems** — a `watchPosition` error flips the panel
+  to a red "Location problem" state *immediately*; it never
+  keeps showing "Tracking on" through a signal failure. The
+  watch itself is not torn down (POSITION_UNAVAILABLE / TIMEOUT
+  are routinely transient; the next good fix recovers the panel),
+  and a watchdog flags "no update for X" when fixes or sends
+  stall beyond ~2× the send interval (amber banner, GPS vs
+  network copy distinguished).
+- **ENDED** — shows "Tracking ended" plus the reason (you ended
+  it / a supervisor ended it / the assignment completed / was
+  cancelled / the session expired). The notice takes precedence
+  over the eligible list — including when the driver stopped
+  mid-assignment and could start again — until dismissed;
+  dismissal is remembered per session in `sessionStorage` so a
+  reload does not nag.
+
+### The sending engine
+
+`src/lib/tracking/client-engine.ts` — framework-thin,
+dependency-injected, unit-tested. The panel owns DOM listeners;
+the engine owns the watch lifecycle and every send decision.
+
+- **Watch lifecycle** — `watchPosition` runs only while the
+  session is ACTIVE and the page is visible. Hidden → watch
+  stopped; visible again → watch restarted and the latest known
+  position offered as a catch-up update.
+- **Cadence decision** (`decidePingSend`, pure) — an event send
+  always goes out; the first fix always goes out; **nothing else
+  goes out inside the server minimum interval** (the floor beats
+  every other rule, including the heartbeat — Phase 4 review
+  F2); identical coordinates are never sent twice unless the
+  stationary heartbeat has elapsed; otherwise a fix goes out
+  when the device moved beyond the distance threshold AND the
+  moving interval elapsed, or the heartbeat elapsed. Intervals
+  come from the server-exposed config (§7): rider/delivery
+  150 s, line-haul 240 s, heartbeat 600 s, threshold 25 m.
+- **Decision tick** — platforms deliver fixes sparsely (a
+  stationary phone may produce none for minutes), so while
+  watching, a 15 s tick re-evaluates the latest fix against the
+  cadence rules: a held send matures on schedule without waiting
+  for the next fix. The tick never touches fix-arrival
+  timestamps, so the watchdog's freshness stays honest.
+- **Identical-coordinate interaction** — the client offers the
+  stationary heartbeat, but the server deduplicates a
+  bit-identical fix against the snapshot without refreshing
+  freshness (§4.4). On real devices GPS jitter normally makes
+  the heartbeat a genuinely new fix; a perfectly stationary
+  device may therefore read DELAYED/STALE on the admin side
+  despite heartbeats being offered. That is the honest outcome
+  — freshness is never faked.
+- **Failure handling** — a failed send keeps **only the latest**
+  pending position (latest-wins, no growing queue) and retries
+  on the next fix, on the decision tick, on `online`, and on
+  visibility return; the panel shows the unsent state. A
+  409/404/403 outcome drops the pending fix and makes the panel
+  resync from `session/current` (the session ended or paused
+  server-side).
+- **Sequence** — `sequenceId` is strictly increasing per
+  session, persisted in `sessionStorage`
+  (`bla.tracking.seq.<sessionId>`) so it survives panel
+  remounts; re-sending the same fix reuses its sequence so the
+  server can deduplicate the replay. The counter is removed
+  when the session ends (Phase 4 review O1).
+- **Event updates** — `sendImmediate()` (fresh fix preferred)
+  is exposed through a module registry
+  (`src/lib/tracking/client-registry.ts`) and called **only on
+  success** from the existing driver flows: trip departure and
+  arrival (`src/components/transfers/forms.tsx`), pickup
+  confirmation, delivery attempt recorded, and delivery
+  completed (`src/components/deliveries/forms.tsx`). It is a
+  no-op when no session is live and can never throw into a
+  success path.
+
+Verified end-to-end on the production build (headless Chrome,
+CDP geolocation override + permission grant): eligible batch →
+consent → grant → ACTIVE → first ping + snapshot FRESH → a
+Warehouse Admin's `live-operations` shows the movement → moved
+fix sent at the (test-shortened) cadence → pause (no pings
+land) → resume (pings flow) → stop → panel ended, session
+ENDED/DRIVER. Real-device behaviour (background/screen-lock,
+iOS Safari, Android Chrome) is a Phase 8 verification item.
+
+## 9. Cost
 
 Zero paid services: browser Geolocation + the existing Postgres +
 polling. OpenStreetMap tiles are a Phase 5 (map UI) concern and

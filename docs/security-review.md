@@ -222,3 +222,55 @@ One Info observation, no action: a missing session id returns 404
 while a foreign one returns 403 on the ping and detail paths — an
 existence oracle consistent with the rest of the codebase, over
 unguessable UUID ids.
+
+## V2 Phase 4 — Driver GPS interface (2026-11-16)
+
+Scope: the three new routes (`POST /api/tracking/session/pause`,
+`POST /api/tracking/session/resume`, `GET
+/api/tracking/session/current`), the driver panel's data flow,
+the client cadence config, and the delivery/transfer event
+wiring.
+
+### Independent review — PASS WITH FINDINGS (no High/Medium)
+
+Verified clean, with adversarial PoCs: ownership discipline on
+pause/resume/current (foreign drivers, ADMIN, WAREHOUSE_ADMIN,
+permission-stripped driver actors all denied with no state
+change); `session/current` scoping (every query keyed by the
+actor's driver id; exact key whitelist — no recipient/phone/
+address/COD/coordinate fields, not even the actor's own
+coordinates in `lastPing`); the permission-grant flow (denial
+never calls `session/start`); cadence config bounds (no
+SystemSetting value can soften a server gate); event wiring
+(success-path only, cannot throw into a completed action); no
+GPS data anywhere except the tracking endpoints; no
+console/localStorage leaks.
+
+Findings, all fixed in this phase:
+
+- **F1 (Low)** — `resumeTrackingSession` did not re-validate the
+  assignment's trackable status: a session paused while its
+  batch/trip went terminal via a path that skipped the auto-end
+  hook could be resurrected into a zombie ACTIVE session (pings
+  were still refused by the ingest gate, but the zombie blocked
+  a legitimate start). Fixed: resume re-checks trip/batch status
+  inside the row-lock transaction; regression tests in the
+  Phase 4 integration suite and the reviewer's PoC suite.
+- **F2 (Low)** — `decidePingSend` evaluated the
+  identical-coordinate heartbeat before the server-floor check,
+  so a legal config (heartbeat below the floor) contradicted the
+  documented "nothing inside the minimum interval" invariant
+  (server gates were never weakened — the ingest floor held).
+  Fixed: the floor check now precedes the heartbeat branch;
+  unit regression added.
+- **O1 (Informational)** — the sessionStorage sequence key
+  embeds the session id and persisted after the session ended.
+  The counter must persist while a session is live (sequence
+  monotonicity across remounts); the panel now removes it when
+  the session reaches ENDED.
+
+The reviewer's 9-test PoC suite is committed as
+`tests/integration/phase4-security-review.test.ts` (9/9 after
+fixes). Separately, the production run-through produced two
+client fixes (decision tick for sparse-fix platforms;
+ended-notice precedence) — see `docs/live-gps-tracking.md` §8.
