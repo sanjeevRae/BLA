@@ -47,6 +47,7 @@ import {
   loadWarehouseOr404,
 } from "@/server/services/warehouse-ops-shared";
 import { raiseIncidentInTx } from "@/server/services/incidents";
+import { endTrackingSessionsInTx } from "@/server/services/tracking";
 
 /**
  * Inter-warehouse transfers (docs/transfer-workflow.md,
@@ -1565,6 +1566,11 @@ export async function cancelTransfer(
         where: { id: freshTransfer.tripId },
         data: { status: "CANCELLED" },
       });
+      await endTrackingSessionsInTx(
+        tx,
+        { tripId: freshTransfer.tripId },
+        "ASSIGNMENT_CANCELLED",
+      );
     }
     if (freshTransfer.driverId) {
       const driver = await tx.driver.findUnique({
@@ -2214,6 +2220,7 @@ export async function finishReceiving(
       const trip = await tx.trip.findUnique({ where: { id: transfer.tripId } });
       if (trip && trip.status !== "COMPLETED" && trip.status !== "CANCELLED") {
         await tx.trip.update({ where: { id: trip.id }, data: { status: "COMPLETED" } });
+        await endTrackingSessionsInTx(tx, { tripId: trip.id }, "ASSIGNMENT_COMPLETED");
         const vehicle = await tx.vehicle.findUnique({ where: { id: trip.vehicleId } });
         if (vehicle?.status === "ON_TRIP") {
           await tx.vehicle.update({ where: { id: vehicle.id }, data: { status: "AVAILABLE" } });

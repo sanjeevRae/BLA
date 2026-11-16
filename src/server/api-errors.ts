@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 
 import { AuthorizationError } from "@/lib/auth/actor";
-import { ConflictError, DomainValidationError, NotFoundError } from "@/lib/errors";
+import {
+  ConflictError,
+  DomainValidationError,
+  NotFoundError,
+  RateLimitError,
+} from "@/lib/errors";
 
 /**
  * The API error envelope (Phase 2 warehouses pattern):
@@ -31,6 +36,12 @@ export function apiErrorResponse(error: unknown): NextResponse | null {
     return NextResponse.json(
       { error: { code: "VALIDATION", message: error.message } },
       { status: 400 },
+    );
+  }
+  if (error instanceof RateLimitError) {
+    return NextResponse.json(
+      { error: { code: "RATE_LIMITED", message: error.message } },
+      { status: 429 },
     );
   }
   return null;

@@ -43,6 +43,7 @@ import {
   notifyUsersInTx,
 } from "@/server/services/notifications";
 import { raiseIncidentInTx } from "@/server/services/incidents";
+import { endTrackingSessionsInTx } from "@/server/services/tracking";
 import {
   auditAccessDenied,
   pageArgs,
@@ -950,6 +951,11 @@ export async function cancelBatch(
       where: { id: batch.id },
       data: { status: "CANCELLED", closedAt: new Date(), closedById: actor.userId },
     });
+    await endTrackingSessionsInTx(
+      tx,
+      { deliveryBatchId: batch.id },
+      "ASSIGNMENT_CANCELLED",
+    );
   });
   await auditOps(actor, "delivery.batch_cancelled", "DeliveryBatch", batch.id, {
     warehouseId: batch.warehouseId,
@@ -2155,6 +2161,11 @@ export async function closeBatch(
       where: { id: batch.id },
       data: { status: "COMPLETED", closedAt: now, closedById: actor.userId },
     });
+    await endTrackingSessionsInTx(
+      tx,
+      { deliveryBatchId: batch.id },
+      "ASSIGNMENT_COMPLETED",
+    );
     const otherOpen = await tx.deliveryBatch.count({
       where: { riderId: batch.riderId, status: "IN_PROGRESS", id: { not: batch.id } },
     });

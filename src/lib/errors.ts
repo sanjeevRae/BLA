@@ -29,3 +29,12 @@ export class DomainValidationError extends Error {
     this.name = "DomainValidationError";
   }
 }
+
+/** The caller is sending faster than the allowed rate (HTTP 429). */
+export class RateLimitError extends Error {
+  readonly status = 429;
+  constructor(message = "Too many requests") {
+    super(message);
+    this.name = "RateLimitError";
+  }
+}
