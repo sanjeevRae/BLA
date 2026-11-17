@@ -1,60 +1,120 @@
+@import "@fontsource-variable/inter";
 @import "tailwindcss";
 
 /*
- * BLA design tokens, ported 1:1 from the legacy admin console
- * (docs/system-architecture.md §7): flat cards with 1px `line` borders,
- * small radii, system font stack, light theme only.
- * Tailwind v4 detects content automatically across .ts/.tsx/.jsx files —
- * the legacy content-glob bug (which excluded .tsx) cannot recur.
+ * BLA V3 design tokens — Teal & Graphite (docs/ui-design-system.md §2/§3/§5).
+ * Tailwind v4 @theme: token values/names per the design system; the
+ * mechanism is unchanged from V2.
+ *
+ * Legacy token names are REMAPPED onto the V3 palette below so every
+ * existing module page inherits the new skin without edits. New work
+ * uses the canonical V3 names (primary / ink / ink-2 / page / card /
+ * surface-2 / border / border-control / sidebar* / status tones).
  */
 @theme {
-  --color-page: #f5f7fa;
-  --color-surface: #ffffff;
-  --color-cream: #f1f5f9;
-  --color-ink: #0f172a;
-  --color-slate2: #64748b;
-  --color-faint: #94a3b8;
-  --color-brand: #2563eb;
-  --color-accentbg: #eff6ff;
-  --color-green: #16a34a;
-  --color-greenbg: #e8f7ee;
-  --color-orange: #ea580c;
-  --color-orangebg: #fff1e6;
-  --color-purple: #7c3aed;
-  --color-purplebg: #f1e9fd;
-  --color-red: #dc2626;
-  --color-redbg: #fdecec;
-  --color-amber: #f59e0b;
-  --color-amberbg: #fdf3e0;
-  /* Deep variants: badge/label text on the tinted backgrounds above.
-   * The bright hues fail contrast at small sizes; the deep ones pass
-   * (see docs/ui-ux-guidelines.md, status colour semantics). */
-  --color-greendeep: #15803d;
-  --color-amberdeep: #9a6206;
-  --color-reddeep: #b91c1c;
+  /* ---- Canonical V3 palette (DS §2.1) ---- */
+  --color-primary: #0f766e;
+  --color-primary-dark: #115e59;
+  --color-primary-light: #d9f0eb;
+  --color-sidebar: #172f2b;
+  --color-ink: #172823;
+  --color-ink-2: #52645d;
+  --color-page: #f1f4f2;
+  --color-card: #ffffff;
+  --color-surface-2: #e7eeea;
+  --color-border: #d1ddd7;
+  /* Form-control boundaries only (DS §2.3.3): 3.42:1 on white — the
+   * `border` token (1.40:1) is decorative (dividers/card edges) and
+   * must never be the sole identifier of a control. */
+  --color-border-control: #7d8f86;
+  /* Restricted (DS §2.3.1): sidebar indicator bar / large graphical
+   * accents on dark only — never text or icons on light surfaces. */
+  --color-accent: #41b7a4;
 
-  /*
-   * V2 Phase 1 design-system tokens (docs/ui-ux-guidelines.md).
-   * The palette above is the existing console language and stays the
-   * single source: `brand` is the ONE accent; green/amber/red are
-   * semantic only (success / pending-warning / failed-critical);
-   * cream + faint are the inactive/neutral pair. Purple and orange are
-   * legacy accents — retained because existing screens reference them,
-   * but new work must not introduce them (see the guidelines doc).
-   */
-  --color-line: #e6ebf0;
+  /* Sidebar text tones (DS §2.3.2) */
+  --color-sidebar-text: #c3d4cb;
+  --color-sidebar-label: #8fa89d;
 
-  --radius-sm: 2px;
-  --radius-md: 3px;
-  --radius-lg: 4px;
-  --radius-xl: 8px;
+  /* Status tones (DS §2.4/§4): text + tint background per status. */
+  --color-success: #18794e;
+  --color-successbg: #e3f4e8;
+  --color-warning: #99610a;
+  --color-warningbg: #fff0d6;
+  --color-danger: #b42318;
+  --color-dangerbg: #fde8e7;
+  --color-info: #285ea8;
+  --color-infobg: #e7effb;
+  --color-neutral: #53635d;
+  --color-neutralbg: #edf1ee;
 
-  /* Subtle shadows only: cards rest on borders, overlays (dialog,
-   * drawer, menus) get the one pop shadow. */
-  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04);
-  --shadow-pop: 0 8px 28px rgb(15 23 42 / 0.14), 0 2px 6px rgb(15 23 42 / 0.08);
+  /* ---- Legacy names remapped onto V3 (do not use in new work) ---- */
+  --color-surface: #ffffff; /* → card */
+  --color-cream: #e7eeea; /* → surface-2 */
+  --color-slate2: #52645d; /* → ink-2 */
+  /* `faint` is abolished as a text colour (DS §2.3.4, was 2.56:1);
+   * it now resolves to ink-2 so timestamps/placeholders/icons that
+   * still reference it meet the AA floor. */
+  --color-faint: #52645d; /* → ink-2 */
+  --color-brand: #0f766e; /* → primary */
+  --color-accentbg: #d9f0eb; /* → primary-light */
+  --color-line: #d1ddd7; /* → border */
+  --color-green: #18794e; /* → success text (bright #16a34a retired) */
+  --color-greenbg: #e3f4e8; /* → success tint */
+  --color-greendeep: #18794e; /* → success text */
+  --color-amber: #99610a; /* → pending/warning text */
+  --color-amberbg: #fff0d6; /* → pending tint */
+  --color-amberdeep: #99610a; /* → pending text */
+  --color-red: #b42318; /* → failed/danger */
+  --color-redbg: #fde8e7; /* → failed tint */
+  --color-reddeep: #b42318; /* → failed text */
+  /* Legacy-only (DS §2.3 / audit §5): purple has NO usages anywhere in
+   * src/ (token definition only) — mapped to Neutral tones so any
+   * stray reference renders as neutral, never as a sixth hue.
+   * Orange IS used semantically as a warning (auth banner, warehouse
+   * capacity/hint text) — mapped to the Pending tones, which is what
+   * those usages always meant. Neither may appear in new work. */
+  --color-purple: #53635d; /* legacy-only → neutral text */
+  --color-purplebg: #edf1ee; /* legacy-only → neutral tint */
+  --color-orange: #99610a; /* legacy-only → pending text */
+  --color-orangebg: #fff0d6; /* legacy-only → pending tint */
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  /* Radius scale (DS §5): 6 chips/inputs/small buttons, 12 cards/
+   * panels/buttons, 16 dialogs/drawers/palette. Tailwind's md is the
+   * historic input radius across the codebase, so md stays 6 and the
+   * 12/16 steps live on lg/xl/2xl. Pill radius is badges/chips only. */
+  --radius-sm: 6px;
+  --radius-md: 6px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 16px;
+
+  /* Shadows (DS §5): cards rest on borders (flat); ONE graphite pop
+   * shadow for floating layers (menus, dialogs, drawers, palette). */
+  --shadow-card: none;
+  --shadow-pop: 0 12px 32px rgb(23 40 35 / 0.16), 0 2px 8px rgb(23 40 35 / 0.1);
+
+  /* Typography (DS §3): Inter Variable, self-hosted via Fontsource. */
+  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+
+  /* Type scale tokens (DS §3) — generate text-page-title etc.
+   * utilities; weights are applied at call sites. */
+  --text-page-title: 26px;
+  --text-page-title--line-height: 1.25;
+  --text-section-title: 18px;
+  --text-section-title--line-height: 1.25;
+  --text-kpi-value: 30px;
+  --text-kpi-value--line-height: 1.25;
+  --text-card-title: 15px;
+  --text-card-title--line-height: 1.25;
+  --text-body: 14px;
+  --text-body--line-height: 1.45;
+  --text-table: 13.5px;
+  --text-table--line-height: 1.45;
+  --text-meta: 12.5px;
+  --text-meta--line-height: 1.45;
+  --text-nav: 14px;
+  --text-nav--line-height: 1.45;
 }
 
 body {
@@ -69,12 +129,18 @@ body {
 }
 
 /*
- * Keyboard focus must be visible everywhere (V2 Phase 1 accessibility
- * baseline). Mouse users are unaffected: :focus-visible only matches
- * keyboard/programmatic focus in modern browsers.
+ * Keyboard focus must be visible everywhere (DS §2.5). On light
+ * surfaces the indicator is `primary`; on dark surfaces (sidebar)
+ * Builder B applies `.focus-on-dark` to the elements that need the
+ * white ring. Mouse users are unaffected: :focus-visible only
+ * matches keyboard/programmatic focus in modern browsers.
  */
 :focus-visible {
-  outline: 2px solid var(--color-brand);
+  outline: 2px solid var(--color-primary);
   outline-offset: 1px;
   border-radius: var(--radius-sm);
+}
+
+.focus-on-dark:focus-visible {
+  outline-color: #ffffff;
 }
