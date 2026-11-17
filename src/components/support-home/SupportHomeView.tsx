@@ -227,7 +227,7 @@ export function SupportHomeView({ data }: { data: SupportConsoleData }) {
                     <span className="font-mono text-[12.5px] font-semibold whitespace-nowrap text-primary">
                       {ticket.ticketNumber}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">
+                    <span className="min-w-0 flex-1 break-words text-[13.5px] text-ink">
                       {ticket.subject}
                     </span>
                     <span className="text-[12.5px] whitespace-nowrap text-ink-2">
@@ -457,7 +457,7 @@ export function SupportHomeView({ data }: { data: SupportConsoleData }) {
                     <span className="font-mono text-[12.5px] font-semibold text-primary">
                       {incident.incidentNumber}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">
+                    <span className="min-w-0 flex-1 break-words text-[13.5px] text-ink">
                       {humaniseStatusValue(incident.category)}
                     </span>
                     <span className="text-[12.5px] whitespace-nowrap text-ink-2">
@@ -497,7 +497,7 @@ export function SupportHomeView({ data }: { data: SupportConsoleData }) {
                     href={`/support/tasks/${task.id}`}
                     className="flex flex-wrap items-center gap-2 py-2.5 hover:bg-surface-2"
                   >
-                    <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">
+                    <span className="min-w-0 flex-1 break-words text-[13.5px] text-ink">
                       {task.title}
                     </span>
                     {task.overdue ? (
