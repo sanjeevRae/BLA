@@ -7,7 +7,22 @@ import { listVendors, listVendorAddresses } from "@/server/services/vendors";
 import { listWarehouseDirectory } from "@/server/services/warehouses";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import { StatusBadge, formatDateTime, formatPaisa } from "@/components/bookings/ui";
-import { StatusBadge as DomainStatusBadge } from "@/components/ui/StatusBadge";
+import { FilterBar, FilterChip, FilterClearAll } from "@/components/ui/FilterBar";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { EmptyState } from "@/components/ui/states";
+import {
+  TABLE_CLASS,
+  TD_CLASS,
+  TD_ID_CLASS,
+  TD_NUMERIC_CLASS,
+  THEAD_ROW_CLASS,
+  TH_CLASS,
+  TH_NUMERIC_CLASS,
+  TR_CLASS,
+} from "@/components/ui/table-chrome";
+import { DensityScope } from "@/components/ui/TableDensity";
+import { ORDER_APPROVAL_STATUSES, ORDER_STATUSES } from "@/lib/bookings/domain";
+import { statusLabel } from "@/lib/status/labels";
 import {
   BookingApprovalControls,
   BookingCancelControl,
@@ -15,6 +30,16 @@ import {
   BookingUpdateForm,
 } from "@/components/bookings/forms";
 import { PackageLabelCard } from "@/components/packages/label";
+import { PackageSummaryCard } from "@/components/packages/PackageSummaryCard";
+
+/** DS §7.3 link-button classes (same classes the dashboards' primary
+ *  Link buttons use): one primary action per view, secondary beside it. */
+const primaryLinkClass =
+  "inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-[14px] font-[550] text-white hover:bg-primary-dark";
+const secondaryLinkClass =
+  "inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg border border-border-control bg-card px-4 py-2.5 text-[14px] font-[550] text-ink hover:bg-surface-2";
+/** TD_CLASS with the meta ink (timestamps, DS §3) swapped in. */
+const tdMetaClass = "px-3 py-2 text-table text-ink-2";
 
 /** Booking pages shared across the dashboard groups (basePath picks
  *  the route prefix). All reads go through BookingService, which
@@ -46,90 +71,129 @@ export async function BookingsListPage({
     approvalStatus,
   });
   const canCreate = actor.permissions.has("booking.create");
+  // Filter chips (DS §7.7) link to this same path with one honoured
+  // param changed; the other honoured params (search included) are
+  // preserved exactly as the service composes them (AND). Values are
+  // the service's own vocabularies from the domain module.
+  const filterHref = (patch: { status?: string; approvalStatus?: string }) => {
+    const params = new URLSearchParams();
+    const nextStatus = patch.status !== undefined ? patch.status : status;
+    const nextApproval =
+      patch.approvalStatus !== undefined ? patch.approvalStatus : approvalStatus;
+    if (nextStatus) params.set("status", nextStatus);
+    if (nextApproval) params.set("approvalStatus", nextApproval);
+    if (search) params.set("search", search);
+    const query = params.toString();
+    return query ? `${basePath}/bookings?${query}` : `${basePath}/bookings`;
+  };
+  const anyFilterActive = Boolean(status || approvalStatus);
   return (
     <div className="grid gap-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-[20px] font-bold text-ink">{title}</h1>
-          <p className="text-[13px] text-faint">{meta.total} bookings</p>
-        </div>
-        {canCreate ? (
-          <div className="flex gap-2">
-            {basePath === "/vendor" ? (
-              <Link href={`${basePath}/bookings/bulk`} className={subtleButtonClass}>
-                Bulk booking
-              </Link>
-            ) : null}
-            <Link href={`${basePath}/bookings/new`} className={subtleButtonClass}>
-              New booking
-            </Link>
-          </div>
-        ) : null}
-      </div>
-      <SectionCard title="Bookings">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-[13px]">
-            <thead>
-              <tr className="border-b border-line text-[11px] uppercase tracking-[0.14em] text-slate2">
-                <th className="py-2 pr-3">Order</th>
-                <th className="py-2 pr-3">Sender</th>
-                <th className="py-2 pr-3">Destination</th>
-                <th className="py-2 pr-3">Route</th>
-                <th className="py-2 pr-3">Parcels</th>
-                <th className="py-2 pr-3">COD</th>
-                <th className="py-2 pr-3">Status</th>
-                <th className="py-2">Booked</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bookings.map((booking) => (
-                <tr key={booking.id} className="border-b border-line/60">
-                  <td className="py-2 pr-3">
-                    <Link href={`${basePath}/bookings/${booking.id}`} className="font-semibold text-brand">
-                      {booking.orderNumber}
-                    </Link>
-                    {booking.approvalStatus === "PENDING" ? (
-                      <span className="ml-2">
-                        <StatusBadge status="PENDING" />
-                      </span>
-                    ) : null}
-                  </td>
-                  <td className="py-2 pr-3 text-ink">{booking.vendorName ?? booking.senderName}</td>
-                  <td className="py-2 pr-3 text-ink">{booking.destinationDistrict}</td>
-                  <td className="py-2 pr-3 text-ink">{booking.routeKind ?? "—"}</td>
-                  <td className="py-2 pr-3 text-ink">{booking.packageCount}</td>
-                  <td className="py-2 pr-3 text-ink">{formatPaisa(booking.codAmountPaisa)}</td>
-                  <td className="py-2 pr-3">
-                    <StatusBadge status={booking.status} />
-                  </td>
-                  <td className="py-2 text-faint">{formatDateTime(booking.createdAt)}</td>
-                </tr>
-              ))}
-              {bookings.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-4 text-faint">
-                    No bookings found.
-                  </td>
-                </tr>
+      <PageHeader
+        title={title}
+        description={`${meta.total} bookings`}
+        actions={
+          canCreate ? (
+            <>
+              {basePath === "/vendor" ? (
+                <Link href={`${basePath}/bookings/bulk`} className={secondaryLinkClass}>
+                  Bulk booking
+                </Link>
               ) : null}
-            </tbody>
-          </table>
-        </div>
-        {meta.totalPages > 1 ? (
-          <div className="mt-3 flex gap-2">
-            {page > 1 ? (
-              <Link href={`${basePath}/bookings?page=${page - 1}`} className={subtleButtonClass}>
-                Previous
+              <Link href={`${basePath}/bookings/new`} className={primaryLinkClass}>
+                New booking
               </Link>
-            ) : null}
-            {page < meta.totalPages ? (
-              <Link href={`${basePath}/bookings?page=${page + 1}`} className={subtleButtonClass}>
-                Next
-              </Link>
-            ) : null}
+            </>
+          ) : undefined
+        }
+      />
+      <FilterBar ariaLabel="Booking status filters">
+        {ORDER_STATUSES.map((value) => (
+          <FilterChip
+            key={value}
+            href={filterHref({ status: value })}
+            active={status === value}
+          >
+            {statusLabel("generic", value)}
+          </FilterChip>
+        ))}
+        {anyFilterActive ? <FilterClearAll href={`${basePath}/bookings`} /> : null}
+      </FilterBar>
+      <FilterBar ariaLabel="Booking approval filters">
+        {ORDER_APPROVAL_STATUSES.map((value) => (
+          <FilterChip
+            key={value}
+            href={filterHref({ approvalStatus: value })}
+            active={approvalStatus === value}
+          >
+            {statusLabel("generic", value)}
+          </FilterChip>
+        ))}
+      </FilterBar>
+      {bookings.length === 0 ? (
+        <EmptyState title="No bookings found." />
+      ) : (
+        <DensityScope showToggle>
+          <div className="overflow-x-auto">
+            <table className={TABLE_CLASS}>
+              <thead>
+                <tr className={THEAD_ROW_CLASS}>
+                  <th className={`${TH_CLASS} text-left`}>Order</th>
+                  <th className={`${TH_CLASS} text-left`}>Sender</th>
+                  <th className={`${TH_CLASS} text-left`}>Destination</th>
+                  <th className={`${TH_CLASS} text-left`}>Route</th>
+                  <th className={TH_NUMERIC_CLASS}>Parcels</th>
+                  <th className={TH_NUMERIC_CLASS}>COD</th>
+                  <th className={`${TH_CLASS} text-left`}>Status</th>
+                  <th className={`${TH_CLASS} text-left`}>Booked</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bookings.map((booking) => (
+                  <tr key={booking.id} className={TR_CLASS}>
+                    <td className={TD_ID_CLASS}>
+                      <Link
+                        href={`${basePath}/bookings/${booking.id}`}
+                        className="font-semibold text-primary"
+                      >
+                        {booking.orderNumber}
+                      </Link>
+                      {booking.approvalStatus === "PENDING" ? (
+                        <span className="ml-2">
+                          <StatusBadge status="PENDING" />
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className={TD_CLASS}>{booking.vendorName ?? booking.senderName}</td>
+                    <td className={TD_CLASS}>{booking.destinationDistrict}</td>
+                    <td className={TD_CLASS}>{booking.routeKind ?? "—"}</td>
+                    <td className={TD_NUMERIC_CLASS}>{booking.packageCount}</td>
+                    <td className={TD_NUMERIC_CLASS}>{formatPaisa(booking.codAmountPaisa)}</td>
+                    <td className={TD_CLASS}>
+                      <StatusBadge status={booking.status} />
+                    </td>
+                    <td className={tdMetaClass}>{formatDateTime(booking.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        ) : null}
-      </SectionCard>
+        </DensityScope>
+      )}
+      {meta.totalPages > 1 ? (
+        <div className="flex gap-2">
+          {page > 1 ? (
+            <Link href={`${basePath}/bookings?page=${page - 1}`} className={subtleButtonClass}>
+              Previous
+            </Link>
+          ) : null}
+          {page < meta.totalPages ? (
+            <Link href={`${basePath}/bookings?page=${page + 1}`} className={subtleButtonClass}>
+              Next
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -157,19 +221,25 @@ export async function BookingDetailPage({
   return (
     <div className="grid gap-5">
       <div>
-        <Link href={`${basePath}/bookings`} className="text-[12px] font-semibold text-brand">
+        <Link href={`${basePath}/bookings`} className="text-[12px] font-semibold text-primary">
           ← All bookings
         </Link>
-        <div className="mt-1 flex flex-wrap items-center gap-3">
-          <h1 className="text-[20px] font-bold text-ink">{booking.orderNumber}</h1>
+        <PageHeader
+          className="mt-1"
+          title={booking.orderNumber}
+          description={
+            <>
+              Sender: {booking.vendorName ?? booking.senderName} ({booking.senderPhone}) ·
+              Destination: {booking.destinationDistrict} · Booked{" "}
+              {formatDateTime(booking.createdAt)}
+              {booking.cancelReason ? ` · Cancelled: ${booking.cancelReason}` : ""}
+            </>
+          }
+        />
+        <div className="mt-2 flex flex-wrap items-center gap-3">
           <StatusBadge status={booking.status} />
           <StatusBadge status={booking.approvalStatus} />
         </div>
-        <p className="text-[13px] text-faint">
-          Sender: {booking.vendorName ?? booking.senderName} ({booking.senderPhone}) · Destination:{" "}
-          {booking.destinationDistrict} · Booked {formatDateTime(booking.createdAt)}
-          {booking.cancelReason ? ` · Cancelled: ${booking.cancelReason}` : ""}
-        </p>
       </div>
 
       {canApprove ? (
@@ -181,7 +251,7 @@ export async function BookingDetailPage({
       <SectionCard title="Shipments & packages">
         <div className="grid gap-4">
           {booking.shipments.map((shipment) => (
-            <div key={shipment.id} className="rounded-md border border-line p-3">
+            <div key={shipment.id} className="rounded-md border border-border p-3">
               <div className="flex flex-wrap items-center gap-3 text-[13px] text-ink">
                 <strong>{shipment.shipmentNumber}</strong>
                 <StatusBadge status={shipment.routeKind} />
@@ -189,57 +259,11 @@ export async function BookingDetailPage({
                 <span>Shipping {formatPaisa(shipment.shippingChargePaisa)}</span>
                 <span>COD {formatPaisa(shipment.codAmountPaisa)}</span>
               </div>
-              <table className="mt-3 w-full text-left text-[13px]">
-                <thead>
-                  <tr className="border-b border-line text-[11px] uppercase tracking-[0.14em] text-slate2">
-                    <th className="py-1 pr-3">Tracking ID</th>
-                    <th className="py-1 pr-3">Recipient</th>
-                    <th className="py-1 pr-3">Contents</th>
-                    <th className="py-1 pr-3">Weight</th>
-                    <th className="py-1 pr-3">COD</th>
-                    <th className="py-1">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shipment.packages.map((pkg) => (
-                    <tr key={pkg.id} className="border-b border-line/60">
-                      <td className="py-1 pr-3 font-mono text-[12px] text-ink">{pkg.trackingId}</td>
-                      <td className="py-1 pr-3 text-ink">
-                        {pkg.recipientName} — {pkg.deliveryCity}, {pkg.deliveryDistrict}
-                      </td>
-                      <td className="py-1 pr-3 text-ink">{pkg.description}</td>
-                      <td className="py-1 pr-3 text-ink">{pkg.billableWeightKg ?? pkg.declaredWeightKg} kg</td>
-                      <td className="py-1 pr-3 text-ink">{formatPaisa(pkg.codAmountPaisa)}</td>
-                      <td className="py-1">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span className="inline-flex items-center gap-1">
-                            <span className="text-[10px] uppercase text-faint">Operational</span>
-                            <DomainStatusBadge domain="operational" status={pkg.operationalStatus} />
-                          </span>
-                          <span className="inline-flex items-center gap-1">
-                            <span className="text-[10px] uppercase text-faint">Condition</span>
-                            <DomainStatusBadge domain="condition" status={pkg.condition} />
-                          </span>
-                          <span className="inline-flex items-center gap-1">
-                            <span className="text-[10px] uppercase text-faint">Payment</span>
-                            <DomainStatusBadge domain="payment" status={pkg.paymentStatus} />
-                          </span>
-                          <span className="inline-flex items-center gap-1">
-                            <span className="text-[10px] uppercase text-faint">Delivery</span>
-                            <DomainStatusBadge domain="delivery" status={pkg.deliveryStatus} />
-                          </span>
-                          {pkg.exceptionStatus !== "NONE" ? (
-                            <span className="inline-flex items-center gap-1">
-                              <span className="text-[10px] uppercase text-faint">Exception</span>
-                              <DomainStatusBadge domain="exception" status={pkg.exceptionStatus} />
-                            </span>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="mt-3 grid gap-3">
+                {shipment.packages.map((pkg) => (
+                  <PackageSummaryCard key={pkg.id} pkg={pkg} />
+                ))}
+              </div>
             </div>
           ))}
         </div>

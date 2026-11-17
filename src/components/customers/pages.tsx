@@ -4,6 +4,22 @@ import type { ActorContext } from "@/lib/auth/actor";
 import { getCustomer, listCustomerAddresses, listCustomers } from "@/server/services/customers";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import { formatDateTime } from "@/components/bookings/ui";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { EmptyState } from "@/components/ui/states";
+import {
+  TABLE_CLASS,
+  TD_CLASS,
+  THEAD_ROW_CLASS,
+  TH_CLASS,
+  TR_CLASS,
+} from "@/components/ui/table-chrome";
+import { DensityScope } from "@/components/ui/TableDensity";
+
+/** DS §7.3 primary Link-button class (same class the dashboards use). */
+const primaryLinkClass =
+  "inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-[14px] font-[550] text-white hover:bg-primary-dark";
+/** TD_CLASS with the meta ink (timestamps, DS §3) swapped in. */
+const tdMetaClass = "px-3 py-2 text-table text-ink-2";
 import {
   CustomerAddressForm,
   CustomerForm,
@@ -26,70 +42,72 @@ export async function CustomersListPage({
 }) {
   const { customers, meta } = await listCustomers(actor, { page, pageSize: 20, search });
   const canManage = actor.permissions.has("customer.manage");
+  // No FilterBar: this page honours only `page` and `search` (a form
+  // behaviour), and no filter form exists in its route pages.
   return (
     <div className="grid gap-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-[20px] font-bold text-ink">Customers</h1>
-          <p className="text-[13px] text-faint">{meta.total} customer records</p>
-        </div>
-        {canManage ? (
-          <Link href={`${basePath}/customers/new`} className={subtleButtonClass}>
-            New customer
-          </Link>
-        ) : null}
-      </div>
-      <SectionCard title="Customer records (deduplicated by phone)">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-[13px]">
-            <thead>
-              <tr className="border-b border-line text-[11px] uppercase tracking-[0.14em] text-slate2">
-                <th className="py-2 pr-3">Name</th>
-                <th className="py-2 pr-3">Phone</th>
-                <th className="py-2 pr-3">Email</th>
-                <th className="py-2 pr-3">Linked account</th>
-                <th className="py-2">Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {customers.map((customer) => (
-                <tr key={customer.id} className="border-b border-line/60">
-                  <td className="py-2 pr-3">
-                    <Link href={`${basePath}/customers/${customer.id}`} className="font-semibold text-brand">
-                      {customer.fullName}
-                    </Link>
-                  </td>
-                  <td className="py-2 pr-3 text-ink">{customer.phone}</td>
-                  <td className="py-2 pr-3 text-ink">{customer.email ?? "—"}</td>
-                  <td className="py-2 pr-3 text-ink">{customer.userId ? "Yes" : "No"}</td>
-                  <td className="py-2 text-faint">{formatDateTime(customer.createdAt)}</td>
+      <PageHeader
+        title="Customers"
+        description={`${meta.total} customer records`}
+        actions={
+          canManage ? (
+            <Link href={`${basePath}/customers/new`} className={primaryLinkClass}>
+              New customer
+            </Link>
+          ) : undefined
+        }
+      />
+      {customers.length === 0 ? (
+        <EmptyState title="No customers found." />
+      ) : (
+        <DensityScope showToggle>
+          <div className="overflow-x-auto">
+            <table className={TABLE_CLASS}>
+              <thead>
+                <tr className={THEAD_ROW_CLASS}>
+                  <th className={`${TH_CLASS} text-left`}>Name</th>
+                  <th className={`${TH_CLASS} text-left`}>Phone</th>
+                  <th className={`${TH_CLASS} text-left`}>Email</th>
+                  <th className={`${TH_CLASS} text-left`}>Linked account</th>
+                  <th className={`${TH_CLASS} text-left`}>Created</th>
                 </tr>
-              ))}
-              {customers.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-4 text-faint">
-                    No customers found.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
-        {meta.totalPages > 1 ? (
-          <div className="mt-3 flex gap-2">
-            {page > 1 ? (
-              <Link href={`${basePath}/customers?page=${page - 1}`} className={subtleButtonClass}>
-                Previous
-              </Link>
-            ) : null}
-            {page < meta.totalPages ? (
-              <Link href={`${basePath}/customers?page=${page + 1}`} className={subtleButtonClass}>
-                Next
-              </Link>
-            ) : null}
+              </thead>
+              <tbody>
+                {customers.map((customer) => (
+                  <tr key={customer.id} className={TR_CLASS}>
+                    <td className={TD_CLASS}>
+                      <Link
+                        href={`${basePath}/customers/${customer.id}`}
+                        className="font-semibold text-primary"
+                      >
+                        {customer.fullName}
+                      </Link>
+                    </td>
+                    <td className={TD_CLASS}>{customer.phone}</td>
+                    <td className={TD_CLASS}>{customer.email ?? "—"}</td>
+                    <td className={TD_CLASS}>{customer.userId ? "Yes" : "No"}</td>
+                    <td className={tdMetaClass}>{formatDateTime(customer.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        ) : null}
-      </SectionCard>
+        </DensityScope>
+      )}
+      {meta.totalPages > 1 ? (
+        <div className="flex gap-2">
+          {page > 1 ? (
+            <Link href={`${basePath}/customers?page=${page - 1}`} className={subtleButtonClass}>
+              Previous
+            </Link>
+          ) : null}
+          {page < meta.totalPages ? (
+            <Link href={`${basePath}/customers?page=${page + 1}`} className={subtleButtonClass}>
+              Next
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
