@@ -292,7 +292,7 @@ export function RemoveItemButton({
       <button type="button" className={dangerButtonClass} disabled={busy} onClick={onRemove}>
         Remove
       </button>
-      {error ? <span className="text-[12px] text-red-700">{error}</span> : null}
+      {error ? <span className="text-[12px] text-danger">{error}</span> : null}
     </span>
   );
 }
@@ -618,7 +618,7 @@ export function UnloadButton({
       >
         Unload
       </button>
-      {error ? <span className="text-[12px] text-red-700">{error}</span> : null}
+      {error ? <span className="text-[12px] text-danger">{error}</span> : null}
     </span>
   );
 }

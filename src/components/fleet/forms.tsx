@@ -256,7 +256,7 @@ export function DriverAdminButtons({
           </button>
         ))}
       </span>
-      {error ? <span className="text-[12px] text-red-700">{error}</span> : null}
+      {error ? <span className="text-[12px] text-danger">{error}</span> : null}
     </span>
   );
 }
@@ -524,7 +524,7 @@ export function VehicleAdminButtons({
           </>
         ) : null}
       </span>
-      {error ? <span className="text-[12px] text-red-700">{error}</span> : null}
+      {error ? <span className="text-[12px] text-danger">{error}</span> : null}
     </span>
   );
 }

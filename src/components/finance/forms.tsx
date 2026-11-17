@@ -664,7 +664,7 @@ export function AdjustmentDecisionButtons({ adjustmentId, status }: { adjustment
       >
         Reject
       </button>
-      {error ? <span className="text-[12px] text-red-700">{error}</span> : null}
+      {error ? <span className="text-[12px] text-danger">{error}</span> : null}
     </span>
   );
 }
@@ -694,7 +694,7 @@ export function RefundDecisionButtons({
           Process refund
         </button>
       ) : null}
-      {error ? <span className="text-[12px] text-red-700">{error}</span> : null}
+      {error ? <span className="text-[12px] text-danger">{error}</span> : null}
     </span>
   );
 }

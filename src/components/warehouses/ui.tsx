@@ -44,7 +44,7 @@ export function ErrorBox({ message }: { message: string }) {
   return (
     <div
       role="alert"
-      className="rounded-md border border-line bg-[#fdecec] px-3 py-2 text-[13px] text-red"
+      className="rounded-md border border-line bg-dangerbg px-3 py-2 text-[13px] text-red"
     >
       {message}
     </div>

@@ -107,7 +107,7 @@ export function ZonesPanel({
                 {KIND_LABELS[zone.kind] ?? zone.kind}
               </span>
               {!zone.isActive && (
-                <span className="rounded-full bg-[#fdecec] px-2 py-0.5 text-[11px] font-semibold text-red">
+                <span className="rounded-full bg-dangerbg px-2 py-0.5 text-[11px] font-semibold text-red">
                   Inactive
                 </span>
               )}

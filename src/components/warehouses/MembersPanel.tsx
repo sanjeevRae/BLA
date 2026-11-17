@@ -132,7 +132,7 @@ export function MembersPanel({
                 <div className="text-[13px] font-semibold text-ink">
                   {member.fullName}
                   {member.userStatus === "SUSPENDED" && (
-                    <span className="ml-2 rounded-full bg-[#fdecec] px-2 py-0.5 text-[11px] font-semibold text-red">
+                    <span className="ml-2 rounded-full bg-dangerbg px-2 py-0.5 text-[11px] font-semibold text-red">
                       Suspended
                     </span>
                   )}

@@ -98,7 +98,7 @@ export function SetPasswordForm({ forced }: { forced: boolean }) {
       {error !== null && (
         <div
           role="alert"
-          className="mb-4 rounded-md border border-line bg-[#fdecec] px-3 py-2 text-[13px] text-red"
+          className="mb-4 rounded-md border border-line bg-dangerbg px-3 py-2 text-[13px] text-red"
         >
           {error}
         </div>

@@ -45,7 +45,7 @@ export function AcceptInvitationForm({ token }: { token: string }) {
     return (
       <div
         role="alert"
-        className="rounded-md border border-line bg-[#fdecec] px-3 py-2 text-[13px] text-red"
+        className="rounded-md border border-line bg-dangerbg px-3 py-2 text-[13px] text-red"
       >
         This invitation link is incomplete. Ask your administrator for a new link.
       </div>
@@ -98,7 +98,7 @@ export function AcceptInvitationForm({ token }: { token: string }) {
       {error !== null && (
         <div
           role="alert"
-          className="mb-4 rounded-md border border-line bg-[#fdecec] px-3 py-2 text-[13px] text-red"
+          className="mb-4 rounded-md border border-line bg-dangerbg px-3 py-2 text-[13px] text-red"
         >
           {error}
         </div>
