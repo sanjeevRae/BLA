@@ -14,6 +14,7 @@ import {
   WarehouseSelector,
   type WarehouseOption,
 } from "@/components/layout/WarehouseSelector";
+import { BrandMark } from "@/components/layout/BrandMark";
 import { NavIcon } from "@/components/layout/icons";
 
 export interface ShellFrameProps {
@@ -62,15 +63,7 @@ export function ShellFrame(props: ShellFrameProps) {
       className="focus-on-dark flex min-h-[44px] items-center gap-2.5 px-3"
       aria-label="BLA Logistics — dashboard home"
     >
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-dark text-[15px] font-semibold text-white">
-        B
-      </span>
-      {expanded ? (
-        <span className="truncate text-[17px] leading-tight">
-          <span className="font-semibold text-white">BLA</span>{" "}
-          <span className="font-normal text-sidebar-text">Logistics</span>
-        </span>
-      ) : null}
+      <BrandMark showWordmark={expanded} />
     </Link>
   );
 
