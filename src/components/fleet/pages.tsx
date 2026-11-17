@@ -73,7 +73,7 @@ function DriverRows({
         <td className={TD_CLASS}>
           <div className="font-medium text-ink">{driver.fullName}</div>
           <div className="text-[12px] text-ink-2">
-            {driver.email} · roles {driver.roles.join(", ") || "—"} · home{" "}
+            {driver.email} · roles {driver.roles.map((r) => statusLabel("generic", r)).join(", ") || "—"} · home{" "}
             {driver.homeWarehouseCode}
           </div>
         </td>
