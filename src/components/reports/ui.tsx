@@ -2,6 +2,14 @@ import type { ReactNode } from "react";
 
 import { formatPaisa } from "@/components/bookings/ui";
 import { SectionCard } from "@/components/warehouses/ui";
+import { PageHeader } from "@/components/ui/PageHeader";
+import {
+  TABLE_CLASS,
+  TD_CLASS,
+  THEAD_ROW_CLASS,
+  TH_CLASS,
+  TR_CLASS,
+} from "@/components/ui/table-chrome";
 
 /**
  * Phase 9 report presentation primitives. Everything here renders
@@ -20,12 +28,12 @@ export function ReportStat({
   sub?: string;
 }) {
   return (
-    <div className="rounded-md border border-line bg-page px-4 py-3">
-      <dt className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
+    <div className="rounded-md border border-border bg-page px-4 py-3">
+      <dt className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-2">
         {label}
       </dt>
       <dd className="tnum mt-1 text-[15px] font-semibold text-ink">{value}</dd>
-      {sub ? <dd className="text-[12px] text-faint">{sub}</dd> : null}
+      {sub ? <dd className="text-[12px] text-ink-2">{sub}</dd> : null}
     </div>
   );
 }
@@ -75,23 +83,23 @@ export function ReportFilterBar({
   exportHref?: string;
 }) {
   const selectClass =
-    "rounded-md border border-line bg-surface px-2 py-1.5 text-[13px] text-ink";
+    "rounded-md border border-border bg-surface px-2 py-1.5 text-[13px] text-ink";
   return (
     <form
       method="get"
       action={action}
-      className="flex flex-wrap items-end gap-3 rounded-lg border border-line bg-surface p-4"
+      className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-surface p-4"
     >
-      <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
+      <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-2">
         From (Kathmandu)
         <input type="date" name="from" defaultValue={from} className={selectClass} />
       </label>
-      <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
+      <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-2">
         To (Kathmandu)
         <input type="date" name="to" defaultValue={to} className={selectClass} />
       </label>
       {warehouses ? (
-        <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
+        <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-2">
           Warehouse
           <select name="warehouseId" defaultValue={warehouseId ?? ""} className={selectClass}>
             <option value="">All warehouses</option>
@@ -104,7 +112,7 @@ export function ReportFilterBar({
         </label>
       ) : null}
       {vendors ? (
-        <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
+        <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-2">
           Vendor
           <select name="vendorId" defaultValue={vendorId ?? ""} className={selectClass}>
             <option value="">All vendors</option>
@@ -117,7 +125,7 @@ export function ReportFilterBar({
         </label>
       ) : null}
       {drivers ? (
-        <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
+        <label className="flex flex-col gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-2">
           Driver
           <select name="driverId" defaultValue={driverId ?? ""} className={selectClass}>
             <option value="">All drivers</option>
@@ -131,14 +139,14 @@ export function ReportFilterBar({
       ) : null}
       <button
         type="submit"
-        className="rounded-md bg-brand px-3 py-2 text-[13px] font-semibold text-white"
+        className="rounded-md bg-primary px-3 py-2 text-[13px] font-semibold text-white"
       >
         Apply
       </button>
       {exportHref ? (
         <a
           href={exportHref}
-          className="rounded-md border border-line bg-surface px-3 py-2 text-[13px] font-semibold text-ink"
+          className="rounded-md border border-border bg-surface px-3 py-2 text-[13px] font-semibold text-ink"
         >
           Export CSV
         </a>
@@ -166,17 +174,17 @@ export function BarSeries({
   return (
     <SectionCard title={title}>
       {points.length === 0 ? (
-        <p className="text-[13px] text-faint">No data in this range.</p>
+        <p className="text-[13px] text-ink-2">No data in this range.</p>
       ) : (
         <div className="flex flex-col gap-2">
           {points.map((point) => (
             <div key={point.label} className="flex items-center gap-3">
-              <div className="w-[110px] shrink-0 text-right text-[12px] text-slate2">
+              <div className="w-[110px] shrink-0 text-right text-[12px] text-ink-2">
                 {point.label}
               </div>
               <div className="h-[14px] flex-1 rounded-sm bg-cream">
                 <div
-                  className="h-full rounded-sm bg-brand"
+                  className="h-full rounded-sm bg-primary"
                   style={{ width: `${Math.max(0, (point.value / max) * 100)}%` }}
                 />
               </div>
@@ -207,14 +215,14 @@ export function ReportTable({
   return (
     <SectionCard title={title} action={action}>
       {rows.length === 0 ? (
-        <p className="text-[13px] text-faint">{emptyText ?? "No records in this range."}</p>
+        <p className="text-[13px] text-ink-2">{emptyText ?? "No records in this range."}</p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-[13px]">
+          <table className={TABLE_CLASS}>
             <thead>
-              <tr className="border-b border-line text-[11px] uppercase tracking-[0.12em] text-slate2">
+              <tr className={THEAD_ROW_CLASS}>
                 {headers.map((header) => (
-                  <th key={header} className="py-2 pr-3 font-semibold">
+                  <th key={header} className={`${TH_CLASS} text-left`}>
                     {header}
                   </th>
                 ))}
@@ -222,9 +230,9 @@ export function ReportTable({
             </thead>
             <tbody>
               {rows.map((row, i) => (
-                <tr key={i} className="border-b border-line/60 last:border-0">
+                <tr key={i} className={TR_CLASS}>
                   {row.map((cell, j) => (
-                    <td key={j} className="tnum py-1.5 pr-3 text-ink">
+                    <td key={j} className={`${TD_CLASS} tnum`}>
                       {cell}
                     </td>
                   ))}
@@ -248,12 +256,9 @@ export function ReportPageHeader({
   note?: string;
 }) {
   return (
-    <div>
-      <h1 className="text-[20px] font-bold text-ink">{title}</h1>
-      <p className="text-[13px] text-faint">
-        {range.from} → {range.to} (Asia/Kathmandu, both days inclusive)
-        {note ? ` · ${note}` : ""}
-      </p>
-    </div>
+    <PageHeader
+      title={title}
+      description={`${range.from} → ${range.to} (Asia/Kathmandu, both days inclusive)${note ? ` · ${note}` : ""}`}
+    />
   );
 }

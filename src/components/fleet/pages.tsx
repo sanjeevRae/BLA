@@ -17,6 +17,18 @@ import {
   type VehicleView,
 } from "@/server/services/vehicles";
 import { SectionCard } from "@/components/warehouses/ui";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { DensityScope } from "@/components/ui/TableDensity";
+import {
+  TABLE_CLASS,
+  TD_CLASS,
+  TD_ID_CLASS,
+  THEAD_ROW_CLASS,
+  TH_CLASS,
+  TR_CLASS,
+} from "@/components/ui/table-chrome";
+import { DriverSummaryCard } from "@/components/fleet/DriverSummaryCard";
 import {
   CreateDriverProfileForm,
   CreateVehicleForm,
@@ -35,23 +47,19 @@ import {
  * Real DB data only, via the fleet services.
  */
 
-function PageHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
-  return (
-    <div>
-      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
-        {eyebrow}
-      </div>
-      <h1 className="mt-0.5 text-[22px] font-bold text-ink">{title}</h1>
-    </div>
-  );
-}
-
 async function warehouseOptions(actor: ActorContext): Promise<FleetWarehouseOption[]> {
   const { items } = await listWarehouses(actor, { pageSize: 100 });
   return items.map((w) => ({ id: w.id, code: w.code, name: w.name }));
 }
 
-function DriverRow({
+/**
+ * One driver in the DriversPage chrome table (DS §7.6): the same
+ * DriverView fields the previous card list rendered, as table cells,
+ * plus — when the actor can manage drivers — a spanning second row
+ * carrying the SAME admin buttons and licence form the card carried
+ * (no control is added or removed).
+ */
+function DriverRows({
   driver,
   canManage,
 }: {
@@ -59,64 +67,56 @@ function DriverRow({
   canManage: boolean;
 }) {
   return (
-    <div className="rounded-md border border-line p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-[15px] font-bold text-ink">{driver.fullName}</div>
-          <div className="text-[12px] text-slate2">
+    <>
+      <tr className={TR_CLASS}>
+        <td className={TD_CLASS}>
+          <div className="font-medium text-ink">{driver.fullName}</div>
+          <div className="text-[12px] text-ink-2">
             {driver.email} · roles {driver.roles.join(", ") || "—"} · home{" "}
             {driver.homeWarehouseCode}
           </div>
-        </div>
-        <div className="text-right text-[12px] text-slate2">
-          <div>
-            Employment <strong className="text-ink">{driver.employmentStatus}</strong> ·
-            Availability <strong className="text-ink">{driver.availabilityStatus}</strong>
+        </td>
+        <td className={TD_CLASS}>
+          <StatusBadge domain="generic" status={driver.employmentStatus} density="compact" />
+          <div className="mt-0.5 text-[12px] text-ink-2">
+            {driver.currentTripId ? "On an active trip" : "Not on a trip"}
           </div>
-          <div>{driver.currentTripId ? "On an active trip" : "Not on a trip"}</div>
-        </div>
-      </div>
-      <dl className="mt-3 grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
-        <div>
-          <dt className="text-slate2">Licence</dt>
-          <dd className="font-medium text-ink">
-            {driver.licenseNumber}
-            {driver.licenseCategory ? ` (${driver.licenseCategory})` : ""}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-slate2">Licence expiry</dt>
-          <dd className="font-medium text-ink">
-            {driver.licenseExpiry}
-            {driver.licenseExpired ? " — EXPIRED" : ""}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-slate2">Capabilities</dt>
-          <dd className="font-medium text-ink">{driver.capabilities.join(", ") || "—"}</dd>
-        </div>
-        <div>
-          <dt className="text-slate2">Emergency contact</dt>
-          <dd className="font-medium text-ink">
-            {driver.emergencyContactName ?? "—"}
-            {driver.emergencyContactPhone ? ` · ${driver.emergencyContactPhone}` : ""}
-          </dd>
-        </div>
-      </dl>
+        </td>
+        <td className={TD_CLASS}>
+          <StatusBadge domain="generic" status={driver.availabilityStatus} density="compact" />
+        </td>
+        <td className={TD_ID_CLASS}>
+          {driver.licenseNumber}
+          {driver.licenseCategory ? ` (${driver.licenseCategory})` : ""}
+        </td>
+        <td className={TD_CLASS}>
+          {driver.licenseExpiry}
+          {driver.licenseExpired ? " — EXPIRED" : ""}
+        </td>
+        <td className={TD_CLASS}>{driver.capabilities.join(", ") || "—"}</td>
+        <td className={TD_CLASS}>
+          {driver.emergencyContactName ?? "—"}
+          {driver.emergencyContactPhone ? ` · ${driver.emergencyContactPhone}` : ""}
+        </td>
+      </tr>
       {canManage ? (
-        <div className="mt-3 flex flex-col gap-3">
-          <DriverAdminButtons
-            driverId={driver.id}
-            employmentStatus={driver.employmentStatus}
-          />
-          <UpdateDriverLicenceForm
-            driverId={driver.id}
-            licenseNumber={driver.licenseNumber}
-            licenseExpiry={driver.licenseExpiry}
-          />
-        </div>
+        <tr className="border-t border-border">
+          <td colSpan={7} className="px-3 py-2">
+            <div className="flex flex-col gap-3">
+              <DriverAdminButtons
+                driverId={driver.id}
+                employmentStatus={driver.employmentStatus}
+              />
+              <UpdateDriverLicenceForm
+                driverId={driver.id}
+                licenseNumber={driver.licenseNumber}
+                licenseExpiry={driver.licenseExpiry}
+              />
+            </div>
+          </td>
+        </tr>
       ) : null}
-    </div>
+    </>
   );
 }
 
@@ -135,13 +135,30 @@ export async function DriversPage({ actor }: { actor: ActorContext }) {
       ) : null}
       <SectionCard title={`Driver profiles (${items.length})`}>
         {items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No driver profiles yet.</p>
+          <p className="text-[13px] text-ink-2">No driver profiles yet.</p>
         ) : (
-          <div className="flex flex-col gap-3">
-            {items.map((driver) => (
-              <DriverRow key={driver.id} driver={driver} canManage={canManage} />
-            ))}
-          </div>
+          <DensityScope showToggle>
+            <div className="overflow-x-auto">
+              <table className={TABLE_CLASS}>
+                <thead>
+                  <tr className={THEAD_ROW_CLASS}>
+                    <th className={`${TH_CLASS} text-left`}>Driver</th>
+                    <th className={`${TH_CLASS} text-left`}>Employment</th>
+                    <th className={`${TH_CLASS} text-left`}>Availability</th>
+                    <th className={`${TH_CLASS} text-left`}>Licence</th>
+                    <th className={`${TH_CLASS} text-left`}>Licence expiry</th>
+                    <th className={`${TH_CLASS} text-left`}>Capabilities</th>
+                    <th className={`${TH_CLASS} text-left`}>Emergency contact</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((driver) => (
+                    <DriverRows key={driver.id} driver={driver} canManage={canManage} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </DensityScope>
         )}
       </SectionCard>
     </div>
@@ -163,16 +180,16 @@ async function VehicleRow({
 }) {
   const maintenance = await listVehicleMaintenance(actor, vehicle.id).catch(() => []);
   return (
-    <div className="rounded-md border border-line p-4">
+    <div className="rounded-md border border-border p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="font-mono text-[15px] font-bold text-ink">{vehicle.registration}</div>
-          <div className="text-[12px] text-slate2">
+          <div className="text-[12px] text-ink-2">
             {vehicle.type} · home {vehicle.homeWarehouseCode ?? "—"} · default driver{" "}
             {vehicle.assignedDriverName ?? "—"}
           </div>
         </div>
-        <div className="text-right text-[12px] text-slate2">
+        <div className="text-right text-[12px] text-ink-2">
           <div>
             Status <strong className="text-ink">{vehicle.status}</strong> · Inspection{" "}
             <strong className="text-ink">{vehicle.inspectionStatus}</strong>
@@ -186,27 +203,27 @@ async function VehicleRow({
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
         <div>
-          <dt className="text-slate2">Capacity</dt>
+          <dt className="text-ink-2">Capacity</dt>
           <dd className="font-medium text-ink">
             {vehicle.capacityKg ? `${vehicle.capacityKg} kg` : "—"}
             {vehicle.capacityVolumeM3 ? ` · ${vehicle.capacityVolumeM3} m³` : ""}
           </dd>
         </div>
         <div>
-          <dt className="text-slate2">Insurance expiry</dt>
+          <dt className="text-ink-2">Insurance expiry</dt>
           <dd className="font-medium text-ink">{vehicle.insuranceExpiry ?? "—"}</dd>
         </div>
         <div>
-          <dt className="text-slate2">Registration expiry</dt>
+          <dt className="text-ink-2">Registration expiry</dt>
           <dd className="font-medium text-ink">{vehicle.registrationExpiry ?? "—"}</dd>
         </div>
         <div>
-          <dt className="text-slate2">Maintenance records</dt>
+          <dt className="text-ink-2">Maintenance records</dt>
           <dd className="font-medium text-ink">{maintenance.length}</dd>
         </div>
       </dl>
       {maintenance.length > 0 ? (
-        <ul className="mt-2 flex flex-col gap-1 text-[12px] text-slate2">
+        <ul className="mt-2 flex flex-col gap-1 text-[12px] text-ink-2">
           {maintenance.slice(0, 5).map((m) => (
             <li key={m.id}>
               {m.kind} · scheduled {new Date(m.scheduledAt).toLocaleDateString("en-GB")}
@@ -248,7 +265,7 @@ async function VehicleRow({
 function ProfileField({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <dt className="text-slate2">{label}</dt>
+      <dt className="text-ink-2">{label}</dt>
       <dd className="font-medium text-ink">{value}</dd>
     </div>
   );
@@ -278,17 +295,18 @@ export async function DriverDetailPage({
       <div>
         <Link
           href={`${basePath}/drivers`}
-          className="text-[12px] font-semibold text-brand"
+          className="text-[12px] font-semibold text-primary"
         >
           ← All drivers
         </Link>
-        <h1 className="mt-1 text-[22px] font-bold text-ink">{profile.fullName}</h1>
-        <p className="text-[13px] text-slate2">
-          {profile.email}
-          {profile.phone ? ` · ${profile.phone}` : ""} · home{" "}
-          {profile.homeWarehouse.code} — {profile.homeWarehouse.name}
-        </p>
+        <PageHeader
+          title={profile.fullName}
+          description={`${profile.email}${profile.phone ? ` · ${profile.phone}` : ""} · home ${profile.homeWarehouse.code} — ${profile.homeWarehouse.name}`}
+          className="mt-1"
+        />
       </div>
+
+      <DriverSummaryCard profile={profile} />
 
       <SectionCard title="Driver profile">
         <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
@@ -338,7 +356,7 @@ export async function DriverDetailPage({
             · {profile.currentVehicle.type} · {profile.currentVehicle.status}
           </p>
         ) : (
-          <p className="text-[13px] text-slate2">No vehicle currently assigned.</p>
+          <p className="text-[13px] text-ink-2">No vehicle currently assigned.</p>
         )}
       </SectionCard>
 
@@ -350,7 +368,7 @@ export async function DriverDetailPage({
                 <div className="font-semibold">
                   Trip {profile.currentTrip.tripNumber} · {profile.currentTrip.status}
                 </div>
-                <div className="text-slate2">
+                <div className="text-ink-2">
                   {profile.currentTrip.origin.name} → {profile.currentTrip.destination.name}
                   {profile.currentTrip.vehicleRegistration
                     ? ` · ${profile.currentTrip.vehicleRegistration}`
@@ -364,7 +382,7 @@ export async function DriverDetailPage({
                   {profile.currentBatch.kind} batch · {profile.currentBatch.status} ·{" "}
                   {profile.currentBatch.batchDate}
                 </div>
-                <div className="text-slate2">
+                <div className="text-ink-2">
                   {profile.currentBatch.warehouse.code} — {profile.currentBatch.warehouse.name}{" "}
                   · <span className="tnum">{profile.currentBatch.assignedCount}</span> assigned
                   · <span className="tnum">{profile.currentBatch.deliveredCount}</span>{" "}
@@ -375,7 +393,7 @@ export async function DriverDetailPage({
             ) : null}
           </div>
         ) : (
-          <p className="text-[13px] text-slate2">No active trip or delivery batch.</p>
+          <p className="text-[13px] text-ink-2">No active trip or delivery batch.</p>
         )}
       </SectionCard>
 
@@ -399,7 +417,7 @@ export async function DriverDetailPage({
               <ProfileField label="Session type" value={profile.gps.trackingType} />
             </dl>
           ) : (
-            <p className="text-[13px] text-slate2">
+            <p className="text-[13px] text-ink-2">
               No current location snapshot for this driver.
             </p>
           )}
@@ -408,16 +426,16 @@ export async function DriverDetailPage({
 
       <SectionCard title={`Recent trips (${profile.recentTrips.length})`}>
         {profile.recentTrips.length === 0 ? (
-          <p className="text-[13px] text-slate2">No trips yet.</p>
+          <p className="text-[13px] text-ink-2">No trips yet.</p>
         ) : (
           <ul className="flex flex-col gap-2 text-[13px] text-ink">
             {profile.recentTrips.map((trip) => (
               <li
                 key={trip.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
               >
                 <span className="font-semibold">{trip.tripNumber}</span>
-                <span className="text-slate2">
+                <span className="text-ink-2">
                   {trip.origin.code} → {trip.destination.code} · {trip.status} ·{" "}
                   {new Date(trip.createdAt).toLocaleDateString("en-GB")}
                 </span>
@@ -429,18 +447,18 @@ export async function DriverDetailPage({
 
       <SectionCard title={`Recent delivery batches (${profile.recentBatches.length})`}>
         {profile.recentBatches.length === 0 ? (
-          <p className="text-[13px] text-slate2">No delivery batches yet.</p>
+          <p className="text-[13px] text-ink-2">No delivery batches yet.</p>
         ) : (
           <ul className="flex flex-col gap-2 text-[13px] text-ink">
             {profile.recentBatches.map((batch) => (
               <li
                 key={batch.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2"
               >
                 <span className="font-semibold">
                   {batch.warehouse.code} · {batch.batchDate}
                 </span>
-                <span className="text-slate2">
+                <span className="text-ink-2">
                   {batch.kind} · {batch.status} ·{" "}
                   <span className="tnum">{batch.assignedCount}</span> assigned ·{" "}
                   <span className="tnum">{batch.deliveredCount}</span> delivered ·{" "}
@@ -475,7 +493,7 @@ export async function VehiclesPage({ actor }: { actor: ActorContext }) {
       ) : null}
       <SectionCard title={`Vehicles (${items.length})`}>
         {items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No vehicles yet.</p>
+          <p className="text-[13px] text-ink-2">No vehicles yet.</p>
         ) : (
           <div className="flex flex-col gap-3">
             {items.map((vehicle) => (

@@ -207,7 +207,7 @@ export async function AdminReportsPage({
           row.receivingDiscrepancies,
           row.incidentsCreated,
         ])}
-        action={<a className="text-[12px] font-semibold text-brand" href={exportHref("warehouses", filters)}>CSV ↓</a>}
+        action={<a className="text-[12px] font-semibold text-primary" href={exportHref("warehouses", filters)}>CSV ↓</a>}
       />
 
       <ReportTable
@@ -225,7 +225,7 @@ export async function AdminReportsPage({
           money(row.codOutstandingPaisa),
           `${row.tripsCompleted}/${row.trips}`,
         ])}
-        action={<a className="text-[12px] font-semibold text-brand" href={exportHref("drivers", filters)}>CSV ↓</a>}
+        action={<a className="text-[12px] font-semibold text-primary" href={exportHref("drivers", filters)}>CSV ↓</a>}
       />
 
       <ReportTable
@@ -242,7 +242,7 @@ export async function AdminReportsPage({
           money(row.codCollectedPaisa),
           money(row.settlementsPaidPaisa),
         ])}
-        action={<a className="text-[12px] font-semibold text-brand" href={exportHref("vendors", filters)}>CSV ↓</a>}
+        action={<a className="text-[12px] font-semibold text-primary" href={exportHref("vendors", filters)}>CSV ↓</a>}
       />
 
       <div className="grid gap-5 lg:grid-cols-2">
@@ -257,7 +257,7 @@ export async function AdminReportsPage({
             row.itemsDiscrepant,
             formatMinutes(row.avgTransitMinutes),
           ])}
-          action={<a className="text-[12px] font-semibold text-brand" href={exportHref("transfers", filters)}>CSV ↓</a>}
+          action={<a className="text-[12px] font-semibold text-primary" href={exportHref("transfers", filters)}>CSV ↓</a>}
         />
         <SectionCard title="COD summary (period)">
           <dl className="grid grid-cols-2 gap-3">
@@ -347,7 +347,7 @@ export async function WarehouseReportsPage({
           money(row.codOutstandingPaisa),
           `${row.tripsCompleted}/${row.trips}`,
         ])}
-        action={<a className="text-[12px] font-semibold text-brand" href={exportHref("drivers", filters)}>CSV ↓</a>}
+        action={<a className="text-[12px] font-semibold text-primary" href={exportHref("drivers", filters)}>CSV ↓</a>}
       />
       <ReportTable
         title="Transfers touching your warehouses"
@@ -360,7 +360,7 @@ export async function WarehouseReportsPage({
           row.itemsDiscrepant,
           formatMinutes(row.avgTransitMinutes),
         ])}
-        action={<a className="text-[12px] font-semibold text-brand" href={exportHref("transfers", filters)}>CSV ↓</a>}
+        action={<a className="text-[12px] font-semibold text-primary" href={exportHref("transfers", filters)}>CSV ↓</a>}
       />
     </div>
   );
@@ -447,7 +447,7 @@ export async function FinanceReportsPage({
 
       <SectionCard
         title="COD reconciliation (period)"
-        action={<a className="text-[12px] font-semibold text-brand" href={exportHref("cod", filters)}>CSV ↓</a>}
+        action={<a className="text-[12px] font-semibold text-primary" href={exportHref("cod", filters)}>CSV ↓</a>}
       >
         <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <ReportStat label="Expected" value={money(cod.totals.expectedPaisa)} sub={`${cod.totals.collections} collections`} />
@@ -513,7 +513,7 @@ export async function VendorReportsPage({
       />
       {!row ? (
         <SectionCard title="Reports">
-          <p className="text-[13px] text-faint">
+          <p className="text-[13px] text-ink-2">
             Your account is not linked to a vendor organisation yet.
           </p>
         </SectionCard>
@@ -571,7 +571,7 @@ export async function DriverSelfReportsPage({
       />
       {!row ? (
         <SectionCard title="Performance">
-          <p className="text-[13px] text-faint">No driver profile is linked to your account.</p>
+          <p className="text-[13px] text-ink-2">No driver profile is linked to your account.</p>
         </SectionCard>
       ) : (
         <>

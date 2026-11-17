@@ -3,6 +3,18 @@ import Link from "next/link";
 import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { formatDateTime, formatPaisa, StatusBadge } from "@/components/bookings/ui";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { DensityScope } from "@/components/ui/TableDensity";
+import {
+  TABLE_CLASS,
+  TD_CLASS,
+  TD_ID_CLASS,
+  TD_NUMERIC_CLASS,
+  THEAD_ROW_CLASS,
+  TH_CLASS,
+  TH_NUMERIC_CLASS,
+  TR_CLASS,
+} from "@/components/ui/table-chrome";
 import { getFinanceOverview, listFinanceVendors, listLedgerEntries } from "@/server/services/finance-overview";
 import { getInvoice, listInvoices } from "@/server/services/invoices";
 import { getRemittance, getRiderCodPosition, listRemittances } from "@/server/services/cod-remittances";
@@ -30,15 +42,6 @@ import {
  * from their itemised lines. Nothing is cached or hand-entered.
  */
 
-function PageHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
-  return (
-    <div>
-      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">{eyebrow}</div>
-      <h1 className="mt-0.5 text-[22px] font-bold text-ink">{title}</h1>
-    </div>
-  );
-}
-
 function FinanceNav({ basePath }: { basePath: string }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -63,10 +66,10 @@ function FinanceNav({ basePath }: { basePath: string }) {
 
 function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-md border border-line bg-page px-4 py-3">
-      <dt className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">{label}</dt>
+    <div className="rounded-md border border-border bg-page px-4 py-3">
+      <dt className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-2">{label}</dt>
       <dd className="tnum mt-1 text-[15px] font-semibold text-ink">{value}</dd>
-      {sub ? <dd className="text-[12px] text-faint">{sub}</dd> : null}
+      {sub ? <dd className="text-[12px] text-ink-2">{sub}</dd> : null}
     </div>
   );
 }
@@ -91,10 +94,11 @@ export async function InvoicesListPage({
   const canCreate = hasPermission(actor, "invoice.create");
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <PageHeader eyebrow="Finance" title={`Invoices (${meta.total})`} />
-        <FinanceNav basePath={basePath} />
-      </div>
+      <PageHeader
+        eyebrow="Finance"
+        title={`Invoices (${meta.total})`}
+        actions={<FinanceNav basePath={basePath} />}
+      />
       {canCreate ? (
         <SectionCard title="Generate vendor invoice">
           <GenerateInvoiceForm vendors={vendors} />
@@ -102,42 +106,44 @@ export async function InvoicesListPage({
       ) : null}
       <SectionCard title="Invoices">
         {items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No invoices yet.</p>
+          <p className="text-[13px] text-ink-2">No invoices yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-[13px]">
-              <thead>
-                <tr className="text-slate2">
-                  <th className="py-1 pr-3 font-medium">Number</th>
-                  <th className="py-1 pr-3 font-medium">Vendor</th>
-                  <th className="py-1 pr-3 font-medium">Total</th>
-                  <th className="py-1 pr-3 font-medium">Paid</th>
-                  <th className="py-1 pr-3 font-medium">Outstanding</th>
-                  <th className="py-1 pr-3 font-medium">Status</th>
-                  <th className="py-1 font-medium">Issued</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((invoice) => (
-                  <tr key={invoice.id} className="border-t border-line">
-                    <td className="py-1.5 pr-3">
-                      <Link href={`${detailBase}/${invoice.id}`} className="font-semibold text-brand">
-                        {invoice.invoiceNumber}
-                      </Link>
-                    </td>
-                    <td className="py-1.5 pr-3">{invoice.vendorName ?? "—"}</td>
-                    <td className="tnum py-1.5 pr-3">{formatPaisa(invoice.totalPaisa)}</td>
-                    <td className="tnum py-1.5 pr-3">{formatPaisa(invoice.paidPaisa)}</td>
-                    <td className="tnum py-1.5 pr-3">{formatPaisa(invoice.outstandingPaisa)}</td>
-                    <td className="py-1.5 pr-3">
-                      <StatusBadge status={invoice.status} />
-                    </td>
-                    <td className="py-1.5">{formatDateTime(invoice.issuedAt)}</td>
+          <DensityScope showToggle>
+            <div className="overflow-x-auto">
+              <table className={TABLE_CLASS}>
+                <thead>
+                  <tr className={THEAD_ROW_CLASS}>
+                    <th className={`${TH_CLASS} text-left`}>Number</th>
+                    <th className={`${TH_CLASS} text-left`}>Vendor</th>
+                    <th className={TH_NUMERIC_CLASS}>Total</th>
+                    <th className={TH_NUMERIC_CLASS}>Paid</th>
+                    <th className={TH_NUMERIC_CLASS}>Outstanding</th>
+                    <th className={`${TH_CLASS} text-left`}>Status</th>
+                    <th className={`${TH_CLASS} text-left`}>Issued</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((invoice) => (
+                    <tr key={invoice.id} className={TR_CLASS}>
+                      <td className={TD_ID_CLASS}>
+                        <Link href={`${detailBase}/${invoice.id}`} className="font-semibold text-primary">
+                          {invoice.invoiceNumber}
+                        </Link>
+                      </td>
+                      <td className={TD_CLASS}>{invoice.vendorName ?? "—"}</td>
+                      <td className={TD_NUMERIC_CLASS}>{formatPaisa(invoice.totalPaisa)}</td>
+                      <td className={TD_NUMERIC_CLASS}>{formatPaisa(invoice.paidPaisa)}</td>
+                      <td className={TD_NUMERIC_CLASS}>{formatPaisa(invoice.outstandingPaisa)}</td>
+                      <td className={TD_CLASS}>
+                        <StatusBadge status={invoice.status} />
+                      </td>
+                      <td className={TD_CLASS}>{formatDateTime(invoice.issuedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </DensityScope>
         )}
       </SectionCard>
     </div>
@@ -175,7 +181,7 @@ export async function InvoiceDetailPage({
       <SectionCard title="Lines">
         <div className="grid gap-2">
           {invoice.lines.map((line) => (
-            <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
+            <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
               <span className="text-ink">{line.description}</span>
               <span className="flex items-center gap-2">
                 <StatusBadge status={line.kind} />
@@ -187,11 +193,11 @@ export async function InvoiceDetailPage({
       </SectionCard>
       <SectionCard title="Payments allocated">
         {invoice.payments.length === 0 ? (
-          <p className="text-[13px] text-slate2">No payments allocated yet.</p>
+          <p className="text-[13px] text-ink-2">No payments allocated yet.</p>
         ) : (
           <div className="grid gap-2">
             {invoice.payments.map((payment) => (
-              <div key={payment.paymentId} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
+              <div key={payment.paymentId} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
                 <span className="text-ink">
                   {formatPaisa(payment.amountPaisa)} · {payment.method}
                   {payment.transactionRef ? ` · ref ${payment.transactionRef}` : ""}
@@ -236,48 +242,51 @@ export async function RemittancesListPage({
   const { items, meta } = await listRemittances(actor, { pageSize: 100 });
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <PageHeader eyebrow="Finance" title={`COD remittances (${meta.total})`} />
-        <FinanceNav basePath={basePath} />
-      </div>
+      <PageHeader
+        eyebrow="Finance"
+        title={`COD remittances (${meta.total})`}
+        actions={<FinanceNav basePath={basePath} />}
+      />
       <SectionCard title="Remittances">
         {items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No remittances yet.</p>
+          <p className="text-[13px] text-ink-2">No remittances yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-[13px]">
-              <thead>
-                <tr className="text-slate2">
-                  <th className="py-1 pr-3 font-medium">Number</th>
-                  <th className="py-1 pr-3 font-medium">Rider</th>
-                  <th className="py-1 pr-3 font-medium">Declared</th>
-                  <th className="py-1 pr-3 font-medium">Counted</th>
-                  <th className="py-1 pr-3 font-medium">Discrepancy</th>
-                  <th className="py-1 pr-3 font-medium">Status</th>
-                  <th className="py-1 font-medium">Submitted</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((remittance) => (
-                  <tr key={remittance.id} className="border-t border-line">
-                    <td className="py-1.5 pr-3">
-                      <Link href={`${detailBase}/${remittance.id}`} className="font-semibold text-brand">
-                        {remittance.remittanceNumber}
-                      </Link>
-                    </td>
-                    <td className="py-1.5 pr-3">{remittance.driverName ?? "—"}</td>
-                    <td className="tnum py-1.5 pr-3">{formatPaisa(remittance.declaredAmountPaisa)}</td>
-                    <td className="tnum py-1.5 pr-3">{remittance.countedAmountPaisa ? formatPaisa(remittance.countedAmountPaisa) : "—"}</td>
-                    <td className="tnum py-1.5 pr-3">{remittance.discrepancyPaisa ? formatPaisa(remittance.discrepancyPaisa) : "—"}</td>
-                    <td className="py-1.5 pr-3">
-                      <StatusBadge status={remittance.resolution ?? remittance.status} />
-                    </td>
-                    <td className="py-1.5">{formatDateTime(remittance.submittedAt)}</td>
+          <DensityScope showToggle>
+            <div className="overflow-x-auto">
+              <table className={TABLE_CLASS}>
+                <thead>
+                  <tr className={THEAD_ROW_CLASS}>
+                    <th className={`${TH_CLASS} text-left`}>Number</th>
+                    <th className={`${TH_CLASS} text-left`}>Rider</th>
+                    <th className={TH_NUMERIC_CLASS}>Declared</th>
+                    <th className={TH_NUMERIC_CLASS}>Counted</th>
+                    <th className={TH_NUMERIC_CLASS}>Discrepancy</th>
+                    <th className={`${TH_CLASS} text-left`}>Status</th>
+                    <th className={`${TH_CLASS} text-left`}>Submitted</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((remittance) => (
+                    <tr key={remittance.id} className={TR_CLASS}>
+                      <td className={TD_ID_CLASS}>
+                        <Link href={`${detailBase}/${remittance.id}`} className="font-semibold text-primary">
+                          {remittance.remittanceNumber}
+                        </Link>
+                      </td>
+                      <td className={TD_CLASS}>{remittance.driverName ?? "—"}</td>
+                      <td className={TD_NUMERIC_CLASS}>{formatPaisa(remittance.declaredAmountPaisa)}</td>
+                      <td className={TD_NUMERIC_CLASS}>{remittance.countedAmountPaisa ? formatPaisa(remittance.countedAmountPaisa) : "—"}</td>
+                      <td className={TD_NUMERIC_CLASS}>{remittance.discrepancyPaisa ? formatPaisa(remittance.discrepancyPaisa) : "—"}</td>
+                      <td className={TD_CLASS}>
+                        <StatusBadge status={remittance.resolution ?? remittance.status} />
+                      </td>
+                      <td className={TD_CLASS}>{formatDateTime(remittance.submittedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </DensityScope>
         )}
       </SectionCard>
     </div>
@@ -312,7 +321,7 @@ export async function RemittanceDetailPage({
       <SectionCard title="Collections">
         <div className="grid gap-2">
           {remittance.lines.map((line) => (
-            <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
+            <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
               <span className="text-ink">Package {line.packageId.slice(0, 8)}… · {line.collectionStatus}</span>
               <span className="tnum">
                 collected {formatPaisa(line.collectedPaisa)} of {formatPaisa(line.expectedPaisa)}
@@ -321,7 +330,7 @@ export async function RemittanceDetailPage({
             </div>
           ))}
           {remittance.lines.length === 0 ? (
-            <p className="text-[13px] text-slate2">Lines were released when this remittance was rejected.</p>
+            <p className="text-[13px] text-ink-2">Lines were released when this remittance was rejected.</p>
           ) : null}
         </div>
       </SectionCard>
@@ -368,10 +377,11 @@ export async function SettlementsListPage({
   const canPrepare = hasPermission(actor, "settlement.prepare");
   return (
     <div className="grid gap-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <PageHeader eyebrow="Settlements" title={`Vendor settlements (${meta.total})`} />
-        {basePath === "/finance" ? <FinanceNav basePath={basePath} /> : null}
-      </div>
+      <PageHeader
+        eyebrow="Settlements"
+        title={`Vendor settlements (${meta.total})`}
+        actions={basePath === "/finance" ? <FinanceNav basePath={basePath} /> : undefined}
+      />
       {canPrepare ? (
         <SectionCard title="Prepare settlement">
           <PrepareSettlementForm vendors={vendors} />
@@ -379,42 +389,44 @@ export async function SettlementsListPage({
       ) : null}
       <SectionCard title="Settlements">
         {items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No settlements yet.</p>
+          <p className="text-[13px] text-ink-2">No settlements yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-[13px]">
-              <thead>
-                <tr className="text-slate2">
-                  <th className="py-1 pr-3 font-medium">Number</th>
-                  <th className="py-1 pr-3 font-medium">Vendor</th>
-                  <th className="py-1 pr-3 font-medium">COD</th>
-                  <th className="py-1 pr-3 font-medium">Charges</th>
-                  <th className="py-1 pr-3 font-medium">Deductions</th>
-                  <th className="py-1 pr-3 font-medium">Net payable</th>
-                  <th className="py-1 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((settlement) => (
-                  <tr key={settlement.id} className="border-t border-line">
-                    <td className="py-1.5 pr-3">
-                      <Link href={`${detailBase}/${settlement.id}`} className="font-semibold text-brand">
-                        {settlement.settlementNumber}
-                      </Link>
-                    </td>
-                    <td className="py-1.5 pr-3">{settlement.vendorName ?? "—"}</td>
-                    <td className="tnum py-1.5 pr-3">{formatPaisa(settlement.grossCodPaisa)}</td>
-                    <td className="tnum py-1.5 pr-3">{formatPaisa(settlement.shippingChargesPaisa)}</td>
-                    <td className="tnum py-1.5 pr-3">{formatPaisa(settlement.otherDeductionsPaisa)}</td>
-                    <td className="tnum py-1.5 pr-3 font-medium">{formatPaisa(settlement.netPayablePaisa)}</td>
-                    <td className="py-1.5">
-                      <StatusBadge status={settlement.status} />
-                    </td>
+          <DensityScope showToggle>
+            <div className="overflow-x-auto">
+              <table className={TABLE_CLASS}>
+                <thead>
+                  <tr className={THEAD_ROW_CLASS}>
+                    <th className={`${TH_CLASS} text-left`}>Number</th>
+                    <th className={`${TH_CLASS} text-left`}>Vendor</th>
+                    <th className={TH_NUMERIC_CLASS}>COD</th>
+                    <th className={TH_NUMERIC_CLASS}>Charges</th>
+                    <th className={TH_NUMERIC_CLASS}>Deductions</th>
+                    <th className={TH_NUMERIC_CLASS}>Net payable</th>
+                    <th className={`${TH_CLASS} text-left`}>Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((settlement) => (
+                    <tr key={settlement.id} className={TR_CLASS}>
+                      <td className={TD_ID_CLASS}>
+                        <Link href={`${detailBase}/${settlement.id}`} className="font-semibold text-primary">
+                          {settlement.settlementNumber}
+                        </Link>
+                      </td>
+                      <td className={TD_CLASS}>{settlement.vendorName ?? "—"}</td>
+                      <td className={TD_NUMERIC_CLASS}>{formatPaisa(settlement.grossCodPaisa)}</td>
+                      <td className={TD_NUMERIC_CLASS}>{formatPaisa(settlement.shippingChargesPaisa)}</td>
+                      <td className={TD_NUMERIC_CLASS}>{formatPaisa(settlement.otherDeductionsPaisa)}</td>
+                      <td className={`${TD_NUMERIC_CLASS} font-medium`}>{formatPaisa(settlement.netPayablePaisa)}</td>
+                      <td className={TD_CLASS}>
+                        <StatusBadge status={settlement.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </DensityScope>
         )}
       </SectionCard>
     </div>
@@ -450,7 +462,7 @@ export async function SettlementDetailPage({
       <SectionCard title="Itemised lines">
         <div className="grid gap-2">
           {settlement.lines.map((line) => (
-            <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
+            <div key={line.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
               <span className="text-ink">
                 {line.description ?? line.kind}
                 {line.invoiceNumber ? ` · ${line.invoiceNumber}` : ""}
@@ -475,7 +487,7 @@ export async function SettlementDetailPage({
         </SectionCard>
       ) : null}
       {settlement.paymentRef ? (
-        <p className="text-[13px] text-slate2">Payout reference: {settlement.paymentRef}</p>
+        <p className="text-[13px] text-ink-2">Payout reference: {settlement.paymentRef}</p>
       ) : null}
     </div>
   );
@@ -499,9 +511,9 @@ export async function LedgerPage({ actor }: { actor: ActorContext }) {
       <SectionCard title="Account balances">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {overview.accounts.map((account) => (
-            <div key={account.id} className="rounded-md border border-line px-3 py-2 text-[13px]">
+            <div key={account.id} className="rounded-md border border-border px-3 py-2 text-[13px]">
               <div className="font-medium text-ink">{account.code}</div>
-              <div className="tnum text-slate2">
+              <div className="tnum text-ink-2">
                 {account.kind} · {formatPaisa(account.balancePaisa)}
               </div>
             </div>
@@ -509,17 +521,17 @@ export async function LedgerPage({ actor }: { actor: ActorContext }) {
         </div>
       </SectionCard>
       <SectionCard title={`Journal entries (${meta.total})`}>
-        <p className="mb-3 text-[12px] text-faint">
+        <p className="mb-3 text-[12px] text-ink-2">
           Entries are append-only: corrections appear as new REVERSAL / ADJUSTMENT entries linked to the
           originals. Entries sharing a journal reference form one balanced journal.
         </p>
         {items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No ledger entries yet.</p>
+          <p className="text-[13px] text-ink-2">No ledger entries yet.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[13px]">
               <thead>
-                <tr className="text-slate2">
+                <tr className="text-ink-2">
                   <th className="py-1 pr-3 font-medium">Reference</th>
                   <th className="py-1 pr-3 font-medium">Journal</th>
                   <th className="py-1 pr-3 font-medium">Account</th>
@@ -531,7 +543,7 @@ export async function LedgerPage({ actor }: { actor: ActorContext }) {
               </thead>
               <tbody>
                 {items.map((entry) => (
-                  <tr key={entry.id} className="border-t border-line">
+                  <tr key={entry.id} className="border-t border-border">
                     <td className="py-1.5 pr-3 font-medium text-ink">{entry.reference}</td>
                     <td className="py-1.5 pr-3">{entry.journalRef}</td>
                     <td className="py-1.5 pr-3">{entry.accountCode}</td>
@@ -581,11 +593,11 @@ export async function AdjustmentsPage({
       ) : null}
       <SectionCard title={`Adjustments (${adjustments.meta.total})`}>
         {adjustments.items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No adjustments yet.</p>
+          <p className="text-[13px] text-ink-2">No adjustments yet.</p>
         ) : (
           <div className="grid gap-2">
             {adjustments.items.map((adjustment) => (
-              <div key={adjustment.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
+              <div key={adjustment.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
                 <span className="text-ink">
                   {adjustment.targetType} · {formatPaisa(adjustment.amountPaisa)} · {adjustment.reason}
                 </span>
@@ -602,11 +614,11 @@ export async function AdjustmentsPage({
       </SectionCard>
       <SectionCard title={`Refunds (${refunds.meta.total})`}>
         {refunds.items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No refunds yet.</p>
+          <p className="text-[13px] text-ink-2">No refunds yet.</p>
         ) : (
           <div className="grid gap-2">
             {refunds.items.map((refund) => (
-              <div key={refund.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
+              <div key={refund.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
                 <span className="text-ink">
                   {formatPaisa(refund.amountPaisa)} · {refund.reason}
                 </span>
@@ -651,12 +663,12 @@ export async function VendorBillingPage({ actor }: { actor: ActorContext }) {
       </dl>
       <SectionCard title="Your invoices">
         {invoices.items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No invoices yet.</p>
+          <p className="text-[13px] text-ink-2">No invoices yet.</p>
         ) : (
           <div className="grid gap-2">
             {invoices.items.map((invoice) => (
-              <div key={invoice.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
-                <Link href={`/vendor/billing/invoices/${invoice.id}`} className="font-semibold text-brand">
+              <div key={invoice.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
+                <Link href={`/vendor/billing/invoices/${invoice.id}`} className="font-semibold text-primary">
                   {invoice.invoiceNumber}
                 </Link>
                 <span className="tnum text-ink">
@@ -670,12 +682,12 @@ export async function VendorBillingPage({ actor }: { actor: ActorContext }) {
       </SectionCard>
       <SectionCard title="Your settlements">
         {settlements.items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No settlements yet.</p>
+          <p className="text-[13px] text-ink-2">No settlements yet.</p>
         ) : (
           <div className="grid gap-2">
             {settlements.items.map((settlement) => (
-              <div key={settlement.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
-                <Link href={`/vendor/billing/settlements/${settlement.id}`} className="font-semibold text-brand">
+              <div key={settlement.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
+                <Link href={`/vendor/billing/settlements/${settlement.id}`} className="font-semibold text-primary">
                   {settlement.settlementNumber}
                 </Link>
                 <span className="tnum text-ink">net {formatPaisa(settlement.netPayablePaisa)}</span>
@@ -716,11 +728,11 @@ export async function RiderCodPage({ actor }: { actor: ActorContext }) {
       </SectionCard>
       <SectionCard title="Your remittances">
         {remittances.items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No remittances yet.</p>
+          <p className="text-[13px] text-ink-2">No remittances yet.</p>
         ) : (
           <div className="grid gap-2">
             {remittances.items.map((remittance) => (
-              <div key={remittance.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
+              <div key={remittance.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]">
                 <span className="font-medium text-ink">{remittance.remittanceNumber}</span>
                 <span className="tnum text-ink">
                   declared {formatPaisa(remittance.declaredAmountPaisa)}
