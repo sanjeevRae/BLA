@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatPaisa } from "@/components/bookings/ui";
 import { Drawer } from "@/components/ui/Drawer";
+import { PageHeader } from "@/components/ui/PageHeader";
 import type {
   FreshnessState,
   LiveOperationDetail,
@@ -35,7 +36,7 @@ import type {
 const LiveMap = dynamic(() => import("@/components/live-operations/LiveMap"), {
   ssr: false,
   loading: () => (
-    <div className="flex h-[420px] items-center justify-center rounded-lg border border-line bg-surface text-[13px] text-slate2">
+    <div className="flex h-[420px] items-center justify-center rounded-lg border border-border bg-card text-[13px] text-ink-2">
       Loading map…
     </div>
   ),
@@ -48,10 +49,10 @@ const POLL_INTERVAL_MS = 50_000;
 // ---------------------------------------------------------------------------
 
 const FRESHNESS_CLASSES: Record<FreshnessState, string> = {
-  FRESH: "bg-greenbg text-greendeep",
-  DELAYED: "bg-amberbg text-amberdeep",
-  STALE: "bg-redbg text-reddeep",
-  OFFLINE: "bg-cream text-slate2",
+  FRESH: "bg-successbg text-success",
+  DELAYED: "bg-warningbg text-warning",
+  STALE: "bg-dangerbg text-danger",
+  OFFLINE: "bg-neutralbg text-neutral",
 };
 
 const FRESHNESS_LABELS: Record<FreshnessState, string> = {
@@ -349,11 +350,11 @@ export function LiveOperationsBoard({
   const listPanel = (
     <div className="flex flex-col gap-2">
       {!hasLoaded ? (
-        <p className="text-[13px] text-slate2">Loading live movements…</p>
+        <p className="text-[13px] text-ink-2">Loading live movements…</p>
       ) : visibleItems.length === 0 ? (
-        <div className="rounded-md border border-line bg-surface px-4 py-8 text-center">
+        <div className="rounded-md border border-border bg-card px-4 py-8 text-center">
           <p className="text-[14px] font-semibold text-ink">No active movements</p>
-          <p className="mt-1 text-[13px] text-slate2">
+          <p className="mt-1 text-[13px] text-ink-2">
             Movements appear here while a driver has tracking on for a trip or batch.
           </p>
         </div>
@@ -371,22 +372,22 @@ export function LiveOperationsBoard({
               onClick={() => void selectSession(item.trackingSessionId)}
               className={`flex flex-col gap-1 rounded-lg border px-3 py-2 text-left ${
                 selected
-                  ? "border-brand bg-accentbg"
-                  : "border-line bg-surface hover:bg-page"
+                  ? "border-primary bg-primary-light"
+                  : "border-border bg-card hover:bg-page"
               }`}
             >
               <span className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[13px] font-semibold text-ink">{item.driverName}</span>
                 <FreshnessBadge state={item.freshnessState} />
               </span>
-              <span className="text-[12px] text-slate2">
+              <span className="text-[12px] text-ink-2">
                 {TYPE_LABELS[item.trackingType]} · {movementRef(item)}
                 {item.vehicleRegistration ? ` · ${item.vehicleRegistration}` : ""}
               </span>
-              <span className="text-[12px] text-slate2">
+              <span className="text-[12px] text-ink-2">
                 {item.origin.name} → {item.destination ? item.destination.name : "Local deliveries"}
               </span>
-              <span className="flex flex-wrap items-center justify-between gap-2 text-[12px] text-slate2">
+              <span className="flex flex-wrap items-center justify-between gap-2 text-[12px] text-ink-2">
                 <span>
                   <span className="tnum">{item.packageCount}</span> package(s) ·{" "}
                   {activityLabel(item)}
@@ -412,31 +413,32 @@ export function LiveOperationsBoard({
       warehouseCoords={warehouseCoords}
       selectedWarehouseId={warehouseId || null}
       onShowAllAuthorized={() => setWarehouseId("")}
+      showLegend
     />
   );
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
-            Operations
-          </div>
-          <h1 className="mt-0.5 text-[22px] font-bold text-ink">Live Operations</h1>
-          <p className="mt-1 text-[12px] text-slate2">
+      <PageHeader
+        eyebrow="Operations"
+        title="Live Operations"
+        description={
+          <>
             Last refreshed: {lastRefreshedAt ? clockTime(lastRefreshedAt.toISOString()) : "—"} ·
             Latest driver update received: {clockTime(latestReceivedAt)}
             {generatedAt ? ` · Board generated ${clockTime(generatedAt)}` : ""}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={refreshList}
-          className="rounded-md bg-brand px-4 py-2 text-[13px] font-semibold text-white"
-        >
-          Refresh
-        </button>
-      </div>
+          </>
+        }
+        actions={
+          <button
+            type="button"
+            onClick={refreshList}
+            className="rounded-md bg-primary px-4 py-2 text-[13px] font-semibold text-white"
+          >
+            Refresh
+          </button>
+        }
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <label className="sr-only" htmlFor="live-ops-search">
@@ -448,7 +450,7 @@ export function LiveOperationsBoard({
           value={searchInput}
           onChange={(event) => setSearchInput(event.target.value)}
           placeholder="Search driver, trip, or package…"
-          className="min-h-[40px] w-full max-w-xs rounded-md border border-line bg-surface px-3 py-2 text-[13px] text-ink"
+          className="min-h-[40px] w-full max-w-xs rounded-md border border-border bg-card px-3 py-2 text-[13px] text-ink"
         />
         {warehouseOptions.length > 1 ? (
           <>
@@ -459,7 +461,7 @@ export function LiveOperationsBoard({
               id="live-ops-warehouse"
               value={warehouseId}
               onChange={(event) => setWarehouseId(event.target.value)}
-              className="min-h-[40px] rounded-md border border-line bg-surface px-3 py-2 text-[13px] text-ink"
+              className="min-h-[40px] rounded-md border border-border bg-card px-3 py-2 text-[13px] text-ink"
             >
               <option value="">All warehouses</option>
               {warehouseOptions.map((option) => (
@@ -479,12 +481,17 @@ export function LiveOperationsBoard({
             type="button"
             aria-pressed={filter === entry.key}
             onClick={() => setFilter(entry.key)}
-            className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold ${
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-semibold ${
               filter === entry.key
-                ? "border-brand bg-accentbg text-brand"
-                : "border-line bg-surface text-slate2"
+                ? "border-primary bg-primary-light text-primary-dark"
+                : "border-border bg-surface-2 text-ink"
             }`}
           >
+            {filter === entry.key ? (
+              <span aria-hidden="true" className="text-[11px] leading-none">
+                ✓
+              </span>
+            ) : null}
             {entry.label}
           </button>
         ))}
@@ -493,13 +500,13 @@ export function LiveOperationsBoard({
       {fetchError ? (
         <div
           role="alert"
-          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-red/30 bg-redbg px-3 py-2"
+          className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-danger/30 bg-dangerbg px-3 py-2"
         >
-          <p className="text-[13px] font-semibold text-reddeep">{fetchError}</p>
+          <p className="text-[13px] font-semibold text-danger">{fetchError}</p>
           <button
             type="button"
             onClick={refreshList}
-            className="rounded-md border border-line bg-surface px-3 py-1.5 text-[12px] font-semibold text-ink"
+            className="rounded-md border border-border bg-card px-3 py-1.5 text-[12px] font-semibold text-ink"
           >
             Retry
           </button>
@@ -507,8 +514,8 @@ export function LiveOperationsBoard({
       ) : null}
 
       {allStale ? (
-        <div className="rounded-md border border-line bg-amberbg px-3 py-2">
-          <p className="text-[13px] font-semibold text-amberdeep">
+        <div className="rounded-md border border-border bg-warningbg px-3 py-2">
+          <p className="text-[13px] font-semibold text-warning">
             No live positions right now — every movement below is stale or offline. Positions
             update only while a driver&apos;s app is open on screen.
           </p>
@@ -524,8 +531,8 @@ export function LiveOperationsBoard({
             onClick={() => setMobileView(view)}
             className={`rounded-md border px-3 py-2 text-[12px] font-semibold ${
               mobileView === view
-                ? "border-brand bg-accentbg text-brand"
-                : "border-line bg-surface text-slate2"
+                ? "border-primary bg-primary-light text-primary-dark"
+                : "border-border bg-card text-ink-2"
             }`}
           >
             {view === "list" ? "List" : "Map"}
@@ -533,7 +540,7 @@ export function LiveOperationsBoard({
         ))}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(320px,420px)_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[320px_1fr] min-[1440px]:grid-cols-[360px_1fr]">
         <div className={mobileView === "list" ? "" : "hidden lg:block"}>{listPanel}</div>
         <div className={mobileView === "map" ? "" : "hidden lg:block"}>{mapPanel}</div>
       </div>
@@ -549,11 +556,11 @@ export function LiveOperationsBoard({
       >
         {detailError ? (
           <div className="flex flex-col gap-2">
-            <p className="text-[13px] text-reddeep">{detailError}</p>
+            <p className="text-[13px] text-danger">{detailError}</p>
             <div>
               <button
                 type="button"
-                className="rounded-md border border-line bg-surface px-3 py-2 text-[12px] font-semibold text-ink"
+                className="rounded-md border border-border bg-card px-3 py-2 text-[12px] font-semibold text-ink"
                 onClick={() => selectedId && void selectSession(selectedId)}
               >
                 Retry
@@ -561,38 +568,38 @@ export function LiveOperationsBoard({
             </div>
           </div>
         ) : detail === null ? (
-          <p className="text-[13px] text-slate2">Loading details…</p>
+          <p className="text-[13px] text-ink-2">Loading details…</p>
         ) : (
           <div className="flex flex-col gap-3 text-[13px] text-ink">
             <div className="flex flex-wrap items-center gap-2">
               <FreshnessBadge state={detail.freshnessState} />
-              <span className="text-slate2">
+              <span className="text-ink-2">
                 {detail.location
                   ? `Last GPS update ${relativeTime(detail.location.lastReceivedAt, nowMs)} · accuracy ±${Math.round(detail.location.accuracyMeters)} m`
                   : "Waiting for first location"}
               </span>
             </div>
             <dl className="grid grid-cols-[110px_1fr] gap-y-1.5">
-              <dt className="text-slate2">Driver</dt>
+              <dt className="text-ink-2">Driver</dt>
               <dd className="font-medium">{detail.driverName}</dd>
               {detail.vehicleRegistration ? (
                 <>
-                  <dt className="text-slate2">Vehicle</dt>
+                  <dt className="text-ink-2">Vehicle</dt>
                   <dd className="font-medium">{detail.vehicleRegistration}</dd>
                 </>
               ) : null}
-              <dt className="text-slate2">{detail.tripId ? "Trip" : "Batch"}</dt>
+              <dt className="text-ink-2">{detail.tripId ? "Trip" : "Batch"}</dt>
               <dd className="font-medium">{movementRef(detail)}</dd>
-              <dt className="text-slate2">Route</dt>
+              <dt className="text-ink-2">Route</dt>
               <dd className="font-medium">
                 {detail.origin.name} →{" "}
                 {detail.destination ? detail.destination.name : "Local deliveries"}
               </dd>
-              <dt className="text-slate2">Packages</dt>
+              <dt className="text-ink-2">Packages</dt>
               <dd className="font-medium tnum">{detail.packageCount}</dd>
               {detail.deliveredCount !== null ? (
                 <>
-                  <dt className="text-slate2">Delivered</dt>
+                  <dt className="text-ink-2">Delivered</dt>
                   <dd className="font-medium tnum">
                     {detail.deliveredCount} delivered · {detail.remainingCount ?? 0} remaining
                   </dd>
@@ -600,16 +607,16 @@ export function LiveOperationsBoard({
               ) : null}
               {"codCollectedPaisa" in detail && detail.codCollectedPaisa !== undefined ? (
                 <>
-                  <dt className="text-slate2">COD collected</dt>
+                  <dt className="text-ink-2">COD collected</dt>
                   <dd className="font-medium tnum">{formatPaisa(detail.codCollectedPaisa)}</dd>
                 </>
               ) : null}
-              <dt className="text-slate2">Activity</dt>
+              <dt className="text-ink-2">Activity</dt>
               <dd className="font-medium">{activityLabel(detail)}</dd>
             </dl>
 
             {showConnectorNote ? (
-              <p className="text-[12px] text-slate2">
+              <p className="text-[12px] text-ink-2">
                 Straight-line connection — not a road route
               </p>
             ) : null}
@@ -620,13 +627,13 @@ export function LiveOperationsBoard({
                   <>
                     <Link
                       href={`${basePath}/transfers/${detailForActions!.transferId}`}
-                      className="rounded-md bg-brand px-3 py-2 text-[12px] font-semibold text-white"
+                      className="rounded-md bg-primary px-3 py-2 text-[12px] font-semibold text-white"
                     >
                       View trip
                     </Link>
                     <Link
                       href={`${basePath}/transfers/${detailForActions!.transferId}/manifest`}
-                      className="rounded-md border border-line bg-surface px-3 py-2 text-[12px] font-semibold text-ink"
+                      className="rounded-md border border-border bg-card px-3 py-2 text-[12px] font-semibold text-ink"
                     >
                       View manifest
                     </Link>
@@ -635,7 +642,7 @@ export function LiveOperationsBoard({
                 {showBatchAction ? (
                   <Link
                     href={`${basePath}/deliveries/${detailForActions!.deliveryBatchId}`}
-                    className="rounded-md bg-brand px-3 py-2 text-[12px] font-semibold text-white"
+                    className="rounded-md bg-primary px-3 py-2 text-[12px] font-semibold text-white"
                   >
                     View batch
                   </Link>
@@ -643,7 +650,7 @@ export function LiveOperationsBoard({
                 {showDriverAction ? (
                   <Link
                     href={`${basePath}/drivers/${detailForActions!.driverId}`}
-                    className="rounded-md border border-line bg-surface px-3 py-2 text-[12px] font-semibold text-ink"
+                    className="rounded-md border border-border bg-card px-3 py-2 text-[12px] font-semibold text-ink"
                   >
                     View driver
                   </Link>
@@ -656,21 +663,21 @@ export function LiveOperationsBoard({
                 Packages ({detail.packages.length})
               </h3>
               {detail.packages.length === 0 ? (
-                <p className="mt-1 text-[12px] text-slate2">No packages on this movement.</p>
+                <p className="mt-1 text-[12px] text-ink-2">No packages on this movement.</p>
               ) : (
                 <ul className="mt-1 flex flex-col gap-1">
                   {detail.packages.map((pkg) => (
                     <li
                       key={pkg.packageId}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-2 py-1.5"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-2 py-1.5"
                     >
                       <Link
                         href={`/track/${pkg.trackingId}`}
-                        className="font-mono text-[12px] font-semibold text-brand"
+                        className="font-mono text-[12px] font-semibold text-primary"
                       >
                         {pkg.trackingId}
                       </Link>
-                      <span className="text-[12px] text-slate2">
+                      <span className="text-[12px] text-ink-2">
                         {pkg.packageStatus}
                         {pkg.itemStatus ? ` · ${pkg.itemStatus}` : ""}
                         {pkg.assignmentStatus ? ` · ${pkg.assignmentStatus}` : ""}

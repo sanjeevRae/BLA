@@ -131,6 +131,13 @@ export interface LiveMapProps {
   selectedWarehouseId: string | null;
   onShowAllAuthorized: () => void;
   heightClassName?: string;
+  /**
+   * Render the marker legend under the map (V3 Step 9, DS §7.11).
+   * Optional and OFF by default so compact embeds (the dashboard
+   * LiveOpsPreview) render exactly as before; the full Live
+   * Operations board opts in.
+   */
+  showLegend?: boolean;
 }
 
 export function LiveMap({
@@ -141,6 +148,7 @@ export function LiveMap({
   selectedWarehouseId,
   onShowAllAuthorized,
   heightClassName = "h-[420px]",
+  showLegend = false,
 }: LiveMapProps) {
   const mapRef = useRef<L.Map | null>(null);
   const selected = items.find((item) => item.trackingSessionId === selectedId) ?? null;
@@ -181,7 +189,7 @@ export function LiveMap({
   }
 
   const controlButtonClass =
-    "rounded-md border border-line bg-surface px-3 py-2 text-[12px] font-semibold text-ink disabled:opacity-60";
+    "rounded-md border border-border bg-card px-3 py-2 text-[12px] font-semibold text-ink disabled:opacity-60";
 
   return (
     <div className="flex flex-col gap-2">
@@ -198,7 +206,7 @@ export function LiveMap({
           Show all authorized
         </button>
       </div>
-      <div className={`${heightClassName} w-full overflow-hidden rounded-lg border border-line`}>
+      <div className={`${heightClassName} w-full overflow-hidden rounded-lg border border-border`}>
         <MapContainer
           center={[NEPAL_CENTRE[0], NEPAL_CENTRE[1]]}
           zoom={DEFAULT_MAP_ZOOM}
@@ -247,10 +255,70 @@ export function LiveMap({
           ) : null}
         </MapContainer>
       </div>
-      <p className="text-[12px] text-slate2">
+      <p className="text-[12px] text-ink-2">
         Pins show each driver&apos;s last reported position — the age of every position is
         shown in the list, and a faded pin is not a live position.
       </p>
+      {showLegend ? (
+        <div
+          aria-label="Map legend"
+          className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2.5"
+        >
+          <p className="text-[12px] font-semibold text-ink">Map legend</p>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-2">
+              <span aria-hidden="true" className="bla-pin bla-pin-linehaul bla-pin-fresh">
+                <span className="bla-pin-letter">L</span>
+              </span>
+              L — Warehouse transfer
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-2">
+              <span aria-hidden="true" className="bla-pin bla-pin-pickup bla-pin-fresh">
+                <span className="bla-pin-letter">P</span>
+              </span>
+              P — Pickup
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-2">
+              <span aria-hidden="true" className="bla-pin bla-pin-delivery bla-pin-fresh">
+                <span className="bla-pin-letter">D</span>
+              </span>
+              D — Delivery
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-2">
+              <span aria-hidden="true" className="bla-wh">
+                WH
+              </span>
+              Warehouse (code shown on the chip)
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-2">
+              <span aria-hidden="true" className="bla-pin bla-pin-pickup bla-pin-fresh">
+                <span className="bla-pin-letter">•</span>
+              </span>
+              Fresh — position recently updated
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-2">
+              <span aria-hidden="true" className="bla-pin bla-pin-pickup bla-pin-delayed">
+                <span className="bla-pin-letter">•</span>
+              </span>
+              Delayed — position update is overdue
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-2">
+              <span aria-hidden="true" className="bla-pin bla-pin-pickup bla-pin-stale">
+                <span className="bla-pin-letter">•</span>
+              </span>
+              Stale — old position, faded pin
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[12px] text-ink-2">
+              <span aria-hidden="true" className="bla-pin bla-pin-pickup bla-pin-offline">
+                <span className="bla-pin-letter">•</span>
+              </span>
+              Offline — no recent update; faded pin is not a live position
+            </span>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
