@@ -19,7 +19,7 @@ import {
 import { SectionCard } from "@/components/warehouses/ui";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
-import { statusLabel } from "@/lib/status/labels";
+import { humaniseStatusValue, statusLabel } from "@/lib/status/labels";
 import { DensityScope } from "@/components/ui/TableDensity";
 import {
   TABLE_CLASS,
@@ -374,12 +374,12 @@ export async function DriverDetailPage({
                 label="Accuracy"
                 value={`±${Math.round(profile.gps.accuracyMeters)} m`}
               />
-              <ProfileField label="Freshness" value={profile.gps.freshnessState} />
+              <ProfileField label="Freshness" value={humaniseStatusValue(profile.gps.freshnessState)} />
               <ProfileField
                 label="Last update"
                 value={new Date(profile.gps.lastReceivedAt).toLocaleString("en-GB")}
               />
-              <ProfileField label="Session type" value={profile.gps.trackingType} />
+              <ProfileField label="Session type" value={humaniseStatusValue(profile.gps.trackingType)} />
             </dl>
           ) : (
             <p className="text-[13px] text-ink-2">
