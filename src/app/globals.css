@@ -144,3 +144,24 @@ body {
 .focus-on-dark:focus-visible {
   outline-color: #ffffff;
 }
+
+/*
+ * Table density (V3 Step 9, DS §7.6) — additive only. Any table with
+ * the shared `bla-table` class (TABLE_CLASS in
+ * src/components/ui/table-chrome.ts) inside a [data-density] scope
+ * (TableDensity.tsx DensityScope, or DataTable's own wrapper) gets
+ * its body-row height from the scope: comfortable 44px, compact 40px.
+ * DataTable rows carry the matching h-11 / h-10 classes as well, so
+ * client and server tables agree exactly.
+ */
+.bla-table {
+  border-collapse: collapse;
+}
+
+[data-density="comfortable"] .bla-table tbody tr {
+  height: 44px;
+}
+
+[data-density="compact"] .bla-table tbody tr {
+  height: 40px;
+}

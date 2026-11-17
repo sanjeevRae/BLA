@@ -4,6 +4,14 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 
 import { EmptyState, SkeletonRows } from "./states";
+import {
+  TABLE_CLASS,
+  TD_CLASS,
+  THEAD_ROW_CLASS,
+  TH_CLASS,
+  TR_CLASS,
+} from "./table-chrome";
+import { DensityToggle, useTableDensity } from "./TableDensity";
 
 export interface DataTableColumn<Row> {
   key: string;
@@ -44,6 +52,11 @@ export interface DataTableProps<Row> {
    * + left indicator (DS §7.6). Optional; no selection state is owned
    * by the table itself. */
   selectedRowKey?: string;
+  /** Render the density toggle (DS §7.6) in the toolbar. Default true:
+   * the toolbar row renders even when it is the only toolbar content.
+   * Density itself is the shared useTableDensity() state (persisted
+   * per user, "comfortable" 44px / "compact" 40px). */
+  densityToggle?: boolean;
 }
 
 function alignClass(align: DataTableColumn<unknown>["align"]): string {
@@ -66,7 +79,10 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
     loading = false,
     ariaLabel,
     selectedRowKey,
+    densityToggle = true,
   } = props;
+
+  const { density, setDensity } = useTableDensity();
 
   const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(() => new Set());
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -95,7 +111,9 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
     }
   }
 
-  const hasToolbar = Boolean(search || filters || dateRange || hideableColumns.length > 0);
+  const hasToolbar = Boolean(
+    search || filters || dateRange || hideableColumns.length > 0 || densityToggle,
+  );
   const isEmpty = !loading && rows.length === 0;
 
   let paginationSummary: ReactNode = null;
@@ -107,7 +125,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
     const canPrev = page > 1;
     const canNext = page * pageSize < total;
     paginationSummary = (
-      <span className="text-[13px] text-ink-2">
+      <span aria-live="polite" className="text-[13px] text-ink-2">
         Showing {from}–{to} of {total}
       </span>
     );
@@ -134,7 +152,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card">
+    <div data-density={density} className="rounded-lg border border-border bg-card">
       {hasToolbar ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
           {search ? (
@@ -149,8 +167,13 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
           ) : null}
           {filters}
           {dateRange}
+          {densityToggle ? (
+            <div className="ml-auto">
+              <DensityToggle density={density} onDensityChange={setDensity} />
+            </div>
+          ) : null}
           {hideableColumns.length > 0 ? (
-            <div className="relative ml-auto">
+            <div className={`relative ${densityToggle ? "" : "ml-auto"}`}>
               <button
                 type="button"
                 aria-haspopup="true"
@@ -189,9 +212,9 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
       ) : null}
 
       <div className="overflow-x-auto">
-        <table aria-label={ariaLabel} className="w-full border-collapse">
+        <table aria-label={ariaLabel} className={TABLE_CLASS}>
           <thead>
-            <tr>
+            <tr className={THEAD_ROW_CLASS}>
               {visibleColumns.map((column) => {
                 const isSorted = Boolean(sort && sort.key === column.key);
                 const ariaSort = column.sortable
@@ -213,7 +236,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
                     key={column.key}
                     scope="col"
                     aria-sort={ariaSort}
-                    className={`bg-surface-2 px-3 py-2 text-[12px] font-semibold uppercase tracking-wide text-ink-2 ${alignClass(column.align)} ${column.className ?? ""}`}
+                    className={`${TH_CLASS} ${alignClass(column.align)} ${column.className ?? ""}`}
                   >
                     {column.sortable && sort ? (
                       <button
@@ -239,7 +262,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
                 <tr
                   key={rowKey(row)}
                   aria-selected={selectedRowKey !== undefined ? rowKey(row) === selectedRowKey : undefined}
-                  className={`h-11 border-t border-border hover:bg-surface-2 ${
+                  className={`${density === "compact" ? "h-10" : "h-11"} ${TR_CLASS} ${
                     selectedRowKey !== undefined && rowKey(row) === selectedRowKey
                       ? "bg-primary-light shadow-[inset_3px_0_0_0_var(--color-primary)] hover:bg-primary-light"
                       : ""
@@ -254,7 +277,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
                     return (
                       <td
                         key={column.key}
-                        className={`px-3 py-2 text-table text-ink ${alignClass(column.align)} ${column.className ?? ""}`}
+                        className={`${TD_CLASS} ${alignClass(column.align)} ${column.className ?? ""}`}
                       >
                         {content}
                       </td>
@@ -289,7 +312,11 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
           {paginationSummary}
           {paginationControls}
         </div>
-      ) : null}
+      ) : (
+        <span aria-live="polite" className="sr-only">
+          {rows.length} rows
+        </span>
+      )}
     </div>
   );
 }
