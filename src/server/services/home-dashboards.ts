@@ -1933,8 +1933,9 @@ export interface CustomerHomeData {
      *  holds no support.ticket.manage). */
     openTickets: number;
     /** Invoices addressed to the customer with money still owing —
-     *  the current home's own derivation over listInvoices
-     *  (status !== CANCELLED && outstandingPaisa !== "0"). */
+     *  the current home's own derivation over the customer's FULL
+     *  listInvoices result (every page; status !== CANCELLED &&
+     *  outstandingPaisa !== "0"). */
     unpaidInvoices: number;
     unpaidTotalPaisa: string;
   };
@@ -2030,7 +2031,6 @@ export async function getCustomerHome(actor: ActorContext): Promise<CustomerHome
     attemptedPage,
     deliveredPage,
     openTicketsPage,
-    invoicesPage,
     notificationsPage,
     returned,
     currentRows,
@@ -2043,7 +2043,6 @@ export async function getCustomerHome(actor: ActorContext): Promise<CustomerHome
     listPackages(actor, { status: "DELIVERY_ATTEMPTED", page: 1, pageSize: 5 }),
     listPackages(actor, { status: "DELIVERED", page: 1, pageSize: 5 }),
     listTickets(actor, { openOnly: true, page: 1, pageSize: 1 }),
-    listInvoices(actor, { page: 1, pageSize: 100 }),
     listMyNotifications(actor, { page: 1, pageSize: 5 }).catch(() => null),
     prisma.returnRequest.count({
       where: { package: { recipientCustomerId: customerId } },
@@ -2068,7 +2067,17 @@ export async function getCustomerHome(actor: ActorContext): Promise<CustomerHome
     }),
   ]);
 
-  const unpaid = invoicesPage.items.filter(
+  // Unpaid derivation reads EVERY invoice page: a single page would
+  // silently understate the count/total for a customer with more
+  // open invoices than one page holds (Step 7 review finding G-1).
+  const invoiceItems: Awaited<ReturnType<typeof listInvoices>>["items"] = [];
+  for (let page = 1; ; page += 1) {
+    const result = await listInvoices(actor, { page, pageSize: 100 });
+    invoiceItems.push(...result.items);
+    if (result.items.length < 100) break;
+  }
+
+  const unpaid = invoiceItems.filter(
     (invoice) => invoice.status !== "CANCELLED" && invoice.outstandingPaisa !== "0",
   );
   const unpaidTotal = unpaid.reduce(

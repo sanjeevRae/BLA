@@ -147,6 +147,117 @@ describe("operational-status scan — write contexts are caught", () => {
   });
 });
 
+describe("operational-status scan — Step 7 review hardening (F-1/F-2 evasions)", () => {
+  it("catches a patch object under a non-payload variable name (EV1)", () => {
+    expect(
+      scan(`
+        const patch = { operationalStatus: "DELIVERED" };
+        await prisma.package.update({ where: { id }, data: patch });
+      `),
+    ).toHaveLength(1);
+  });
+
+  it("catches a helper's returned object literal (EV6)", () => {
+    expect(
+      scan(`
+        function buildPatch() { return { operationalStatus: "DELIVERED" }; }
+        await prisma.package.update({ where: { id }, data: buildPatch() });
+      `),
+    ).toHaveLength(1);
+  });
+
+  it("catches an Object.assign payload literal (EV5)", () => {
+    expect(
+      scan(`Object.assign(data, { operationalStatus: "DELIVERED" });`),
+    ).toHaveLength(1);
+  });
+
+  it("catches non-literal values in proven write contexts (EV4/EV7)", () => {
+    expect(
+      scan(`await prisma.package.update({ where: { id }, data: { operationalStatus: nextStatus } });`),
+    ).toHaveLength(1);
+    expect(
+      scan(`await prisma.package.update({ where: { id }, data: { operationalStatus: Status.DELIVERED } });`),
+    ).toHaveLength(1);
+    expect(
+      scan(`
+        const data = { operationalStatus: nextStatus };
+        await prisma.package.update({ where: { id }, data });
+      `),
+    ).toHaveLength(1);
+  });
+
+  it("allows a non-literal (enum-style) value in a read filter — the transfers.ts shape (EV7 read side)", () => {
+    expect(
+      scan(`
+        const rows = await prisma.package.findMany({
+          where: { operationalStatus: Status.DELIVERED },
+        });
+      `),
+    ).toEqual([]);
+  });
+
+  it("catches a computed key aliased to the property name (EV2)", () => {
+    expect(
+      scan(`
+        const key = "operationalStatus";
+        await prisma.package.update({ where: { id }, data: { [key]: "DELIVERED" } });
+      `),
+    ).toHaveLength(1);
+    expect(
+      scan(`await prisma.package.update({ where: { id }, data: { ["operationalStatus"]: "DELIVERED" } });`),
+    ).toHaveLength(1);
+  });
+
+  it("catches a bracket assignment (EV3)", () => {
+    const hits = scan(`pkg["operationalStatus"] = "DELIVERED";`);
+    expect(hits).toHaveLength(1);
+    expect(hits[0].context).toBe("direct assignment");
+  });
+
+  it("is not confused by a regex literal before a write on the same line (EV9)", () => {
+    expect(
+      scan(`const re = /\\/\\//; await prisma.package.update({ where: { id }, data: { operationalStatus: "DELIVERED" } });`),
+    ).toHaveLength(1);
+    // …and ordinary division does not swallow following code either.
+    expect(
+      scan(`const ratio = a / b; await prisma.package.update({ where: { id }, data: { operationalStatus: "DELIVERED" } });`),
+    ).toHaveLength(1);
+  });
+
+  it("allows audit before/after snapshots built from variables inside an auditLog create (the bookings.ts shape)", () => {
+    expect(
+      scan(`
+        await tx.auditLog.create({
+          data: {
+            action: "package.cancel",
+            before: { operationalStatus: pkg.operationalStatus },
+            after: { operationalStatus: transitioned.pkg.operationalStatus },
+          },
+        });
+      `),
+    ).toEqual([]);
+  });
+
+  it("allows literal-typed type declarations", () => {
+    expect(
+      scan(`
+        interface StatusView { operationalStatus: "DELIVERED"; }
+        type Booked = { operationalStatus: "BOOKED" };
+      `),
+    ).toEqual([]);
+  });
+
+  it("allows a filter object under a read variable name", () => {
+    expect(
+      scan(`
+        const filter = { operationalStatus: "BOOKED" };
+        await prisma.package.count({ where: filter });
+      `),
+    ).toEqual([]);
+  });
+});
+
 describe("operational-status scan — directory entry point", () => {
   it("flags a planted write-context offender file and passes a planted read-context file", () => {
     const dir = mkdtempSync(join(tmpdir(), "bla-scan-probe-"));

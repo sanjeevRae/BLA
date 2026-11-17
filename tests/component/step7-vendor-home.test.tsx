@@ -105,8 +105,10 @@ describe("Step 7 VendorHomeView — needs attention", () => {
     render(<VendorHomeView data={data} vendorRole={null} />);
     expect(screen.getByText(/not approved for booking yet/)).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Create booking" })).toBeNull();
-    // Bulk booking stays available (header + quick actions), per the brief.
-    expect(screen.getAllByRole("link", { name: "Bulk booking" }).length).toBeGreaterThan(0);
+    // Bulk booking is gated on approval too (Step 7 review E-1): the
+    // bulk submission path enforces APPROVED server-side, so offering
+    // the entry to an unapproved vendor would be a dead end.
+    expect(screen.queryByRole("link", { name: "Bulk booking" })).toBeNull();
   });
 });
 

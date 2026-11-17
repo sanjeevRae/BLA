@@ -478,4 +478,30 @@ describe("Step 7 — customer home model", () => {
     const unlinked = { ...customerAActor, customerId: null };
     await expect(homeSvc.getCustomerHome(unlinked as never)).rejects.toThrow(/customer/);
   });
+
+  it("unpaid invoice derivation reads past the first page (Step 7 review G-1)", async () => {
+    const userId = await makeUser("custC", "CUSTOMER");
+    const customer = await prisma.customer.create({
+      data: {
+        fullName: "S7C custC",
+        phone: `9779800${RUN_NUM}3`,
+        normalizedPhone: `9779800${RUN_NUM}3`,
+        email: email("custC"),
+        userId,
+      },
+    });
+    await prisma.invoice.createMany({
+      data: Array.from({ length: 101 }, (_, i) => ({
+        invoiceNumber: `INV-S7C-C${i}-${RUN}`,
+        customerId: customer.id,
+        subtotalPaisa: BigInt(100),
+        totalPaisa: BigInt(100),
+        status: "ISSUED",
+        issuedById: fx.adminUser,
+      })),
+    });
+    const model = await homeSvc.getCustomerHome(await actorFor(userId));
+    expect(model.attention.unpaidInvoices).toBe(101);
+    expect(model.attention.unpaidTotalPaisa).toBe("10100");
+  }, 120_000);
 });

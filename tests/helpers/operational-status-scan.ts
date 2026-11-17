@@ -9,27 +9,36 @@ import { join } from "node:path";
  * a read — it flagged a legitimate `where:` filter literal in
  * warehouse-home.ts (a `prisma…count()` read introduced in V3 Step 5).
  *
- * This scanner tokenises the source (comments and string contents are
- * never mistaken for code) and tracks object-literal context, so a
- * status literal is reported ONLY in a write context:
+ * V3 Step 7 review hardening (coordinator fix for review findings
+ * F-1/F-2): the first write-aware version only flagged literals in
+ * PROVEN write contexts, which a future write could evade through
+ * indirection (a patch object under a non-payload variable name, a
+ * helper's return value, `Object.assign`, a computed key, a bracket
+ * assignment, a non-literal/enum value, or a regex literal confusing
+ * the tokeniser). The rule is now asymmetric:
  *
- *  - inside a `data:` / `create:` / `update:` payload object — the
- *    Prisma write shapes (create / update / updateMany / upsert,
- *    including nested relation writes such as
- *    `data: { packages: { create: { … } } }`), unless a read key
- *    (`where`, `orderBy`, `select`, `include`, …) intervenes between
- *    the payload key and the literal (e.g. the `where:` of the same
- *    update call stays a read);
- *  - inside an object literal assigned to a payload variable
- *    (`const data = { … }`, `const updateData = { … }`,
- *    `const payload = { … }`) that is later handed to a write call;
- *  - directly as the argument object of a Prisma write call
- *    (`update({ operationalStatus: "…" })`);
- *  - as a direct assignment (`pkg.operationalStatus = "…"`).
+ *  - A status LITERAL (`operationalStatus: "DELIVERED"`, in any
+ *    object literal, under a plain or computed key) is reported
+ *    UNLESS the enclosing context is a PROVEN read: a `where` /
+ *    `orderBy` / `select` / `include` / relation-filter key chain, a
+ *    `where`/`filter`-named variable, or a type declaration. A bare
+ *    object literal is not a read — in service code an object
+ *    carrying a status literal is a payload, a patch, or a fake
+ *    view, and all three are the lifecycle service's business.
+ *  - A NON-literal value (`operationalStatus: nextStatus`,
+ *    `operationalStatus: Status.DELIVERED`) is reported only in a
+ *    PROVEN write context (Prisma `data`/`create`/`update` payload,
+ *    payload-named variable, direct argument of a write call) —
+ *    view/audit mappings built from variables stay legal everywhere.
+ *  - Direct assignments (`pkg.operationalStatus = …`,
+ *    `pkg["operationalStatus"] = …`) are always writes.
  *
- * Read contexts — `where:` filters (however deeply nested), `orderBy`,
- * `select`, comparisons (`===`), audit/view mappings built from
- * variables — are allowed, exactly as the services use them today.
+ * Proven read/write contexts are decided by walking the tokenised
+ * frame stack (comments, strings and regex literals are never
+ * mistaken for code). Residual, documented: a non-literal value in a
+ * bare object handed through multi-hop dataflow to a write call is
+ * not statically provable and stays unflagged — the literal and
+ * payload shapes a real regression would take are all caught.
  */
 
 export interface OperationalStatusWrite {
@@ -54,8 +63,47 @@ const READ_KEYS = new Set([
   "cursor",
   "by",
 ]);
+/** Variable names that mark an object literal as a read filter. */
+const READ_VAR_NAMES = new Set(["where", "filter"]);
 const WRITE_CALLS = new Set(["create", "createMany", "update", "updateMany", "upsert"]);
 const STATUS_LITERAL = /^[A-Z][A-Z0-9_]*$/;
+/** Idents after which a `/` opens a regex literal rather than division. */
+const REGEX_PREFIX_IDENTS = new Set([
+  "return",
+  "typeof",
+  "case",
+  "in",
+  "of",
+  "new",
+  "delete",
+  "void",
+  "instanceof",
+  "yield",
+  "await",
+]);
+const REGEX_PREFIX_PUNCTS = new Set([
+  "(",
+  ",",
+  "=",
+  ":",
+  "[",
+  "!",
+  "&",
+  "|",
+  "?",
+  "{",
+  "}",
+  ";",
+  "+",
+  "-",
+  "*",
+  "%",
+  "^",
+  "~",
+  "<",
+  ">",
+  "=>",
+]);
 
 type Token =
   | { type: "ident"; value: string; line: number }
@@ -93,6 +141,39 @@ function tokenize(source: string): Token[] {
         i += 1;
       }
       i += 2;
+      continue;
+    }
+    // Regex literals: a `/` where a value cannot precede it starts a
+    // regex, whose body (including any `//`-looking text) is data.
+    if (c === "/") {
+      const prev = tokens[tokens.length - 1];
+      const regexHere =
+        !prev ||
+        (prev.type === "punct" && REGEX_PREFIX_PUNCTS.has(prev.value)) ||
+        (prev.type === "ident" && REGEX_PREFIX_IDENTS.has(prev.value));
+      if (regexHere) {
+        const startLine = line;
+        i += 1;
+        let inClass = false;
+        while (i < n) {
+          const ch = source[i];
+          if (ch === "\\") {
+            i += 2;
+            continue;
+          }
+          if (ch === "\n") break;
+          if (ch === "[") inClass = true;
+          else if (ch === "]") inClass = false;
+          else if (ch === "/" && !inClass) break;
+          i += 1;
+        }
+        i += 1; // closing slash
+        while (i < n && isIdentPart(source[i])) i += 1; // flags
+        tokens.push({ type: "string", value: "<regex>", line: startLine });
+        continue;
+      }
+      tokens.push({ type: "punct", value: "/", line });
+      i += 1;
       continue;
     }
     // Strings and template literals (contents are data, not code).
@@ -148,10 +229,75 @@ interface Frame {
   assignName: string | null;
   /** Method name when this paren is a call's argument list. */
   callName: string | null;
+  /** True for `interface … {` / `type … = {` declaration bodies. */
+  isTypeDecl: boolean;
 }
 
 function isPayloadVarName(name: string): boolean {
   return name === "data" || name === "payload" || name.endsWith("Data");
+}
+
+type Classification =
+  | { kind: "write"; context: string }
+  | { kind: "read" }
+  | { kind: "bare" };
+
+/**
+ * Walk the frame stack from the innermost outward. The first KEYED
+ * brace frame decides: a payload key means write, a read key means
+ * read, any other key (relation names, view fields) is neutral and
+ * the walk continues. An unkeyed object that is the direct argument
+ * of a Prisma write call is a write; a payload-named variable counts
+ * as its payload key, a `where`/`filter`-named variable as a read.
+ * If nothing decides, the object is "bare" — not a proven read.
+ */
+function classify(stack: Frame[]): Classification {
+  let unkeyedBracesOnly = true;
+  let crossedNeutral = false;
+  for (let s = stack.length - 1; s >= 0; s -= 1) {
+    const frame = stack[s];
+    if (frame.kind === "paren") {
+      if (unkeyedBracesOnly && frame.callName && WRITE_CALLS.has(frame.callName)) {
+        return { kind: "write", context: `argument of ${frame.callName}()` };
+      }
+      // Any other call boundary ends the "direct argument" reading,
+      // but keyed frames further out (e.g. an enclosing `data:`) can
+      // still decide — keep walking.
+      unkeyedBracesOnly = false;
+      continue;
+    }
+    if (frame.kind !== "brace") continue;
+    if (frame.isTypeDecl) return { kind: "read" };
+    const key =
+      frame.key ??
+      (frame.assignName == null
+        ? null
+        : isPayloadVarName(frame.assignName)
+          ? "data"
+          : READ_VAR_NAMES.has(frame.assignName)
+            ? "where"
+            : frame.assignName);
+    if (key == null) continue;
+    if (WRITE_PAYLOAD_KEYS.has(key)) {
+      // A payload key proves a write only for the payload's OWN
+      // fields. Once a neutral key intervenes (an audit `before:` /
+      // `after:` snapshot inside an auditLog `data:`, a view field),
+      // the member is a sub-object's field, not a payload field —
+      // the classification degrades to "bare" (literals still
+      // flagged, non-literal mappings allowed). Relation write keys
+      // (`create:`/`update:` under a relation name) are met BEFORE
+      // the relation's neutral key on the walk out, so nested
+      // relation writes still classify as writes.
+      if (crossedNeutral) return { kind: "bare" };
+      return { kind: "write", context: `${key}: payload` };
+    }
+    if (READ_KEYS.has(key)) return { kind: "read" };
+    // Neutral key (relation name, view field, audit before/after…):
+    // it breaks the direct-argument reading but not the walk.
+    unkeyedBracesOnly = false;
+    crossedNeutral = true;
+  }
+  return { kind: "bare" };
 }
 
 /** Scan one source string; returns every write-context status literal. */
@@ -164,6 +310,54 @@ export function scanSourceForStatusWrites(
   const stack: Frame[] = [];
 
   const at = (idx: number): Token | undefined => tokens[idx];
+  const isPunct = (tok: Token | undefined, value: string) =>
+    tok?.type === "punct" && tok.value === value;
+
+  // Identifiers aliased to the property name itself:
+  // `const key = "operationalStatus"` makes `[key]:` a status key.
+  const keyAliases = new Set<string>();
+  for (let t = 0; t + 2 < tokens.length; t += 1) {
+    const name = tokens[t];
+    if (
+      name.type === "ident" &&
+      isPunct(at(t + 1), "=") &&
+      at(t + 2)?.type === "string" &&
+      at(t + 2)?.value === "operationalStatus"
+    ) {
+      keyAliases.add(name.value);
+    }
+  }
+  const isStatusKeyToken = (tok: Token | undefined) =>
+    (tok?.type === "string" && tok.value === "operationalStatus") ||
+    (tok?.type === "ident" && keyAliases.has(tok.value));
+
+  const recordMember = (line: number, valueTok: Token | undefined) => {
+    const isStatusLiteral =
+      valueTok?.type === "string" && STATUS_LITERAL.test(valueTok.value);
+    const cls = classify(stack);
+    if (isStatusLiteral) {
+      // A status literal is a write unless the context is a proven read.
+      if (cls.kind === "write") {
+        hits.push({ file, line, literal: valueTok.value, context: cls.context });
+      } else if (cls.kind === "bare") {
+        hits.push({
+          file,
+          line,
+          literal: valueTok.value,
+          context: "object literal outside a proven read context",
+        });
+      }
+    } else if (cls.kind === "write") {
+      // Non-literal values are writes only in proven write contexts.
+      hits.push({
+        file,
+        line,
+        literal:
+          valueTok?.type === "string" ? valueTok.value : "<non-literal value>",
+        context: cls.context,
+      });
+    }
+  };
 
   for (let t = 0; t < tokens.length; t += 1) {
     const tok = tokens[t];
@@ -173,18 +367,20 @@ export function scanSourceForStatusWrites(
         // Determine the key/assignment context from preceding tokens.
         let key: string | null = null;
         let assignName: string | null = null;
+        let isTypeDecl = false;
         const prev = at(t - 1);
         const prev2 = at(t - 2);
-        if (prev?.type === "punct" && prev.value === ":" && prev2 && prev2.type !== "punct") {
+        const prev3 = at(t - 3);
+        if (isPunct(prev, ":") && prev2 && prev2.type !== "punct") {
           key = prev2.value;
-        } else if (
-          prev?.type === "punct" &&
-          prev.value === "=" &&
-          prev2?.type === "ident"
-        ) {
+        } else if (isPunct(prev, "=") && prev2?.type === "ident") {
           assignName = prev2.value;
+          if (prev3?.type === "ident" && prev3.value === "type") isTypeDecl = true;
         }
-        stack.push({ kind: "brace", key, assignName, callName: null });
+        if (prev?.type === "ident" && prev2?.type === "ident" && prev2.value === "interface") {
+          isTypeDecl = true;
+        }
+        stack.push({ kind: "brace", key, assignName, callName: null, isTypeDecl });
         continue;
       }
       if (tok.value === "(") {
@@ -194,11 +390,28 @@ export function scanSourceForStatusWrites(
           key: null,
           assignName: null,
           callName: prev?.type === "ident" ? prev.value : null,
+          isTypeDecl: false,
         });
         continue;
       }
       if (tok.value === "[") {
-        stack.push({ kind: "bracket", key: null, assignName: null, callName: null });
+        stack.push({ kind: "bracket", key: null, assignName: null, callName: null, isTypeDecl: false });
+        // Bracket assignment: `pkg["operationalStatus"] = …`.
+        if (isStatusKeyToken(at(t + 1)) && isPunct(at(t + 2), "]") && isPunct(at(t + 3), "=")) {
+          const valueTok = at(t + 4);
+          hits.push({
+            file,
+            line: tok.line,
+            literal:
+              valueTok?.type === "string" ? valueTok.value : "<non-literal value>",
+            context: "direct assignment",
+          });
+        }
+        // Computed-key property: `["operationalStatus"]: value` /
+        // `[keyAlias]: value` inside an object literal.
+        if (isStatusKeyToken(at(t + 1)) && isPunct(at(t + 2), "]") && isPunct(at(t + 3), ":")) {
+          recordMember(tok.line, at(t + 4));
+        }
         continue;
       }
       if (tok.value === "}" || tok.value === ")" || tok.value === "]") {
@@ -216,71 +429,26 @@ export function scanSourceForStatusWrites(
 
     if (tok.type === "ident" && tok.value === "operationalStatus") {
       const next = at(t + 1);
-      const after = at(t + 2);
-      // Direct assignment: `operationalStatus = "LITERAL"`.
-      if (
-        next?.type === "punct" &&
-        next.value === "=" &&
-        after?.type === "string" &&
-        STATUS_LITERAL.test(after.value)
-      ) {
+      // Direct assignment: `operationalStatus = …` (any value form).
+      if (isPunct(next, "=")) {
+        const valueTok = at(t + 2);
         hits.push({
           file,
           line: tok.line,
-          literal: after.value,
+          literal:
+            valueTok?.type === "string" ? valueTok.value : "<non-literal value>",
           context: "direct assignment",
         });
         continue;
       }
-      // Object member: `operationalStatus: "LITERAL"`.
-      if (
-        next?.type === "punct" &&
-        next.value === ":" &&
-        after?.type === "string" &&
-        STATUS_LITERAL.test(after.value)
-      ) {
-        const context = writeContextOf(stack);
-        if (context) {
-          hits.push({ file, line: tok.line, literal: after.value, context });
-        }
+      // Object member: `operationalStatus: value` — but not a member
+      // ACCESS (`pkg.operationalStatus`), whose preceding token is `.`.
+      if (isPunct(next, ":") && !isPunct(at(t - 1), ".")) {
+        recordMember(tok.line, at(t + 2));
       }
     }
   }
   return hits;
-}
-
-/**
- * Walk the frame stack from the innermost outward. The first KEYED
- * brace frame decides: a payload key means write, a read key means
- * read, any other key (relation names, view fields) is neutral and
- * the walk continues. An unkeyed object that is the direct argument
- * of a Prisma write call is a write; a payload variable assignment
- * counts as its payload key.
- */
-function writeContextOf(stack: Frame[]): string | null {
-  let unkeyedBracesOnly = true;
-  for (let s = stack.length - 1; s >= 0; s -= 1) {
-    const frame = stack[s];
-    if (frame.kind === "paren") {
-      if (unkeyedBracesOnly && frame.callName && WRITE_CALLS.has(frame.callName)) {
-        return `argument of ${frame.callName}()`;
-      }
-      // Any other call boundary ends the "direct argument" reading,
-      // but keyed frames further out (e.g. an enclosing `data:`) can
-      // still decide — keep walking.
-      unkeyedBracesOnly = false;
-      continue;
-    }
-    if (frame.kind !== "brace") continue;
-    const key = frame.key ?? (frame.assignName && isPayloadVarName(frame.assignName) ? "data" : frame.assignName);
-    if (key == null) continue;
-    if (WRITE_PAYLOAD_KEYS.has(key)) return `${key}: payload`;
-    if (READ_KEYS.has(key)) return null;
-    // Neutral key (relation name, view field, audit before/after…):
-    // it breaks the direct-argument reading but not the walk.
-    unkeyedBracesOnly = false;
-  }
-  return null;
 }
 
 /**

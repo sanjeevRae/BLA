@@ -126,7 +126,7 @@ export function VendorHomeView({
 
   const quickActions: { label: string; href: string; icon: NavIconName; show: boolean }[] = [
     { label: "Create booking", href: "/vendor/bookings/new", icon: "package", show: approved },
-    { label: "Bulk booking", href: "/vendor/bookings/bulk", icon: "boxes", show: true },
+    { label: "Bulk booking", href: "/vendor/bookings/bulk", icon: "boxes", show: approved },
     { label: "View packages", href: "/vendor/bookings", icon: "inbox", show: true },
     { label: "View invoices", href: "/vendor/billing", icon: "wallet", show: true },
     { label: "Create support ticket", href: "/vendor/tickets", icon: "ticket", show: true },
@@ -176,9 +176,11 @@ export function VendorHomeView({
                 Create booking
               </Link>
             ) : null}
-            <Link href="/vendor/bookings/bulk" className={SECONDARY_LINK}>
-              Bulk booking
-            </Link>
+            {approved ? (
+              <Link href="/vendor/bookings/bulk" className={SECONDARY_LINK}>
+                Bulk booking
+              </Link>
+            ) : null}
           </>
         }
       />
