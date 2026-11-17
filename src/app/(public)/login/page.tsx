@@ -46,7 +46,7 @@ export default async function LoginPage() {
               Sign in
             </h1>
             <p className="mt-1 text-[13px] text-ink-2">
-              Sign in to the delivery operations platform
+              Use your organisation account to continue.
             </p>
           </div>
           <div className="rounded-lg border border-border bg-card p-6">

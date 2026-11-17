@@ -91,7 +91,7 @@ describe("LoginPage — split treatment (DS §2.6)", () => {
     expect(right).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Sign in" })).toBeTruthy();
     expect(
-      screen.getByText("Sign in to the delivery operations platform"),
+      screen.getByText("Use your organisation account to continue."),
     ).toBeTruthy();
     expect(screen.getByRole("form", { name: "Sign in form" })).toBeTruthy();
 
