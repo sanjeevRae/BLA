@@ -19,7 +19,7 @@ import {
   UserMembershipsPanel,
 } from "./UserDetailPanels";
 import { UsersListClient } from "./UsersListClient";
-import { PageHeader } from "./ui";
+import { PageHeader } from "@/components/ui/PageHeader";
 
 /**
  * Super Admin / Admin identity surfaces (Phase 6, audit H-4). Thin
@@ -71,7 +71,7 @@ export async function UsersListPage({
       <PageHeader
         eyebrow="Administration"
         title="Users & Roles"
-        subtitle={`${result.total} user account${result.total === 1 ? "" : "s"}`}
+        description={`${result.total} user account${result.total === 1 ? "" : "s"}`}
       />
       <UsersListClient
         basePath={basePath}
@@ -111,16 +111,15 @@ export async function UserDetailPage({
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <Link href={`${basePath}/users`} className="text-[12px] font-semibold text-brand">
+        <Link href={`${basePath}/users`} className="text-[12px] font-semibold text-primary">
           ← All users
         </Link>
-        <h1 className="mt-1 text-[22px] font-bold text-ink">{user.fullName}</h1>
-        <p className="text-[13px] text-slate2">{user.email}</p>
+        <PageHeader title={user.fullName} description={user.email} className="mt-1" />
       </div>
       <UserIdentityCard user={user} />
       <RolesEditor user={user} canManage={canManageRoles && !isSelf} />
       {isSelf && canManageRoles ? (
-        <p className="-mt-2 text-[12px] text-slate2">
+        <p className="-mt-2 text-[12px] text-ink-2">
           You cannot change your own roles — another Super Admin must do it.
         </p>
       ) : null}
@@ -137,7 +136,7 @@ export async function SettingsPage({ actor }: { actor: ActorContext }) {
       <PageHeader
         eyebrow="Administration"
         title="Settings"
-        subtitle="Live security and tracking configuration. Changes take effect immediately and are audit-logged."
+        description="Live security and tracking configuration. Changes take effect immediately and are audit-logged."
       />
       <SettingsEditor settings={settings} />
     </div>
@@ -180,7 +179,7 @@ export async function AuditPage({
       <PageHeader
         eyebrow="Administration"
         title="Audit Logs"
-        subtitle={`${result.total} entr${result.total === 1 ? "y" : "ies"} — append-only record of sensitive actions and denied access.`}
+        description={`${result.total} entr${result.total === 1 ? "y" : "ies"} — append-only record of sensitive actions and denied access.`}
       />
       <AuditListClient
         basePath={basePath}

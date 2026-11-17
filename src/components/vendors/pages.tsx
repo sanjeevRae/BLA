@@ -175,14 +175,14 @@ export async function VendorDetailPage({
   return (
     <div className="grid gap-5">
       <div>
-        <Link href={`${basePath}/vendors`} className="text-[12px] font-semibold text-brand">
+        <Link href={`${basePath}/vendors`} className="text-[12px] font-semibold text-primary">
           ← All vendors
         </Link>
         <div className="mt-1 flex flex-wrap items-center gap-3">
           <h1 className="text-[20px] font-bold text-ink">{vendor.businessName}</h1>
           <StatusBadge status={vendor.verificationStatus} />
         </div>
-        <p className="text-[13px] text-faint">
+        <p className="text-[13px] text-ink-2">
           {vendor.contactName} · {vendor.phone}
           {vendor.email ? ` · ${vendor.email}` : ""} · Billing: {vendor.billingPreference.replaceAll("_", " ")}
           {vendor.creditLimitPaisa ? ` · Credit limit ${formatPaisa(vendor.creditLimitPaisa)}` : ""}
@@ -193,7 +193,7 @@ export async function VendorDetailPage({
         <SectionCard title="Verification lifecycle">
           <VerificationControls vendor={vendor} />
           {vendor.verificationNotes ? (
-            <p className="mt-2 text-[13px] text-slate2">{vendor.verificationNotes}</p>
+            <p className="mt-2 text-[13px] text-ink-2">{vendor.verificationNotes}</p>
           ) : null}
         </SectionCard>
       ) : null}
@@ -209,7 +209,7 @@ export async function VendorDetailPage({
           {addresses.map((address) => (
             <div
               key={address.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]"
             >
               <span className="text-ink">
                 <strong>{address.kind}</strong> — {address.addressLine1}, {address.city},{" "}
@@ -223,7 +223,7 @@ export async function VendorDetailPage({
               </span>
             </div>
           ))}
-          {addresses.length === 0 ? <p className="text-[13px] text-faint">No addresses yet.</p> : null}
+          {addresses.length === 0 ? <p className="text-[13px] text-ink-2">No addresses yet.</p> : null}
         </div>
         {canManage || canSelfManage ? (
           <div className="mt-4">
@@ -237,7 +237,7 @@ export async function VendorDetailPage({
           {documents.map((doc) => (
             <div
               key={doc.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]"
             >
               <span className="text-ink">
                 <strong>{doc.documentType}</strong> — {doc.fileName}
@@ -251,7 +251,7 @@ export async function VendorDetailPage({
             </div>
           ))}
           {documents.length === 0 ? (
-            <p className="text-[13px] text-faint">No document records yet.</p>
+            <p className="text-[13px] text-ink-2">No document records yet.</p>
           ) : null}
         </div>
         {canManage || canSelfManage ? (
@@ -264,12 +264,12 @@ export async function VendorDetailPage({
       <SectionCard title="Team">
         <div className="grid gap-2">
           {users.map((user) => (
-            <div key={user.id} className="rounded-md border border-line px-3 py-2 text-[13px] text-ink">
+            <div key={user.id} className="rounded-md border border-border px-3 py-2 text-[13px] text-ink">
               <strong>{user.fullName}</strong> — {user.email} · {user.vendorRole}
               {user.isActive ? "" : " (inactive)"}
             </div>
           ))}
-          {users.length === 0 ? <p className="text-[13px] text-faint">No vendor users yet.</p> : null}
+          {users.length === 0 ? <p className="text-[13px] text-ink-2">No vendor users yet.</p> : null}
         </div>
         {canManage || (isOwnVendor && actor.vendorRole === "OWNER") ? (
           <div className="mt-4">
@@ -281,13 +281,13 @@ export async function VendorDetailPage({
       <SectionCard title="Warehouse assignments">
         <div className="grid gap-2">
           {assignments.map((assignment) => (
-            <div key={assignment.id} className="rounded-md border border-line px-3 py-2 text-[13px] text-ink">
+            <div key={assignment.id} className="rounded-md border border-border px-3 py-2 text-[13px] text-ink">
               {assignment.kind} — {assignment.warehouseCode}
               {assignment.isActive ? "" : " (inactive)"}
             </div>
           ))}
           {assignments.length === 0 ? (
-            <p className="text-[13px] text-faint">No warehouse assigned.</p>
+            <p className="text-[13px] text-ink-2">No warehouse assigned.</p>
           ) : null}
         </div>
         {canManage ? (

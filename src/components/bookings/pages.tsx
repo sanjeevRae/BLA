@@ -277,7 +277,7 @@ export async function BookingDetailPage({
 
       {canCancel ? (
         <SectionCard title="Cancel booking">
-          <p className="mb-3 text-[13px] text-slate2">
+          <p className="mb-3 text-[13px] text-ink-2">
             Cancellation is only possible before pickup is in progress.
           </p>
           <BookingCancelControl booking={booking} />
@@ -387,9 +387,9 @@ export async function WarehouseBookingsPanel({ actor, basePath }: { actor: Actor
         {bookings.map((booking) => (
           <div
             key={booking.id}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]"
           >
-            <Link href={`${basePath}/bookings/${booking.id}`} className="font-semibold text-brand">
+            <Link href={`${basePath}/bookings/${booking.id}`} className="font-semibold text-primary">
               {booking.orderNumber}
             </Link>
             <span className="text-ink">
@@ -400,7 +400,7 @@ export async function WarehouseBookingsPanel({ actor, basePath }: { actor: Actor
           </div>
         ))}
         {bookings.length === 0 ? (
-          <p className="text-[13px] text-faint">No bookings routed through your warehouse yet.</p>
+          <p className="text-[13px] text-ink-2">No bookings routed through your warehouse yet.</p>
         ) : null}
       </div>
     </SectionCard>

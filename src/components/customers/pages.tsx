@@ -130,11 +130,11 @@ export async function CustomerDetailPage({
   return (
     <div className="grid gap-5">
       <div>
-        <Link href={`${basePath}/customers`} className="text-[12px] font-semibold text-brand">
+        <Link href={`${basePath}/customers`} className="text-[12px] font-semibold text-primary">
           ← All customers
         </Link>
         <h1 className="mt-1 text-[20px] font-bold text-ink">{customer.fullName}</h1>
-        <p className="text-[13px] text-faint">
+        <p className="text-[13px] text-ink-2">
           {customer.phone}
           {customer.email ? ` · ${customer.email}` : ""}
           {customer.isMerged ? " · Merged duplicate" : ""}
@@ -148,14 +148,14 @@ export async function CustomerDetailPage({
       <SectionCard title="Addresses">
         <div className="grid gap-2">
           {addresses.map((address) => (
-            <div key={address.id} className="rounded-md border border-line px-3 py-2 text-[13px] text-ink">
+            <div key={address.id} className="rounded-md border border-border px-3 py-2 text-[13px] text-ink">
               <strong>{address.kind}</strong> — {address.addressLine1}, {address.city},{" "}
               {address.district}
               {address.landmark ? ` · near ${address.landmark}` : ""}
               {address.isDefault ? " · default" : ""}
             </div>
           ))}
-          {addresses.length === 0 ? <p className="text-[13px] text-faint">No addresses yet.</p> : null}
+          {addresses.length === 0 ? <p className="text-[13px] text-ink-2">No addresses yet.</p> : null}
         </div>
         {canManage ? (
           <div className="mt-4">
@@ -165,7 +165,7 @@ export async function CustomerDetailPage({
       </SectionCard>
       {canManage && !customer.isMerged ? (
         <SectionCard title="Duplicate resolution">
-          <p className="mb-3 text-[13px] text-slate2">
+          <p className="mb-3 text-[13px] text-ink-2">
             Merging re-points the duplicate&apos;s packages and bookings to this record and marks
             the duplicate merged — records are never deleted.
           </p>
