@@ -3,6 +3,7 @@ import Link from "next/link";
 import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import { PriorityBadge, StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
+import { statusLabel } from "@/lib/status/labels";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DensityScope } from "@/components/ui/TableDensity";
 import {
@@ -134,7 +135,7 @@ function IncidentTable({ rows, basePath }: { rows: IncidentView[]; basePath: str
             {rows.map((r) => (
               <tr key={r.id} className={TR_CLASS}>
                 <td className={TD_ID_CLASS}>{r.incidentNumber}</td>
-                <td className={TD_CLASS}>{r.category}</td>
+                <td className={TD_CLASS}>{statusLabel("generic", r.category)}</td>
                 <td className={TD_CLASS}><SeverityBadge severity={r.severity} /></td>
                 <td className={TD_CLASS}><StatusBadge status={r.status} /></td>
                 <td className={TD_ID_CLASS}>{r.packageTrackingId ?? "—"}</td>
@@ -168,7 +169,7 @@ export async function IncidentDetailPage({
   const canManage = hasPermission(actor, "incident.manage");
   return (
     <div className="grid gap-5">
-      <PageHeader eyebrow={`Incident ${incident.incidentNumber}`} title={incident.category} />
+      <PageHeader eyebrow={`Incident ${incident.incidentNumber}`} title={statusLabel("generic", incident.category)} />
       <SectionCard title="Summary">
         <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
           <div><dt className="text-ink-2">Status</dt><dd><StatusBadge status={incident.status} /></dd></div>
@@ -442,7 +443,7 @@ function TicketTable({ rows, basePath }: { rows: TicketView[]; basePath: string 
               <tr key={r.id} className={TR_CLASS}>
                 <td className={TD_ID_CLASS}>{r.ticketNumber}</td>
                 <td className={TD_CLASS}>{r.subject}</td>
-                <td className={TD_CLASS}>{r.category}</td>
+                <td className={TD_CLASS}>{statusLabel("generic", r.category)}</td>
                 <td className={TD_CLASS}><StatusBadge status={r.status} /></td>
                 <td className={TD_CLASS}><PriorityBadge priority={r.priority} /></td>
                 <td className={TD_CLASS}>{r.raiserName ?? r.contactPhone ?? "—"}</td>
@@ -479,7 +480,7 @@ export async function TicketDetailPage({
       <SectionCard title="Summary">
         <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
           <div><dt className="text-ink-2">Status</dt><dd><StatusBadge status={ticket.status} /></dd></div>
-          <div><dt className="text-ink-2">Category</dt><dd className="text-ink">{ticket.category}</dd></div>
+          <div><dt className="text-ink-2">Category</dt><dd className="text-ink">{statusLabel("generic", ticket.category)}</dd></div>
           <div><dt className="text-ink-2">Priority</dt><dd><PriorityBadge priority={ticket.priority} /></dd></div>
           <div><dt className="text-ink-2">Assigned to</dt><dd className="text-ink">{ticket.assigneeName ?? "Unassigned"}</dd></div>
           <div><dt className="text-ink-2">Package</dt><dd className="font-mono text-ink">{ticket.packageTrackingId ?? "—"}</dd></div>

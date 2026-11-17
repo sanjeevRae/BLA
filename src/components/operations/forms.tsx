@@ -18,6 +18,7 @@ function OkBox({ message }: { message: string }) {
     </div>
   );
 }
+import { statusLabel } from "@/lib/status/labels";
 import {
   INCIDENT_CATEGORIES,
   INCIDENT_SEVERITIES,
@@ -127,7 +128,7 @@ export function ReportIncidentForm({ warehouses }: { warehouses: WarehouseOption
           <span className={labelClass}>Category</span>
           <select className={inputClass} value={category} onChange={(e) => setCategory(e.target.value)}>
             {INCIDENT_CATEGORIES.map((c) => (
-              <option key={c} value={c}>{c}</option>
+              <option key={c} value={c}>{statusLabel("generic", c)}</option>
             ))}
           </select>
         </label>
@@ -136,7 +137,7 @@ export function ReportIncidentForm({ warehouses }: { warehouses: WarehouseOption
           <select className={inputClass} value={severity} onChange={(e) => setSeverity(e.target.value)}>
             <option value="">Category default</option>
             {INCIDENT_SEVERITIES.map((s) => (
-              <option key={s} value={s}>{s}</option>
+              <option key={s} value={s}>{statusLabel("generic", s)}</option>
             ))}
           </select>
         </label>
@@ -229,7 +230,7 @@ export function DriverAssignmentIncidentForm({
           aria-label="Problem category"
         >
           {DRIVER_INCIDENT_CATEGORIES.map((c) => (
-            <option key={c} value={c}>{c.replaceAll("_", " ")}</option>
+            <option key={c} value={c}>{statusLabel("generic", c)}</option>
           ))}
         </select>
       </div>
@@ -302,7 +303,7 @@ export function DriverTripIncidentForm({
           aria-label="Problem category"
         >
           {DRIVER_INCIDENT_CATEGORIES.map((c) => (
-            <option key={c} value={c}>{c.replaceAll("_", " ")}</option>
+            <option key={c} value={c}>{statusLabel("generic", c)}</option>
           ))}
         </select>
         {packages.length > 0 ? (
@@ -392,7 +393,7 @@ export function IncidentFollowUpTaskForm({
         >
           <option value="">Select staff…</option>
           {users.map((u) => (
-            <option key={u.id} value={u.id}>{u.fullName} ({u.roles.join(", ")})</option>
+            <option key={u.id} value={u.id}>{u.fullName} ({u.roles.map((r) => statusLabel("generic", r)).join(", ")})</option>
           ))}
         </select>
         <select
@@ -402,7 +403,7 @@ export function IncidentFollowUpTaskForm({
           aria-label="Task priority"
         >
           {["LOW", "NORMAL", "HIGH", "URGENT"].map((p) => (
-            <option key={p} value={p}>{p}</option>
+            <option key={p} value={p}>{statusLabel("generic", p)}</option>
           ))}
         </select>
         <input
@@ -481,7 +482,7 @@ export function IncidentWorkflowForms({
             <select className={inputClass} value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} required aria-label="Assign incident to">
               <option value="">Select staff…</option>
               {users.map((u) => (
-                <option key={u.id} value={u.id}>{u.fullName} ({u.roles.join(", ")})</option>
+                <option key={u.id} value={u.id}>{u.fullName} ({u.roles.map((r) => statusLabel("generic", r)).join(", ")})</option>
               ))}
             </select>
             <button type="submit" className={subtleButtonClass} disabled={busy || !assigneeId}>Assign</button>
@@ -645,7 +646,7 @@ export function CreateTaskForm({
           <select className={inputClass} value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} required>
             <option value="">Select staff…</option>
             {users.map((u) => (
-              <option key={u.id} value={u.id}>{u.fullName} ({u.roles.join(", ")})</option>
+              <option key={u.id} value={u.id}>{u.fullName} ({u.roles.map((r) => statusLabel("generic", r)).join(", ")})</option>
             ))}
           </select>
         </label>
@@ -662,7 +663,7 @@ export function CreateTaskForm({
           <span className={labelClass}>Priority</span>
           <select className={inputClass} value={priority} onChange={(e) => setPriority(e.target.value)}>
             {["LOW", "NORMAL", "HIGH", "URGENT"].map((p) => (
-              <option key={p} value={p}>{p}</option>
+              <option key={p} value={p}>{statusLabel("generic", p)}</option>
             ))}
           </select>
         </label>
@@ -865,7 +866,7 @@ export function RaiseTicketForm() {
           <span className={labelClass}>Category</span>
           <select className={inputClass} value={category} onChange={(e) => setCategory(e.target.value)}>
             {TICKET_CATEGORIES.map((c) => (
-              <option key={c} value={c}>{c}</option>
+              <option key={c} value={c}>{statusLabel("generic", c)}</option>
             ))}
           </select>
         </label>
@@ -956,7 +957,7 @@ export function TicketStaffForms({
             <select className={inputClass} value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} required>
               <option value="">Select staff…</option>
               {users.map((u) => (
-                <option key={u.id} value={u.id}>{u.fullName} ({u.roles.join(", ")})</option>
+                <option key={u.id} value={u.id}>{u.fullName} ({u.roles.map((r) => statusLabel("generic", r)).join(", ")})</option>
               ))}
             </select>
             <button type="submit" className={subtleButtonClass} disabled={busy || !assigneeId}>Assign</button>

@@ -13,6 +13,7 @@ import {
   updateDriverProfileAction,
   updateVehicleAction,
 } from "@/server/actions/fleet";
+import { statusLabel } from "@/lib/status/labels";
 import { DRIVER_CAPABILITIES, VEHICLE_MAINTENANCE_KINDS, VEHICLE_TYPES } from "@/lib/transfers/domain";
 import {
   ErrorBox,
@@ -120,8 +121,8 @@ export function CreateDriverProfileForm({
   if (candidates.length === 0) {
     return (
       <p className="text-[13px] text-slate2">
-        No eligible users: a driver profile needs an ACTIVE user holding the LINEHAUL_DRIVER
-        or RIDER role with no existing profile.
+        No eligible users: a driver profile needs an active user holding the line-haul
+        driver or rider role with no existing profile.
       </p>
     );
   }
@@ -251,7 +252,7 @@ export function DriverAdminButtons({
               )
             }
           >
-            Set {status}
+            Set {statusLabel("generic", status)}
           </button>
         ))}
       </span>
@@ -494,7 +495,7 @@ export function VehicleAdminButtons({
                   )
                 }
               >
-                Set {s}
+                Set {statusLabel("generic", s)}
               </button>
             ))
           : null}
