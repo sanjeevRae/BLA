@@ -14,7 +14,11 @@ import { listAuditLogs, type AuditLogView } from "@/server/services/audit-log";
 import { listIncidents, type IncidentView } from "@/server/services/incidents";
 import { listTasks, type TaskView } from "@/server/services/tasks";
 import { listRemittances } from "@/server/services/cod-remittances";
-import { listTransfers, type TransferView } from "@/server/services/transfers";
+import {
+  getTransfer,
+  listTransfers,
+  type TransferView,
+} from "@/server/services/transfers";
 import {
   listLiveOperations,
   type LiveOperationItem,
@@ -1134,5 +1138,507 @@ export async function getStaffWorkConsole(
     ...base,
     receivedToday,
     recentActivity: activity.slice(0, 8),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Field homes (V3 Step 6 — Rider + Line-haul driver landing reads)
+// ---------------------------------------------------------------------------
+
+import {
+  getRiderBatch,
+  getRiderHomeToday,
+  listRiderBatches,
+  type RiderFailedAttemptView,
+} from "@/server/services/deliveries";
+import { getRiderCodPosition } from "@/server/services/cod-remittances";
+import { listMyCustody } from "@/server/services/custody";
+import { getDriver } from "@/server/services/drivers";
+import { getMyActiveTrip, listTrips, type TripView } from "@/server/services/trips";
+
+/**
+ * Shared field-home task slice: the actor's OWN tasks (listTasks
+ * queue="mine" — assignee-scoped inside the service), filtered to
+ * open work, service order preserved verbatim (dueAt asc, then
+ * newest first — the field homes never re-sort a work queue).
+ *
+ * "Open" excludes the terminal states. The brief named COMPLETED /
+ * CANCELLED, but the task vocabulary has no COMPLETED status — its
+ * terminal pair is CLOSED / CANCELLED (TASK_TERMINAL_STATUSES), so
+ * CLOSED is excluded alongside them; otherwise finished tasks would
+ * render as open work on a field home.
+ */
+const FIELD_TASK_CLOSED_STATUSES: ReadonlySet<string> = new Set([
+  "COMPLETED",
+  "CANCELLED",
+  "CLOSED",
+]);
+
+interface FieldTaskSlice {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  dueAt: string | null;
+  overdue: boolean;
+}
+
+async function fieldTasks(
+  actor: ActorContext,
+): Promise<{ tasks: FieldTaskSlice[]; openTaskCount: number }> {
+  const page = await listTasks(actor, { queue: "mine", pageSize: 50 });
+  const open = page.items.filter((task) => !FIELD_TASK_CLOSED_STATUSES.has(task.status));
+  return {
+    tasks: open.slice(0, 5).map((task) => ({
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      priority: task.priority,
+      dueAt: task.dueAt,
+      overdue: task.overdue,
+    })),
+    openTaskCount: open.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Rider field home (V3 Step 6)
+// ---------------------------------------------------------------------------
+
+export interface RiderJobCardData {
+  assignmentId: string;
+  batchId: string;
+  packageId: string;
+  trackingId: string;
+  status: string;
+  packageStatus: string;
+  recipientName: string;
+  recipientPhone: string;
+  recipientAltPhone: string | null;
+  address: string;
+  landmark: string | null;
+  city: string | null;
+  district: string | null;
+  codDuePaisa: string;
+  codCollectedPaisa: string | null;
+  codStatus: string | null;
+  deliveryInstructions: string | null;
+  failedAttempts: number;
+  isNext: boolean;
+}
+
+export interface RiderFieldHomeData {
+  date: string;
+  riderName: string;
+  summary: { assigned: number; delivered: number; remaining: number; failed: number };
+  failedAttempts: RiderFailedAttemptView[];
+  batches: {
+    id: string;
+    warehouseCode: string;
+    status: string;
+    kind: string;
+    batchDate: string;
+    counts: {
+      total: number;
+      pending: number;
+      inProgress: number;
+      completed: number;
+      failed: number;
+      cancelled: number;
+      reassigned: number;
+    };
+    jobs: RiderJobCardData[];
+  }[];
+  currentBatchId: string | null;
+  cod: {
+    expectedPaisa: string;
+    collectedPaisa: string;
+    remainingPaisa: string;
+    awaitingRemittancePaisa: string;
+    verifiedRemittedPaisa: string;
+  };
+  custody: {
+    trackingId: string;
+    packageStatus: string;
+    warehouseCode: string | null;
+    startedAt: string;
+  }[];
+  tasks: {
+    id: string;
+    title: string;
+    status: string;
+    priority: string;
+    dueAt: string | null;
+    overdue: boolean;
+  }[];
+  openTaskCount: number;
+}
+
+/**
+ * The V3 Rider field home read model: a composition over the exact
+ * reads the current rider surfaces already use — getRiderHomeToday
+ * (summary / failed attempts / next stop / today's COD), the rider's
+ * own batch list + per-batch rider views (job cards), the rider COD
+ * position (the same read the COD pages use, so the figures cannot
+ * drift), own custody, and own open tasks. Every underlying read is
+ * actor-scoped to the rider's own driver profile, so this model is
+ * own-scope by construction; every view is field-mapped explicitly
+ * (never spread) so no extra field from a shared view type can leak
+ * onto the field surface.
+ *
+ * `date` carries the same semantics as the current page: a
+ * YYYY-MM-DD day string, defaulting to today (UTC slice, exactly as
+ * RiderHomePage computes it).
+ */
+export async function getRiderFieldHome(
+  actor: ActorContext,
+  date?: string,
+): Promise<RiderFieldHomeData> {
+  const day = date ?? new Date().toISOString().slice(0, 10);
+  const home = await getRiderHomeToday(actor, day);
+  const batchViews = await listRiderBatches(actor, { date: day });
+  const nextAssignmentId = home.currentBatch?.nextStop?.assignmentId ?? null;
+
+  const batches: RiderFieldHomeData["batches"] = [];
+  let failed = 0;
+  for (const batch of batchViews) {
+    failed += batch.counts.failed;
+    const { assignments } = await getRiderBatch(actor, batch.id);
+    batches.push({
+      id: batch.id,
+      warehouseCode: batch.warehouseCode,
+      status: batch.status,
+      kind: batch.kind,
+      batchDate: batch.batchDate,
+      counts: {
+        total: batch.counts.total,
+        pending: batch.counts.pending,
+        inProgress: batch.counts.inProgress,
+        completed: batch.counts.completed,
+        failed: batch.counts.failed,
+        cancelled: batch.counts.cancelled,
+        reassigned: batch.counts.reassigned,
+      },
+      jobs: assignments.map((a) => ({
+        assignmentId: a.id,
+        batchId: batch.id,
+        packageId: a.packageId,
+        trackingId: a.trackingId,
+        status: a.status,
+        packageStatus: a.packageStatus,
+        recipientName: a.recipientName,
+        recipientPhone: a.recipientPhone,
+        recipientAltPhone: a.recipientAltPhone,
+        address: a.destinationAddress,
+        landmark: a.destinationLandmark,
+        city: a.destinationCity,
+        district: a.destinationDistrict,
+        codDuePaisa: a.codExpectedPaisa,
+        codCollectedPaisa: a.codCollectedPaisa,
+        codStatus: a.codStatus,
+        deliveryInstructions: a.deliveryInstructions,
+        failedAttempts: a.failedAttempts,
+        isNext: a.id === nextAssignmentId,
+      })),
+    });
+  }
+
+  // Unguarded, exactly as the current page calls it — a rider who
+  // cannot read their COD position has no field home at all.
+  const codPosition = await getRiderCodPosition(actor);
+  const custody = await listMyCustody(actor);
+  const taskSlice = await fieldTasks(actor);
+
+  return {
+    date: day,
+    riderName: actor.fullName,
+    summary: {
+      assigned: home.assigned,
+      delivered: home.delivered,
+      remaining: home.remaining,
+      failed,
+    },
+    failedAttempts: home.failedAttempts,
+    batches,
+    currentBatchId: home.currentBatch?.batch.id ?? null,
+    cod: {
+      expectedPaisa: home.codExpectedPaisa,
+      collectedPaisa: home.codCollectedPaisa,
+      remainingPaisa: (
+        BigInt(home.codExpectedPaisa) - BigInt(home.codCollectedPaisa)
+      ).toString(),
+      awaitingRemittancePaisa: codPosition.awaitingRemittanceTotalPaisa,
+      verifiedRemittedPaisa: codPosition.verifiedRemittedPaisa,
+    },
+    custody: custody.map((row) => ({
+      trackingId: row.trackingId,
+      packageStatus: row.packageStatus,
+      warehouseCode: row.warehouseCode,
+      startedAt: row.startedAt,
+    })),
+    tasks: taskSlice.tasks,
+    openTaskCount: taskSlice.openTaskCount,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Line-haul field home (V3 Step 6)
+// ---------------------------------------------------------------------------
+
+export interface LinehaulFieldHomeData {
+  driverName: string;
+  profile: {
+    homeWarehouseCode: string;
+    licenseNumber: string;
+    licenseExpiry: string;
+    licenseExpired: boolean;
+    employmentStatus: string;
+    availabilityStatus: string;
+  } | null;
+  activeTrip: {
+    id: string;
+    transferId: string;
+    tripNumber: string;
+    transferNumber: string;
+    status: string;
+    originWarehouseCode: string;
+    destinationWarehouseCode: string;
+    vehicleRegistration: string;
+    manifestCode: string | null;
+    loadedCount: number;
+    expectedCount: number;
+    departedAt: string | null;
+    arrivedAt: string | null;
+    loadByStatus: { status: string; count: number }[];
+    packages: {
+      packageId: string;
+      trackingId: string;
+      itemStatus: string;
+      packageStatus: string;
+    }[];
+    stops: {
+      id: string;
+      sequence: number;
+      label: string;
+      passedAt: string | null;
+      recordedByName: string;
+      notes: string | null;
+    }[];
+  } | null;
+  destination: {
+    name: string;
+    code: string;
+    city: string;
+    district: string;
+    addressLine1: string | null;
+    addressLine2: string | null;
+    contactPhone: string | null;
+  } | null;
+  tasks: {
+    id: string;
+    title: string;
+    status: string;
+    priority: string;
+    dueAt: string | null;
+    overdue: boolean;
+  }[];
+  openTaskCount: number;
+  recentTrips: {
+    id: string;
+    tripNumber: string;
+    originWarehouseCode: string;
+    destinationWarehouseCode: string;
+    status: string;
+    packageCount: number;
+    departedAt: string | null;
+    arrivedAt: string | null;
+  }[];
+  recentActivity: { at: string; label: string }[];
+}
+
+/** Group a trip's packages by item status, first-appearance order. */
+function loadByStatus(
+  packages: TripView["packages"],
+): { status: string; count: number }[] {
+  const grouped: { status: string; count: number }[] = [];
+  for (const pkg of packages) {
+    const row = grouped.find((g) => g.status === pkg.itemStatus);
+    if (row) row.count += 1;
+    else grouped.push({ status: pkg.itemStatus, count: 1 });
+  }
+  return grouped;
+}
+
+/**
+ * The V3 Line-haul field home read model: mirrors the CURRENT
+ * linehaul-home.tsx composition exactly — own driver profile
+ * (getDriver, failures degrade to null), own active trip
+ * (getMyActiveTrip), its transfer (getTransfer, failures degrade to
+ * null) for the manifest code + reconciliation loaded count, and own
+ * trip history (listTrips mine) for recent completed/cancelled trips.
+ *
+ * NO ETA (hard rule): the trip view is field-mapped explicitly and
+ * the model carries NO plannedDepartureAt / expectedArrivalAt key
+ * anywhere — a field home shows what has happened and what is
+ * loaded, never a promised arrival.
+ *
+ * The one new query is the destination warehouse read: it is keyed
+ * by the destination of the driver's OWN active trip (never by a
+ * parameter), and mirrors warehouses.ts toView's address pick
+ * (PRIMARY address, else the first).
+ */
+export async function getLinehaulFieldHome(
+  actor: ActorContext,
+): Promise<LinehaulFieldHomeData> {
+  const profileView = actor.driverId
+    ? await getDriver(actor, actor.driverId).catch(() => null)
+    : null;
+  const trip = await getMyActiveTrip(actor);
+  const transfer = trip
+    ? await getTransfer(actor, trip.transferId).catch(() => null)
+    : null;
+  const { items: history } = await listTrips(actor, { mine: true, pageSize: 10 });
+  const taskSlice = await fieldTasks(actor);
+
+  const loadedCount =
+    transfer?.reconciliation.loadedCount ??
+    (trip
+      ? trip.packages.filter((p) =>
+          ["LOADED", "IN_TRANSIT", "RECEIVED"].includes(p.itemStatus),
+        ).length
+      : 0);
+  const expectedCount = transfer?.manifest?.packageCount ?? trip?.packageCount ?? 0;
+
+  let destination: LinehaulFieldHomeData["destination"] = null;
+  if (trip) {
+    const warehouse = await prisma.warehouse.findUnique({
+      where: { id: trip.destinationWarehouseId },
+      select: {
+        name: true,
+        code: true,
+        city: true,
+        district: true,
+        contactPhone: true,
+        addresses: {
+          select: { kind: true, addressLine1: true, addressLine2: true },
+        },
+      },
+    });
+    if (warehouse) {
+      const primary =
+        warehouse.addresses.find((a) => a.kind === "PRIMARY") ?? warehouse.addresses[0];
+      destination = {
+        name: warehouse.name,
+        code: warehouse.code,
+        city: warehouse.city,
+        district: warehouse.district,
+        addressLine1: primary?.addressLine1 ?? null,
+        addressLine2: primary?.addressLine2 ?? null,
+        contactPhone: warehouse.contactPhone,
+      };
+    }
+  }
+
+  const recentTrips = history
+    .filter(
+      (t) => (t.status === "COMPLETED" || t.status === "CANCELLED") && t.id !== trip?.id,
+    )
+    .slice(0, 5)
+    .map((t) => ({
+      id: t.id,
+      tripNumber: t.tripNumber,
+      originWarehouseCode: t.originWarehouseCode,
+      destinationWarehouseCode: t.destinationWarehouseCode,
+      status: t.status,
+      packageCount: t.packageCount,
+      departedAt: t.actualDepartureAt,
+      arrivedAt: t.actualArrivalAt,
+    }));
+
+  // Activity derived from the trip views themselves (active trip
+  // first, then history — de-duplicated by trip id): departures,
+  // arrivals and passed checkpoints, newest first.
+  const activity: { at: string; label: string }[] = [];
+  const seenTripIds = new Set<string>();
+  const activitySources: TripView[] = [];
+  if (trip) {
+    seenTripIds.add(trip.id);
+    activitySources.push(trip);
+  }
+  for (const item of history) {
+    if (seenTripIds.has(item.id)) continue;
+    seenTripIds.add(item.id);
+    activitySources.push(item);
+  }
+  for (const source of activitySources) {
+    if (source.actualDepartureAt) {
+      activity.push({
+        at: source.actualDepartureAt,
+        label: `Departed ${source.originWarehouseCode} → ${source.destinationWarehouseCode} · ${source.tripNumber}`,
+      });
+    }
+    if (source.actualArrivalAt) {
+      activity.push({
+        at: source.actualArrivalAt,
+        label: `Arrived ${source.destinationWarehouseCode} · ${source.tripNumber}`,
+      });
+    }
+    for (const stop of source.stops) {
+      if (stop.passedAt) {
+        activity.push({ at: stop.passedAt, label: `${stop.label} · ${source.tripNumber}` });
+      }
+    }
+  }
+  activity.sort((a, b) => b.at.localeCompare(a.at));
+
+  return {
+    driverName: actor.fullName,
+    profile: profileView
+      ? {
+          homeWarehouseCode: profileView.homeWarehouseCode,
+          licenseNumber: profileView.licenseNumber,
+          licenseExpiry: profileView.licenseExpiry,
+          licenseExpired: profileView.licenseExpired,
+          employmentStatus: profileView.employmentStatus,
+          availabilityStatus: profileView.availabilityStatus,
+        }
+      : null,
+    activeTrip: trip
+      ? {
+          id: trip.id,
+          transferId: trip.transferId,
+          tripNumber: trip.tripNumber,
+          transferNumber: trip.transferNumber,
+          status: trip.status,
+          originWarehouseCode: trip.originWarehouseCode,
+          destinationWarehouseCode: trip.destinationWarehouseCode,
+          vehicleRegistration: trip.vehicleRegistration,
+          manifestCode: transfer?.manifest?.manifestCode ?? null,
+          loadedCount,
+          expectedCount,
+          departedAt: trip.actualDepartureAt,
+          arrivedAt: trip.actualArrivalAt,
+          loadByStatus: loadByStatus(trip.packages),
+          packages: trip.packages.map((p) => ({
+            packageId: p.packageId,
+            trackingId: p.trackingId,
+            itemStatus: p.itemStatus,
+            packageStatus: p.packageStatus,
+          })),
+          stops: trip.stops.map((s) => ({
+            id: s.id,
+            sequence: s.sequence,
+            label: s.label,
+            passedAt: s.passedAt,
+            recordedByName: s.recordedByName,
+            notes: s.notes,
+          })),
+        }
+      : null,
+    destination,
+    tasks: taskSlice.tasks,
+    openTaskCount: taskSlice.openTaskCount,
+    recentTrips,
+    recentActivity: activity.slice(0, 6),
   };
 }
