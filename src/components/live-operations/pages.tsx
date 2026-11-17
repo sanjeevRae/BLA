@@ -26,13 +26,11 @@ import type {
  * API re-intersects any requested warehouseId with the actor's
  * authority on every fetch, so these options are display only.
  */
-export async function LiveOperationsPage({
-  actor,
-  basePath,
-}: {
-  actor: ActorContext;
-  basePath: string;
-}) {
+export async function getLiveOpsMapProps(actor: ActorContext): Promise<{
+  warehouseOptions: WarehouseOption[];
+  warehouseCoords: WarehouseCoordsMap;
+  initialWarehouseId: string | null;
+}> {
   const { items } = await listWarehouses(actor, { pageSize: 100 });
 
   const warehouseOptions: WarehouseOption[] = items.map((warehouse) => ({
@@ -66,13 +64,30 @@ export async function LiveOperationsPage({
 
   const requestedScope = await getRequestedWarehouseScope();
 
+  return {
+    warehouseOptions,
+    warehouseCoords,
+    initialWarehouseId: requestedScope,
+  };
+}
+
+export async function LiveOperationsPage({
+  actor,
+  basePath,
+}: {
+  actor: ActorContext;
+  basePath: string;
+}) {
+  const { warehouseOptions, warehouseCoords, initialWarehouseId } =
+    await getLiveOpsMapProps(actor);
+
   return (
     <LiveOperationsBoard
       basePath={basePath}
       permissions={[...actor.permissions]}
       warehouseOptions={warehouseOptions}
       warehouseCoords={warehouseCoords}
-      initialWarehouseId={requestedScope}
+      initialWarehouseId={initialWarehouseId}
     />
   );
 }

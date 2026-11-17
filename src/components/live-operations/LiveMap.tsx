@@ -130,6 +130,7 @@ export interface LiveMapProps {
   /** The board's current warehouse filter ("" / null = all). */
   selectedWarehouseId: string | null;
   onShowAllAuthorized: () => void;
+  heightClassName?: string;
 }
 
 export function LiveMap({
@@ -139,6 +140,7 @@ export function LiveMap({
   warehouseCoords,
   selectedWarehouseId,
   onShowAllAuthorized,
+  heightClassName = "h-[420px]",
 }: LiveMapProps) {
   const mapRef = useRef<L.Map | null>(null);
   const selected = items.find((item) => item.trackingSessionId === selectedId) ?? null;
@@ -196,7 +198,7 @@ export function LiveMap({
           Show all authorized
         </button>
       </div>
-      <div className="h-[420px] w-full overflow-hidden rounded-lg border border-line">
+      <div className={`${heightClassName} w-full overflow-hidden rounded-lg border border-line`}>
         <MapContainer
           center={[NEPAL_CENTRE[0], NEPAL_CENTRE[1]]}
           zoom={DEFAULT_MAP_ZOOM}
