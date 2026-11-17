@@ -8,11 +8,12 @@ import { formatDateTime, formatPaisa } from "@/components/bookings/ui";
 import { listPackages } from "@/server/services/packages";
 import type { PackageView } from "@/server/services/package-lifecycle";
 import { listBookings } from "@/server/services/bookings";
-import { listTickets } from "@/server/services/support-tickets";
 import { getInvoice, listInvoices } from "@/server/services/invoices";
 import { listIncidents } from "@/server/services/incidents";
-import { listMyNotifications } from "@/server/services/notifications";
 import { getOwnCustomerProfile } from "@/server/services/customers";
+import { getCustomerHome } from "@/server/services/home-dashboards";
+import { CustomerHomeView } from "@/components/customers/CustomerHomeView";
+import { PageHeader as DsPageHeader } from "@/components/ui/PageHeader";
 import {
   ChangePasswordForm,
   CustomerIncidentForm,
@@ -61,49 +62,28 @@ function NotLinkedNotice() {
   );
 }
 
-/** One package row with the five status domains shown separately,
- *  each with its domain label (ui-ux-guidelines §6). */
+/** One package row on the customer home's full list. V3 Step 7
+ *  presentation decision (see CustomerHomeView): this surface
+ *  carries ONE badge per package — the operational status — so
+ *  the row matches the home's current-shipment cards. */
 function PackageRow({ pkg }: { pkg: PackageView }) {
   return (
-    <div className="grid gap-2 rounded-md border border-line px-3 py-2 text-[13px]">
+    <div className="grid gap-2 rounded-lg border border-border px-3 py-2 text-[13px]">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Link href={`/track/${pkg.trackingId}`} className="font-mono font-semibold text-brand">
+        <Link
+          href={`/track/${pkg.trackingId}`}
+          className="whitespace-nowrap font-mono font-semibold text-primary hover:text-primary-dark"
+        >
           {pkg.trackingId}
         </Link>
-        <span className="text-ink">
-          {pkg.description} → {pkg.deliveryCity}, {pkg.deliveryDistrict} ·{" "}
-          {formatDateTime(pkg.createdAt)}
-        </span>
+        <SharedStatusBadge domain="operational" status={pkg.operationalStatus} />
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="flex items-center gap-1">
-          <span className="text-[11px] text-slate2">Operational</span>
-          <SharedStatusBadge domain="operational" status={pkg.operationalStatus} />
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="text-[11px] text-slate2">Condition</span>
-          <SharedStatusBadge domain="condition" status={pkg.condition} />
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="text-[11px] text-slate2">Payment</span>
-          <SharedStatusBadge domain="payment" status={pkg.paymentStatus} />
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="text-[11px] text-slate2">Delivery</span>
-          <SharedStatusBadge domain="delivery" status={pkg.deliveryStatus} />
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="text-[11px] text-slate2">Exception</span>
-          <SharedStatusBadge domain="exception" status={pkg.exceptionStatus} />
-        </span>
-      </div>
+      <p className="text-ink">
+        {pkg.description} → {pkg.deliveryCity}, {pkg.deliveryDistrict} ·{" "}
+        {formatDateTime(pkg.createdAt)}
+      </p>
     </div>
   );
-}
-
-async function packageTotal(actor: ActorContext, status?: string): Promise<number> {
-  const { meta } = await listPackages(actor, { status, page: 1, pageSize: 1 });
-  return meta.total;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,167 +91,44 @@ async function packageTotal(actor: ActorContext, status?: string): Promise<numbe
 // ---------------------------------------------------------------------------
 
 export async function CustomerHomePage({ actor }: { actor: ActorContext }) {
+  // Unlinked branch: the read model requires a customer link and
+  // must NOT be called here. Restyled as the DS EmptyState; the
+  // copy keeps the NotLinkedNotice semantics the other
+  // self-service pages still use.
   if (!actor.customerId) {
     return (
-      <div className="grid gap-5">
-        <PageHeader eyebrow="Customer" title="My packages" />
-        <NotLinkedNotice />
+      <div className="flex flex-col gap-5">
+        <DsPageHeader
+          title="My packages"
+          description="Track packages addressed to you, see what needs your attention, and find your recent deliveries."
+        />
+        <EmptyState
+          title="Your account is not linked yet"
+          description="Your account is not linked to a customer record yet. When a sender books a delivery to your phone number, your packages appear here — you can also track any parcel publicly from the tracking page."
+          action={
+            <Link
+              href="/track"
+              className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-[14px] font-[550] text-white hover:bg-primary-dark"
+            >
+              Track a package
+            </Link>
+          }
+        />
       </div>
     );
   }
 
-  const [
-    totalPackages,
-    inTransitCount,
-    outForDeliveryCount,
-    deliveredCount,
-    attemptedList,
-    currentList,
-    openTickets,
-    invoices,
-    notifications,
-  ] = await Promise.all([
-    packageTotal(actor),
-    packageTotal(actor, "IN_TRANSIT"),
-    packageTotal(actor, "OUT_FOR_DELIVERY"),
-    packageTotal(actor, "DELIVERED"),
-    listPackages(actor, { status: "DELIVERY_ATTEMPTED", page: 1, pageSize: 5 }),
-    listPackages(actor, { status: "OUT_FOR_DELIVERY", page: 1, pageSize: 5 }),
-    listTickets(actor, { openOnly: true, page: 1, pageSize: 1 }),
-    listInvoices(actor, { page: 1, pageSize: 100 }),
-    listMyNotifications(actor, { page: 1, pageSize: 5 }).catch(() => null),
-  ]);
-  const unpaid = invoices.items.filter(
-    (invoice) => invoice.status !== "CANCELLED" && invoice.outstandingPaisa !== "0",
-  );
-  const unpaidTotal = unpaid.reduce((sum, invoice) => sum + BigInt(invoice.outstandingPaisa), BigInt(0));
-  const attemptedCount = attemptedList.meta.total;
-  const hasAttention = attemptedCount > 0 || openTickets.meta.total > 0 || unpaid.length > 0;
-
+  const data = await getCustomerHome(actor);
   return (
-    <div className="grid gap-5">
-      <PageHeader eyebrow="Customer" title="My packages" />
-
-      {/* 1 — What needs attention */}
-      <SectionCard title="Needs attention">
-        <div className="grid gap-2">
-          {attemptedList.packages.map((pkg) => (
-            <p
-              key={pkg.id}
-              className="rounded-md border border-line bg-redbg px-3 py-2 text-[13px] text-reddeep"
-            >
-              A delivery attempt for{" "}
-              <Link href={`/track/${pkg.trackingId}`} className="font-mono font-semibold underline">
-                {pkg.trackingId}
-              </Link>{" "}
-              did not complete. Check the tracking page for the next step, or{" "}
-              <Link href="/customer/tickets" className="font-semibold underline">
-                raise a support ticket
-              </Link>
-              .
-            </p>
-          ))}
-          {openTickets.meta.total > 0 ? (
-            <p className="rounded-md border border-line bg-amberbg px-3 py-2 text-[13px] text-amberdeep">
-              You have {openTickets.meta.total} open support ticket
-              {openTickets.meta.total === 1 ? "" : "s"}.{" "}
-              <Link href="/customer/tickets" className="font-semibold underline">
-                View tickets
-              </Link>
-            </p>
-          ) : null}
-          {unpaid.length > 0 ? (
-            <p className="rounded-md border border-line bg-amberbg px-3 py-2 text-[13px] text-amberdeep">
-              {unpaid.length} invoice{unpaid.length === 1 ? " is" : "s are"} unpaid —{" "}
-              <span className="tnum font-semibold">{formatPaisa(unpaidTotal)}</span> outstanding.{" "}
-              <Link href="/customer/billing" className="font-semibold underline">
-                View invoices
-              </Link>
-            </p>
-          ) : null}
-          {!hasAttention ? (
-            <p className="text-[13px] text-slate2">
-              Nothing needs your attention right now — no failed delivery attempts, open tickets,
-              or unpaid invoices.
-            </p>
-          ) : null}
-        </div>
-      </SectionCard>
-
-      {/* 2 — Metrics */}
-      <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatTile label="Total packages" value={String(totalPackages)} sub="Addressed to you" />
-        <StatTile
-          label="In transit"
-          value={String(inTransitCount + outForDeliveryCount)}
-          sub={`${outForDeliveryCount} out for delivery`}
-        />
-        <StatTile label="Delivered" value={String(deliveredCount)} />
-        <StatTile label="Open tickets" value={String(openTickets.meta.total)} />
-      </dl>
-
-      {/* 3 — What is happening now */}
-      <SectionCard title="Out for delivery">
-        <div className="grid gap-2">
-          {currentList.packages.map((pkg) => (
-            <PackageRow key={pkg.id} pkg={pkg} />
-          ))}
-          {currentList.packages.length === 0 ? (
-            <p className="text-[13px] text-slate2">
-              No packages are out for delivery right now. Packages on their way appear here as
-              they move.
-            </p>
-          ) : null}
-        </div>
-      </SectionCard>
-
-      {/* 4 — What recently changed */}
-      <SectionCard title="Recent activity">
-        <div className="grid gap-2">
-          {(notifications?.items ?? []).map((note) => (
-            <div
-              key={note.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]"
-            >
-              <span className="text-ink">
-                <span className="font-semibold">{note.title}</span> — {note.body}
-              </span>
-              <span className="text-slate2">{formatDateTime(note.createdAt)}</span>
-            </div>
-          ))}
-          {(notifications?.items ?? []).length === 0 ? (
-            <p className="text-[13px] text-slate2">
-              No recent notifications. Updates about your packages will appear here.
-            </p>
-          ) : null}
-        </div>
-      </SectionCard>
-
-      <SectionCard title="All my packages">
-        <CustomerPackageList actor={actor} />
-      </SectionCard>
-
-      {/* 5 — What to do next */}
-      <SectionCard title="Quick actions">
-        <div className="flex flex-wrap gap-2">
-          <Link href="/track" className={subtleButtonClass}>
-            Track a package
-          </Link>
-          <Link href="/customer/tickets" className={subtleButtonClass}>
-            Raise a ticket
-          </Link>
-          <Link href="/customer/incidents/new" className={subtleButtonClass}>
-            Report an incident
-          </Link>
-          <Link href="/customer/billing" className={subtleButtonClass}>
-            View invoices
-          </Link>
-          <Link href="/customer/profile" className={subtleButtonClass}>
-            My profile
-          </Link>
-        </div>
-      </SectionCard>
-    </div>
+    <CustomerHomeView
+      data={data}
+      allPackages={
+        // The view renders its own first-run empty state when the
+        // total is zero, so the full list (with its own empty
+        // state) is only composed when packages exist.
+        data.metrics.total > 0 ? <CustomerPackageList actor={actor} /> : undefined
+      }
+    />
   );
 }
 
