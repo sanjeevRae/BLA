@@ -166,7 +166,7 @@ export async function BookingsListPage({
                     </td>
                     <td className={TD_CLASS}>{booking.vendorName ?? booking.senderName}</td>
                     <td className={TD_CLASS}>{booking.destinationDistrict}</td>
-                    <td className={TD_CLASS}>{booking.routeKind ?? "—"}</td>
+                    <td className={TD_CLASS}>{booking.routeKind ? statusLabel("generic", booking.routeKind) : "—"}</td>
                     <td className={TD_NUMERIC_CLASS}>{booking.packageCount}</td>
                     <td className={TD_NUMERIC_CLASS}>{formatPaisa(booking.codAmountPaisa)}</td>
                     <td className={TD_CLASS}>

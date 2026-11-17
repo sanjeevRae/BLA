@@ -52,7 +52,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function OkBox({ message }: { message: string }) {
   return (
-    <div className="rounded-md border border-line bg-greenbg px-3 py-2 text-[13px] text-green">
+    <div className="rounded-md border border-border bg-greenbg px-3 py-2 text-[13px] text-green">
       {message}
     </div>
   );
@@ -204,18 +204,18 @@ export function AddItemsForm({
 
   if (eligible.length === 0) {
     return (
-      <p className="text-[13px] text-slate2">
-        No packages are currently READY_FOR_DISPATCH at this warehouse for that
+      <p className="text-[13px] text-ink-2">
+        No packages are currently ready for dispatch at this warehouse for that
         destination.
       </p>
     );
   }
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-3">
-      <div className="max-h-64 overflow-auto rounded-md border border-line">
+      <div className="max-h-64 overflow-auto rounded-md border border-border">
         <table className="w-full text-left text-[13px]">
           <thead>
-            <tr className="border-b border-line text-slate2">
+            <tr className="border-b border-border text-ink-2">
               <th className="px-3 py-2"></th>
               <th className="px-3 py-2">Tracking ID</th>
               <th className="px-3 py-2">Recipient</th>
@@ -225,7 +225,7 @@ export function AddItemsForm({
           </thead>
           <tbody>
             {eligible.map((pkg) => (
-              <tr key={pkg.id} className="border-b border-line last:border-0">
+              <tr key={pkg.id} className="border-b border-border last:border-0">
                 <td className="px-3 py-2">
                   <input
                     type="checkbox"
@@ -426,7 +426,7 @@ export function GenerateManifestButton({ transferId }: { transferId: string }) {
           {busy ? "Generating…" : "Generate manifest"}
         </button>
       </div>
-      <p className="text-[12px] text-slate2">
+      <p className="text-[12px] text-ink-2">
         Generating the manifest freezes the package set onto the transfer and moves every
         package to TRANSFER_ASSIGNED. It can only be generated once.
       </p>
@@ -645,7 +645,7 @@ export function DispatchButton({
         >
           {busy ? "Dispatching…" : "Dispatch transfer"}
         </button>
-        <span className="text-[13px] text-slate2">
+        <span className="text-[13px] text-ink-2">
           {loadedCount}/{totalCount} packages loaded
           {!allLoaded ? " — dispatch unlocks when every manifested package is scanned on." : ""}
         </span>
@@ -930,7 +930,7 @@ export function ReplaceDriverForm({
           {busy ? "Replacing…" : "Replace driver"}
         </button>
       </div>
-      <p className="text-[12px] text-slate2">
+      <p className="text-[12px] text-ink-2">
         En-route replacement: package custody and the trip move to the new driver; the
         current driver&apos;s tracking session ends.
       </p>
