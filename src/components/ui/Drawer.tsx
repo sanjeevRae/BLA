@@ -36,7 +36,7 @@ export function Drawer({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col rounded-l-xl bg-card shadow-pop"
+        className="absolute inset-y-0 right-0 flex w-full max-w-[480px] flex-col rounded-l-xl bg-card shadow-pop"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-3">

@@ -36,7 +36,7 @@ export function BrandMark({
     : "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-dark text-[15px] font-semibold text-white";
 
   const wordmarkClassName = isLarge
-    ? "truncate text-[20px] leading-tight"
+    ? "truncate text-[17px] leading-tight"
     : "truncate text-[17px] leading-tight";
 
   const blaClassName =

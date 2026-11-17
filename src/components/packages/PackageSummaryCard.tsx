@@ -58,7 +58,7 @@ const DOMAIN_CHIPS: ReadonlyArray<{
 
 export function PackageSummaryCard({ pkg }: { pkg: PackageSummary }) {
   return (
-    <article className="rounded-lg border border-border bg-card p-4">
+    <article className="rounded-lg border border-border bg-card p-5">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <span className={TD_ID_CLASS}>{pkg.trackingId}</span>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
