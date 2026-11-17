@@ -44,20 +44,30 @@ export const ROLE_TO_DASHBOARD: Record<RoleCode, DashboardId> = {
   SUPPORT: "support",
 };
 
-export type NavGroupId = "workspace" | "operations" | "business" | "administration";
+export type NavGroupId =
+  | "overview"
+  | "operations"
+  | "network"
+  | "work-management"
+  | "finance"
+  | "management";
 
 export const NAV_GROUP_ORDER: readonly NavGroupId[] = [
-  "workspace",
+  "overview",
   "operations",
-  "business",
-  "administration",
+  "network",
+  "work-management",
+  "finance",
+  "management",
 ];
 
 export const NAV_GROUP_LABELS: Record<NavGroupId, string> = {
-  workspace: "Workspace",
+  overview: "Overview",
   operations: "Operations",
-  business: "Business",
-  administration: "Administration",
+  network: "Network",
+  "work-management": "Work Management",
+  finance: "Finance",
+  management: "Management",
 };
 
 /** Icon names rendered by the shell's NavIcon component. */
@@ -117,13 +127,13 @@ function define(dashboard: DashboardId, specs: readonly ItemSpec[]): NavItemDef[
  *  owns the finance adjustments decision page. */
 function adminItems(dashboard: "admin" | "super-admin"): NavItemDef[] {
   const items: ItemSpec[] = [
-    { path: "", label: "Overview", group: "workspace", icon: "home" },
+    { path: "", label: "Overview", group: "overview", icon: "home" },
     {
-      path: "/tasks", label: "Tasks", group: "workspace", icon: "tasks",
+      path: "/tasks", label: "Tasks", group: "work-management", icon: "tasks",
       anyOf: ["task.create", "task.assign", "task.update_own"],
     },
     {
-      path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
+      path: "/notifications", label: "Notifications", group: "overview", icon: "bell",
       anyOf: ["notification.read_own"],
     },
     {
@@ -135,7 +145,7 @@ function adminItems(dashboard: "admin" | "super-admin"): NavItemDef[] {
       anyOf: ["booking.create"], quickAction: true,
     },
     {
-      path: "/warehouses", label: "Warehouses", group: "operations", icon: "warehouse",
+      path: "/warehouses", label: "Warehouses", group: "network", icon: "warehouse",
       anyOf: ["warehouse.read_all"],
     },
     {
@@ -143,41 +153,41 @@ function adminItems(dashboard: "admin" | "super-admin"): NavItemDef[] {
       anyOf: ["operations.live_view"],
     },
     {
-      path: "/incidents", label: "Incidents", group: "operations", icon: "alert",
+      path: "/incidents", label: "Exceptions", group: "work-management", icon: "alert",
       anyOf: ["incident.manage", "incident.resolve"],
     },
     {
-      path: "/tickets", label: "Support tickets", group: "operations", icon: "ticket",
+      path: "/tickets", label: "Support Tickets", group: "work-management", icon: "ticket",
       anyOf: ["support.ticket.manage"],
     },
     {
-      path: "/vendors", label: "Vendors", group: "business", icon: "store",
+      path: "/vendors", label: "Vendors", group: "network", icon: "store",
       anyOf: ["vendor.read_all"],
     },
     {
-      path: "/customers", label: "Customers", group: "business", icon: "users",
+      path: "/customers", label: "Customers", group: "network", icon: "users",
       anyOf: ["customer.read"],
     },
     {
-      path: "/drivers", label: "Drivers", group: "business", icon: "truck",
+      path: "/drivers", label: "Drivers", group: "network", icon: "truck",
       anyOf: ["driver.manage", "driver.assign"],
     },
     {
-      path: "/vehicles", label: "Vehicles", group: "business", icon: "car",
+      path: "/vehicles", label: "Vehicles", group: "network", icon: "car",
       anyOf: ["vehicle.manage", "vehicle.assign"],
     },
     {
-      path: "/settlements", label: "Settlements", group: "business", icon: "coins",
+      path: "/settlements", label: "Settlements", group: "finance", icon: "coins",
       anyOf: ["settlement.read"],
     },
     {
-      path: "/reports", label: "Reports", group: "business", icon: "chart",
+      path: "/reports", label: "Reports", group: "management", icon: "chart",
       anyOf: ["report.read_all"],
     },
   ];
   if (dashboard === "super-admin") {
     items.push({
-      path: "/adjustments", label: "Adjustments", group: "business", icon: "sliders",
+      path: "/adjustments", label: "Adjustments", group: "finance", icon: "sliders",
       anyOf: ["finance.adjust", "finance.approve_adjustment"],
     });
   }
@@ -186,17 +196,17 @@ function adminItems(dashboard: "admin" | "super-admin"): NavItemDef[] {
   // audit.read); Settings is Super Admin only (ADMIN does not hold
   // settings.manage and has no settings route).
   items.push({
-    path: "/users", label: "Users & Roles", group: "administration", icon: "users",
+    path: "/users", label: "Users & Roles", group: "management", icon: "users",
     anyOf: ["user.manage"],
   });
   if (dashboard === "super-admin") {
     items.push({
-      path: "/settings", label: "Settings", group: "administration", icon: "sliders",
+      path: "/settings", label: "Settings", group: "management", icon: "sliders",
       anyOf: ["settings.manage"],
     });
   }
   items.push({
-    path: "/audit", label: "Audit Logs", group: "administration", icon: "file",
+    path: "/audit", label: "Audit Logs", group: "management", icon: "file",
     anyOf: ["audit.read"],
   });
   return define(dashboard, items);
@@ -208,13 +218,13 @@ function adminItems(dashboard: "admin" | "super-admin"): NavItemDef[] {
  *  routes (audit M-7) are deliberately not linked. */
 function warehouseItems(dashboard: "warehouse" | "staff"): NavItemDef[] {
   return define(dashboard, [
-    { path: "", label: "Overview", group: "workspace", icon: "home" },
+    { path: "", label: "Overview", group: "overview", icon: "home" },
     {
-      path: "/tasks", label: "Tasks", group: "workspace", icon: "tasks",
+      path: "/tasks", label: "Tasks", group: "work-management", icon: "tasks",
       anyOf: ["task.create", "task.assign", "task.update_own"],
     },
     {
-      path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
+      path: "/notifications", label: "Notifications", group: "overview", icon: "bell",
       anyOf: ["notification.read_own"],
     },
     {
@@ -288,24 +298,24 @@ function warehouseItems(dashboard: "warehouse" | "staff"): NavItemDef[] {
         ]
       : []),
     {
-      path: "/incidents", label: "Incidents", group: "operations", icon: "alert",
+      path: "/incidents", label: "Incidents", group: "work-management", icon: "alert",
       anyOf: ["incident.report", "incident.manage"],
     },
     ...(dashboard === "warehouse"
       ? [
           {
-            path: "/reports", label: "Reports", group: "business", icon: "chart",
+            path: "/reports", label: "Reports", group: "management", icon: "chart",
             anyOf: ["report.read_warehouse"],
           } as ItemSpec,
           {
             // Phase 6 (audit M-4): WA fleet surface. Warehouse tree
             // only — Staff holds none of these grants and has no
             // such routes.
-            path: "/drivers", label: "Drivers", group: "business", icon: "truck",
+            path: "/drivers", label: "Drivers", group: "network", icon: "truck",
             anyOf: ["driver.manage", "driver.assign"],
           } as ItemSpec,
           {
-            path: "/vehicles", label: "Vehicles", group: "business", icon: "car",
+            path: "/vehicles", label: "Vehicles", group: "network", icon: "car",
             anyOf: ["vehicle.assign"],
           } as ItemSpec,
         ]
@@ -319,17 +329,17 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
   ...warehouseItems("warehouse"),
   ...warehouseItems("staff"),
   ...define("rider", [
-    { path: "", label: "Home", group: "workspace", icon: "home" },
+    { path: "", label: "Home", group: "overview", icon: "home" },
     {
-      path: "/tasks", label: "Tasks", group: "workspace", icon: "tasks",
+      path: "/tasks", label: "Tasks", group: "operations", icon: "tasks",
       anyOf: ["task.update_own"],
     },
     {
-      path: "/reports", label: "My performance", group: "workspace", icon: "chart",
+      path: "/reports", label: "My performance", group: "overview", icon: "chart",
       anyOf: ["report.read_self"],
     },
     {
-      path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
+      path: "/notifications", label: "Notifications", group: "overview", icon: "bell",
       anyOf: ["notification.read_own"],
     },
     // No "/batches" item: there is no batch-list route — the rider
@@ -337,29 +347,29 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
     // detail pages (existing V1 design). Registering the list path
     // would be a dead link.
     {
-      path: "/cod", label: "COD", group: "operations", icon: "wallet",
+      path: "/cod", label: "COD", group: "finance", icon: "wallet",
       anyOf: ["cod.read"],
     },
   ]),
   ...define("transport-driver", [
-    { path: "", label: "Home", group: "workspace", icon: "home" },
+    { path: "", label: "Home", group: "overview", icon: "home" },
     {
-      path: "/tasks", label: "Tasks", group: "workspace", icon: "tasks",
+      path: "/tasks", label: "Tasks", group: "operations", icon: "tasks",
       anyOf: ["task.update_own"],
     },
     {
-      path: "/reports", label: "My performance", group: "workspace", icon: "chart",
+      path: "/reports", label: "My performance", group: "overview", icon: "chart",
       anyOf: ["report.read_self"],
     },
     {
-      path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
+      path: "/notifications", label: "Notifications", group: "overview", icon: "bell",
       anyOf: ["notification.read_own"],
     },
   ]),
   ...define("vendor", [
-    { path: "", label: "Home", group: "workspace", icon: "home" },
+    { path: "", label: "Home", group: "overview", icon: "home" },
     {
-      path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
+      path: "/notifications", label: "Notifications", group: "overview", icon: "bell",
       anyOf: ["notification.read_own"],
     },
     {
@@ -371,114 +381,114 @@ export const NAV_ITEMS: readonly NavItemDef[] = [
       anyOf: ["booking.create"], quickAction: true,
     },
     {
-      path: "/incidents", label: "Incidents", group: "operations", icon: "alert",
+      path: "/incidents", label: "Incidents", group: "work-management", icon: "alert",
       anyOf: ["incident.report"],
     },
-    { path: "/tickets", label: "Support tickets", group: "operations", icon: "ticket" },
+    { path: "/tickets", label: "Support tickets", group: "work-management", icon: "ticket" },
     {
-      path: "/billing", label: "Billing", group: "business", icon: "wallet",
+      path: "/billing", label: "Billing", group: "finance", icon: "wallet",
       anyOf: ["invoice.read", "settlement.read"],
     },
     // No "/billing/invoices" or "/billing/settlements" items: the
     // vendor billing page lists both; only [id] detail routes exist
     // below it. Registering the list paths would be dead links.
     {
-      path: "/reports", label: "Reports", group: "business", icon: "chart",
+      path: "/reports", label: "Reports", group: "management", icon: "chart",
       anyOf: ["report.read_vendor"],
     },
     {
-      path: "/profile", label: "Profile", group: "administration", icon: "user",
+      path: "/profile", label: "Profile", group: "management", icon: "user",
       anyOf: ["profile.update_own"],
     },
   ]),
   ...define("customer", [
-    { path: "", label: "My packages", group: "workspace", icon: "package" },
-    { path: "/tickets", label: "Support tickets", group: "workspace", icon: "ticket" },
+    { path: "", label: "My packages", group: "overview", icon: "package" },
+    { path: "/tickets", label: "Support tickets", group: "work-management", icon: "ticket" },
     {
       // CUSTOMER holds notification.read_own (audit H-3, granted in
       // V2 Phase 2), so this item renders for customers and the
       // notifications service calls behind it are authorised.
-      path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
+      path: "/notifications", label: "Notifications", group: "overview", icon: "bell",
       anyOf: ["notification.read_own"],
     },
     {
       // Phase 6 (audit M-3): the customer's own incident reports,
       // including payment disputes (PAYMENT_DISPUTE incidents).
-      path: "/incidents", label: "My incidents", group: "workspace", icon: "alert",
+      path: "/incidents", label: "My incidents", group: "work-management", icon: "alert",
       anyOf: ["incident.report", "payment.dispute.raise"],
     },
     {
-      path: "/incidents/new", label: "Report an incident", group: "workspace", icon: "alert",
+      path: "/incidents/new", label: "Report an incident", group: "work-management", icon: "alert",
       anyOf: ["incident.report", "payment.dispute.raise"], quickAction: true,
     },
     {
-      path: "/billing", label: "My invoices", group: "business", icon: "wallet",
+      path: "/billing", label: "My invoices", group: "finance", icon: "wallet",
       anyOf: ["invoice.read"],
     },
     {
-      path: "/profile", label: "Profile", group: "administration", icon: "user",
+      path: "/profile", label: "Profile", group: "management", icon: "user",
       anyOf: ["profile.update_own"],
     },
   ]),
   ...define("finance", [
-    { path: "", label: "Overview", group: "workspace", icon: "home" },
+    { path: "", label: "Overview", group: "overview", icon: "home" },
     {
       // Phase 6 (audit M-2): FINANCE holds task.* — the shared task
       // board now has a finance route.
-      path: "/tasks", label: "Tasks", group: "workspace", icon: "tasks",
+      path: "/tasks", label: "Tasks", group: "work-management", icon: "tasks",
       anyOf: ["task.create", "task.assign", "task.update_own"],
     },
     {
-      path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
+      path: "/notifications", label: "Notifications", group: "overview", icon: "bell",
       anyOf: ["notification.read_own"],
     },
     {
-      path: "/incidents", label: "Incidents", group: "operations", icon: "alert",
+      path: "/incidents", label: "Incidents", group: "work-management", icon: "alert",
       anyOf: ["incident.manage", "incident.report"],
     },
     {
-      path: "/invoices", label: "Invoices", group: "business", icon: "file",
+      path: "/invoices", label: "Invoices", group: "finance", icon: "file",
       anyOf: ["invoice.read"],
     },
     {
-      path: "/ledger", label: "Ledger", group: "business", icon: "wallet",
+      path: "/ledger", label: "Ledger", group: "finance", icon: "wallet",
       anyOf: ["finance.read"],
     },
     {
-      path: "/remittances", label: "COD remittances", group: "business", icon: "coins",
+      path: "/remittances", label: "COD remittances", group: "finance", icon: "coins",
       anyOf: ["cod.read"],
     },
     {
-      path: "/settlements", label: "Settlements", group: "business", icon: "coins",
+      path: "/settlements", label: "Settlements", group: "finance", icon: "coins",
       anyOf: ["settlement.read"],
     },
     {
-      path: "/adjustments", label: "Adjustments & refunds", group: "business", icon: "sliders",
+      path: "/adjustments", label: "Adjustments & refunds", group: "finance", icon: "sliders",
       anyOf: ["finance.adjust", "finance.approve_adjustment"],
     },
     {
-      path: "/reports", label: "Reports", group: "business", icon: "chart",
+      path: "/reports", label: "Reports", group: "management", icon: "chart",
       anyOf: ["report.read_all"],
     },
   ]),
   ...define("support", [
-    { path: "", label: "Home", group: "workspace", icon: "home" },
+    { path: "", label: "Home", group: "overview", icon: "home" },
     {
       // Phase 6 (audit M-2): SUPPORT holds task.* — the shared task
       // board now has a support route.
-      path: "/tasks", label: "Tasks", group: "workspace", icon: "tasks",
+      path: "/tasks", label: "Tasks", group: "work-management", icon: "tasks",
       anyOf: ["task.create", "task.assign", "task.update_own"],
     },
     {
-      path: "/notifications", label: "Notifications", group: "workspace", icon: "bell",
+      path: "/notifications", label: "Notifications", group: "overview", icon: "bell",
       anyOf: ["notification.read_own"],
     },
     {
-      path: "/tickets", label: "Support tickets", group: "operations", icon: "ticket",
+      path: "/tickets", label: "Support tickets", group: "work-management", icon: "ticket",
       anyOf: ["support.ticket.manage"],
     },
     {
-      path: "/incidents", label: "Incidents", group: "operations", icon: "alert",
+      path: "/incidents", label: "Incidents", group: "work-management", icon: "alert",
       anyOf: ["incident.manage"],
     },
   ]),
