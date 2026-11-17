@@ -18,12 +18,51 @@ export type StatusDomain =
 
 export type StatusTone = "success" | "warning" | "danger" | "info" | "neutral";
 
+/**
+ * The five status colours (docs/ui-design-system.md §2.4/§4) — the ONLY
+ * status hexes in the product. V3 changed the values behind the tones;
+ * the tone assignment of every domain value below is unchanged from V2.
+ */
+export const TONE_HEX: Record<StatusTone, { text: string; bg: string }> = {
+  success: { text: "#18794E", bg: "#E3F4E8" },
+  warning: { text: "#99610A", bg: "#FFF0D6" },
+  danger: { text: "#B42318", bg: "#FDE8E7" },
+  info: { text: "#285EA8", bg: "#E7EFFB" },
+  neutral: { text: "#53635D", bg: "#EDF1EE" },
+};
+
 export const TONE_CLASSES: Record<StatusTone, string> = {
-  success: "bg-greenbg text-greendeep",
-  warning: "bg-amberbg text-amberdeep",
-  danger: "bg-redbg text-reddeep",
-  info: "bg-accentbg text-brand",
-  neutral: "bg-cream text-slate2",
+  success: "bg-successbg text-success",
+  warning: "bg-warningbg text-warning",
+  danger: "bg-dangerbg text-danger",
+  info: "bg-infobg text-info",
+  neutral: "bg-neutralbg text-neutral",
+};
+
+/** Tone text colour alone (compact badge density, dots, inline labels). */
+export const TONE_TEXT_CLASSES: Record<StatusTone, string> = {
+  success: "text-success",
+  warning: "text-warning",
+  danger: "text-danger",
+  info: "text-info",
+  neutral: "text-neutral",
+};
+
+/** Tone → icon name (DS §2.4). Rendered by the ToneIcon component in
+ * `src/components/ui/ToneIcon.tsx` (same Lucide-style stroke set). */
+export type ToneIconName =
+  | "check-circle"
+  | "clock"
+  | "alert-octagon"
+  | "info"
+  | "minus-circle";
+
+export const TONE_ICONS: Record<StatusTone, ToneIconName> = {
+  success: "check-circle",
+  warning: "clock",
+  danger: "alert-octagon",
+  info: "info",
+  neutral: "minus-circle",
 };
 
 /** "OUT_FOR_DELIVERY" -> "OUT FOR DELIVERY". */
@@ -139,7 +178,9 @@ const GENERIC_TONES: Readonly<Record<string, StatusTone>> = {
   NOT_STARTED: "neutral",
 };
 
-const DOMAIN_TONES: Readonly<Record<StatusDomain, Readonly<Record<string, StatusTone>>>> = {
+/** Exported so the friendly-label dictionary (labels.ts) and its tests
+ * can iterate every classified value programmatically. */
+export const DOMAIN_TONES: Readonly<Record<StatusDomain, Readonly<Record<string, StatusTone>>>> = {
   operational: OPERATIONAL_TONES,
   condition: CONDITION_TONES,
   payment: PAYMENT_TONES,
