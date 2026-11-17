@@ -1,16 +1,15 @@
 import { requireActor } from "@/lib/auth/permissions";
-import { AdminOpsHome } from "@/components/dashboards/AdminOpsHome";
+import { ExecutiveHome } from "@/components/dashboards/ExecutiveHome";
 
 /**
- * Admin home (V2 Phase 6 slice B): the operations-focused home of
- * spec §7/§10.5 — needs attention, key metrics, current operations,
- * the live-operations summary card, recent activity and quick
- * actions, all computed by the home-dashboards service from the
- * permission-enforcing operational services. The 30-day
- * OverviewPanel this page used to mirror from the Super Admin home
- * now lives only on /admin/reports, where it belongs.
+ * Admin home (V3 Step 4, brief §6): the executive overview — six
+ * KPIs, the Live Operations map preview, shipment analytics, needs
+ * attention, recent activity and quick actions — computed by
+ * `getExecutiveHome` from the permission-enforcing services. The
+ * V2-era AdminOpsHome was replaced by the shared ExecutiveHome; the
+ * 30-day OverviewPanel lives on /admin/reports.
  */
 export default async function Page() {
   const actor = await requireActor();
-  return <AdminOpsHome actor={actor} />;
+  return <ExecutiveHome actor={actor} basePath="/admin" variant="admin" />;
 }
