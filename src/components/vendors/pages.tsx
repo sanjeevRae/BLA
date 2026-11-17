@@ -96,7 +96,7 @@ export async function VendorsListPage({
         <EmptyState title="No vendors found." />
       ) : (
         <DensityScope showToggle>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-lg border border-border bg-card">
             <table className={TABLE_CLASS}>
               <thead>
                 <tr className={THEAD_ROW_CLASS}>
