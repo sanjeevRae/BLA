@@ -245,7 +245,7 @@ export function StaffWorkConsoleView({
                   <span className="w-14 shrink-0 text-[12.5px] font-semibold uppercase tracking-wide text-ink-2">
                     {index === 0 ? "Next up" : `Task ${index + 1}`}
                   </span>
-                  <span className="min-w-0 flex-1 break-words text-[14px] font-medium text-ink">
+                  <span className="min-w-[11rem] flex-1 break-words text-[14px] font-medium text-ink">
                     {task.title}
                   </span>
                   <PriorityBadge priority={task.priority} />
