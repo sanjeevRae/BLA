@@ -134,7 +134,7 @@ export async function BookingsListPage({
         <EmptyState title="No bookings found." />
       ) : (
         <DensityScope showToggle>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-lg border border-border bg-card">
             <table className={TABLE_CLASS}>
               <thead>
                 <tr className={THEAD_ROW_CLASS}>
