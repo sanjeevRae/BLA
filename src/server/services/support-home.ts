@@ -4,7 +4,10 @@ import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db/prisma";
 import { hasPermission, type ActorContext } from "@/lib/auth/actor";
-import { TICKET_OPEN_STATUSES } from "@/lib/operations/domain";
+import {
+  TASK_TERMINAL_STATUSES,
+  TICKET_OPEN_STATUSES,
+} from "@/lib/operations/domain";
 import {
   addDays,
   kathmanduDayStartUtc,
@@ -12,6 +15,8 @@ import {
 } from "@/lib/reports/domain";
 import { requirePermAudited } from "@/server/services/scoping";
 import { listIncidents } from "@/server/services/incidents";
+import { listTickets } from "@/server/services/support-tickets";
+import { listTasks } from "@/server/services/tasks";
 
 /**
  * Support home read (V2 Phase 6, audit defect H-2). One scoped read
@@ -230,5 +235,259 @@ export async function getSupportHome(actor: ActorContext): Promise<SupportHome> 
       status: item.status,
       updatedAt: item.updatedAt,
     })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// V3 Step 8 — Support console read model
+// ---------------------------------------------------------------------------
+
+/**
+ * Support console (V3 Step 8) — the dashboard read model behind
+ * SupportHomeView. A field-mapped composition over existing reads;
+ * it modifies no existing service function.
+ *
+ * Gate: inherited from `getSupportHome`, which runs
+ * `requirePermAudited(actor, "support.ticket.manage",
+ * "SupportTicket")` before any figure is read — the same gate this
+ * console is specified to use.
+ *
+ * Composition:
+ * - `getSupportHome(actor)` supplies today, the attention counts,
+ *   the queue breakdown, the open-incident count, the oldest open
+ *   tickets, the overdue delivery items and the recent ticket /
+ *   incident rows. Every field is carried through field-mapped —
+ *   the home object is never spread into this model.
+ * - The ticket queue table and the My tickets count come from
+ *   `listTickets`: support actors hold support.ticket.manage, so
+ *   its scope is the staff inbox — exactly the queues' own
+ *   definition.
+ * - `highPriorityOpen` is the ONE new read in this model:
+ *   `listTickets` has no priority filter, so the HIGH + URGENT open
+ *   count cannot be composed from it and is counted directly.
+ * - My tasks come from `listTasks` queue "mine"; terminal tasks
+ *   (TASK_TERMINAL_STATUSES) are filtered out in-model, and the
+ *   due / overdue figures are real arithmetic on `dueAt` against
+ *   now and the Kathmandu tomorrow boundary.
+ *
+ * MONEY BOUNDARY (hard): support is a case-management surface. This
+ * model carries NO finance figure of any kind — no paisa, amount,
+ * COD, invoice, payment or revenue field at any depth — and the
+ * view renders none.
+ *
+ * NO invented SLA: the home's 48h figure is an attention threshold
+ * (see SUPPORT_TICKET_ATTENTION_HOURS), never an SLA promise, and
+ * the view labels it exactly that way.
+ */
+export interface SupportConsoleData {
+  today: string;
+  attention: {
+    unassignedTickets: number;
+    /** Open tickets older than SUPPORT_TICKET_ATTENTION_HOURS. */
+    breachingTickets: number;
+    unresolvedHighSeverityIncidents: number;
+    overdueDeliveries: number;
+  };
+  queues: {
+    open: number;
+    inProgress: number;
+    awaitingCustomer: number;
+    escalated: number;
+    resolvedToday: number;
+    totalOpen: number;
+  };
+  openIncidents: number;
+  /** Open tickets at HIGH or URGENT priority (the one new read). */
+  highPriorityOpen: number;
+  /** Open tickets assigned to the actor (listTickets meta.total). */
+  myTicketsOpen: number;
+  oldestOpenTickets: {
+    id: string;
+    ticketNumber: string;
+    subject: string;
+    status: string;
+    priority: string;
+    assignedToId: string | null;
+    createdAt: string;
+  }[];
+  overdueDeliveryItems: {
+    packageId: string;
+    trackingId: string;
+    deliveryStatus: string;
+    operationalStatus: string;
+    expectedDeliveryAt: string;
+  }[];
+  /** The queue table rows: newest open tickets, staff-inbox scope. */
+  queueTickets: {
+    id: string;
+    ticketNumber: string;
+    subject: string;
+    raiserName: string | null;
+    priority: string;
+    status: string;
+    assignedToId: string | null;
+    assigneeName: string | null;
+    createdAt: string;
+  }[];
+  recentTickets: {
+    id: string;
+    ticketNumber: string;
+    subject: string;
+    status: string;
+    updatedAt: string;
+  }[];
+  recentIncidents: {
+    id: string;
+    incidentNumber: string;
+    category: string;
+    severity: string;
+    status: string;
+    updatedAt: string;
+  }[];
+  /** The actor's open tasks, due soonest first (no due date last). */
+  myTasks: {
+    id: string;
+    title: string;
+    status: string;
+    priority: string;
+    dueAt: string | null;
+    warehouseId: string | null;
+    overdue: boolean;
+  }[];
+  /** Open tasks due before Kathmandu tomorrow starts (incl. overdue). */
+  tasksDue: number;
+  /** Open tasks whose dueAt is already past. */
+  tasksOverdue: number;
+  can: {
+    viewTickets: boolean;
+    incidents: boolean;
+    tasks: boolean;
+  };
+}
+
+export async function getSupportConsole(
+  actor: ActorContext,
+): Promise<SupportConsoleData> {
+  // The gate lives in getSupportHome (support.ticket.manage).
+  const home = await getSupportHome(actor);
+
+  const now = new Date();
+  const tomorrowStart = kathmanduDayStartUtc(addDays(home.today, 1));
+  const canWorkTasks = hasPermission(actor, "task.update_own");
+
+  const [highPriorityOpen, queueList, mineList, myTaskList] = await Promise.all([
+    // The one new read: listTickets has no priority filter.
+    prisma.supportTicket.count({
+      where: {
+        priority: { in: ["HIGH", "URGENT"] },
+        status: { in: [...TICKET_OPEN_STATUSES] },
+      },
+    }),
+    listTickets(actor, { openOnly: true, pageSize: 10 }),
+    listTickets(actor, { openOnly: true, assignedToMe: true, pageSize: 1 }),
+    // listTasks itself requires task.update_own; an actor without
+    // it simply has no task queue on this console.
+    canWorkTasks
+      ? listTasks(actor, { queue: "mine", pageSize: 100 })
+      : Promise.resolve(null),
+  ]);
+
+  const openTasks = (myTaskList?.items ?? []).filter(
+    (task) => !(TASK_TERMINAL_STATUSES as readonly string[]).includes(task.status),
+  );
+  const tasksDue = openTasks.filter(
+    (task) => task.dueAt !== null && new Date(task.dueAt) < tomorrowStart,
+  ).length;
+  const tasksOverdue = openTasks.filter(
+    (task) => task.dueAt !== null && new Date(task.dueAt) < now,
+  ).length;
+  const myTasks = [...openTasks]
+    .sort((a, b) => {
+      if (a.dueAt === null && b.dueAt === null) return 0;
+      if (a.dueAt === null) return 1;
+      if (b.dueAt === null) return -1;
+      return new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime();
+    })
+    .slice(0, 8)
+    .map((task) => ({
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      priority: task.priority,
+      dueAt: task.dueAt,
+      warehouseId: task.warehouseId,
+      overdue: task.overdue,
+    }));
+
+  return {
+    today: home.today,
+    attention: {
+      unassignedTickets: home.attention.unassignedTickets,
+      breachingTickets: home.attention.breachingTickets,
+      unresolvedHighSeverityIncidents:
+        home.attention.unresolvedHighSeverityIncidents,
+      overdueDeliveries: home.attention.overdueDeliveries,
+    },
+    queues: {
+      open: home.queues.open,
+      inProgress: home.queues.inProgress,
+      awaitingCustomer: home.queues.awaitingCustomer,
+      escalated: home.queues.escalated,
+      resolvedToday: home.queues.resolvedToday,
+      totalOpen: home.queues.totalOpen,
+    },
+    openIncidents: home.metrics.openIncidents,
+    highPriorityOpen,
+    myTicketsOpen: mineList.meta.total,
+    oldestOpenTickets: home.oldestOpenTickets.map((row) => ({
+      id: row.id,
+      ticketNumber: row.ticketNumber,
+      subject: row.subject,
+      status: row.status,
+      priority: row.priority,
+      assignedToId: row.assignedToId,
+      createdAt: row.createdAt,
+    })),
+    overdueDeliveryItems: home.overdueDeliveryItems.map((row) => ({
+      packageId: row.packageId,
+      trackingId: row.trackingId,
+      deliveryStatus: row.deliveryStatus,
+      operationalStatus: row.operationalStatus,
+      expectedDeliveryAt: row.expectedDeliveryAt,
+    })),
+    queueTickets: queueList.items.map((item) => ({
+      id: item.id,
+      ticketNumber: item.ticketNumber,
+      subject: item.subject,
+      raiserName: item.raiserName,
+      priority: item.priority,
+      status: item.status,
+      assignedToId: item.assignedToId,
+      assigneeName: item.assigneeName,
+      createdAt: item.createdAt,
+    })),
+    recentTickets: home.recentTickets.map((row) => ({
+      id: row.id,
+      ticketNumber: row.ticketNumber,
+      subject: row.subject,
+      status: row.status,
+      updatedAt: row.updatedAt,
+    })),
+    recentIncidents: home.recentIncidents.map((row) => ({
+      id: row.id,
+      incidentNumber: row.incidentNumber,
+      category: row.category,
+      severity: row.severity,
+      status: row.status,
+      updatedAt: row.updatedAt,
+    })),
+    myTasks,
+    tasksDue,
+    tasksOverdue,
+    can: {
+      viewTickets: hasPermission(actor, "support.ticket.manage"),
+      incidents: hasPermission(actor, "incident.manage"),
+      tasks: hasPermission(actor, "task.update_own"),
+    },
   };
 }
