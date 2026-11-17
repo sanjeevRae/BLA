@@ -1,7 +1,9 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
+
+import { findOperationalStatusWrites } from "../helpers/operational-status-scan";
 
 vi.mock("server-only", () => ({}));
 
@@ -765,13 +767,17 @@ describe("package lifecycle service", () => {
   });
 
   it("is the only service that writes operationalStatus (source scan)", () => {
+    // Write-aware scan (tests/helpers/operational-status-scan.ts): a
+    // status literal is an offence only in a write context (Prisma
+    // data/create/update payloads, payload variables, direct
+    // assignment). Read contexts — where: filters, orderBy, select,
+    // comparisons — are legitimate and allowed; the flat regex this
+    // replaced flagged a count() where-filter in warehouse-home.ts.
+    // Both directions are pinned in tests/unit/operational-status-scan.test.ts.
     const servicesDir = join(process.cwd(), "src/server/services");
-    const offenders: string[] = [];
-    for (const file of readdirSync(servicesDir)) {
-      if (!file.endsWith(".ts") || file === "package-lifecycle.ts") continue;
-      const source = readFileSync(join(servicesDir, file), "utf8");
-      if (/operationalStatus:\s*"[A-Z_]+"/.test(source)) offenders.push(file);
-    }
+    const offenders = findOperationalStatusWrites(servicesDir).map(
+      (hit) => `${hit.file}:${hit.line} (${hit.context})`,
+    );
     expect(offenders).toEqual([]);
   });
 });
