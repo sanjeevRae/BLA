@@ -10,6 +10,11 @@ import {
 } from "@/lib/reports/domain";
 import { requirePermAudited } from "@/server/services/scoping";
 import { getFinanceOverview } from "@/server/services/finance-overview";
+import { getFinanceReport } from "@/server/services/reports-finance";
+import { listInvoices } from "@/server/services/invoices";
+import { listSettlements } from "@/server/services/settlements";
+import { listRemittances } from "@/server/services/cod-remittances";
+import { humaniseStatusValue } from "@/lib/status/labels";
 
 /**
  * Finance home read (V2 Phase 6, audit-driven rebuild of the finance
@@ -368,5 +373,356 @@ export async function getFinanceHome(actor: ActorContext): Promise<FinanceHome> 
       ownerType: account.ownerType,
       balancePaisa: account.balancePaisa,
     })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Finance console (V3 Step 8) — the finance dashboard read model.
+// ---------------------------------------------------------------------------
+
+/**
+ * COD path taken (single-definition rule): the console's COD figures
+ * must be getCodReport's totals-row definitions exactly —
+ * collectedPaisa, awaitingRemittancePaisa and outstandingPaisa
+ * (= collected − verified, "amount riders owe"). getCodReport was
+ * tried first with a wide-range input, but its parseRange →
+ * resolveReportRange enforces MAX_RANGE_DAYS = 366
+ * (src/lib/reports/domain.ts), so NO range covering all time is
+ * accepted — an all-time console cannot be a getCodReport call.
+ * The accumulation below therefore mirrors getCodReport's
+ * per-collection classification line-for-line over ALL collections
+ * (no collectedAt window):
+ *   line = the collection's first remittance line;
+ *   isVerified = line exists AND (remittance VERIFIED, or CLOSED
+ *     with resolution ACCEPTED_COUNTED);
+ *   verified = isVerified ? (line.verifiedPaisa ?? 0) : 0;
+ *   no line            → awaiting = collected;
+ *   verified           → tail (collected − verified) > 0 is inOpen;
+ *   line, not verified, remittance not CLOSED → inOpen = line's
+ *     collected;
+ *   line, CLOSED, not verified (rejected) → awaiting = collected;
+ *   outstanding = collected − verified.
+ * tests/integration/step8-finance-console.test.ts proves the mirror
+ * equals getCodReport's totals over a range covering its fixtures
+ * (planted-figure deltas) and equals an independent all-collections
+ * DB accumulation computed in the test.
+ */
+
+export interface FinanceConsoleAdjustment {
+  id: string;
+  creatorName: string | null;
+  amountPaisa: string;
+  reason: string;
+  awaiting: FinanceAttentionAdjustment["awaiting"];
+  createdAt: string;
+}
+
+export interface FinanceConsoleRefund {
+  id: string;
+  requesterName: string | null;
+  amountPaisa: string;
+  reason: string;
+  awaiting: FinanceAttentionRefund["awaiting"];
+  createdAt: string;
+}
+
+export interface FinanceConsoleData {
+  /** Kathmandu calendar day the "today" figures cover. */
+  today: string;
+  period: {
+    from: string;
+    to: string;
+    invoiced: { count: number; totalPaisa: string };
+    paymentsReceived: { count: number; totalPaisa: string };
+    refunds: { processedCount: number; processedPaisa: string; requestedOpen: number };
+  };
+  summary: {
+    /** Ledger SHIPPING_REVENUE, same 30-day range as the period. */
+    revenueLast30DaysPaisa: string;
+    outstandingReceivablesPaisa: string;
+    openInvoicesCount: number;
+    vendorPayablePaisa: string;
+    cod: {
+      collectedPaisa: string;
+      awaitingRemittancePaisa: string;
+      inOpenRemittancePaisa: string;
+      remittedVerifiedPaisa: string;
+      outstandingPaisa: string;
+    };
+  };
+  operationsToday: {
+    invoicesIssued: { count: number; totalPaisa: string };
+    paymentsReceived: { count: number; totalPaisa: string };
+  };
+  pending: {
+    settlements: {
+      count: number;
+      netPayablePaisa: string;
+      items: {
+        id: string;
+        settlementNumber: string;
+        vendorName: string | null;
+        netPayablePaisa: string;
+        createdAt: string;
+      }[];
+    };
+    adjustments: { count: number; items: FinanceConsoleAdjustment[] };
+    refunds: { count: number; items: FinanceConsoleRefund[] };
+    remittances: {
+      count: number;
+      items: {
+        id: string;
+        remittanceNumber: string;
+        driverName: string | null;
+        declaredAmountPaisa: string;
+        status: string;
+        submittedAt: string;
+      }[];
+    };
+    remittanceDiscrepancies: {
+      count: number;
+      items: {
+        id: string;
+        remittanceNumber: string;
+        declaredAmountPaisa: string;
+        discrepancyPaisa: string | null;
+        submittedAt: string;
+      }[];
+    };
+  };
+  recentInvoices: {
+    id: string;
+    invoiceNumber: string;
+    vendorName: string | null;
+    totalPaisa: string;
+    status: string;
+    issuedAt: string;
+  }[];
+  recentPayments: {
+    id: string;
+    amountPaisa: string;
+    method: string;
+    status: string;
+    payerType: string;
+    payerName: string | null;
+    invoiceId: string | null;
+    createdAt: string;
+  }[];
+  /** System accounts only: per-owner codes embed UUIDs after ":"
+   *  (audit G4) and stay on the ledger page. */
+  accounts: { id: string; code: string; label: string; kind: string; balancePaisa: string }[];
+  can: {
+    createInvoice: boolean;
+    recordPayment: boolean;
+    viewLedger: boolean;
+    codRemittances: boolean;
+    settlements: boolean;
+    reports: boolean;
+  };
+}
+
+export async function getFinanceConsole(actor: ActorContext): Promise<FinanceConsoleData> {
+  // The gate is the one getFinanceHome already enforces
+  // (finance.read, audited) — every read below composes behind it.
+  const home = await getFinanceHome(actor);
+
+  const [report, pendingSettlements, submittedRemittances, verifyingRemittances, invoices, paymentRows, collections] =
+    await Promise.all([
+      getFinanceReport(actor, {}),
+      listSettlements(actor, { status: "PENDING", pageSize: 5 }),
+      listRemittances(actor, { status: "SUBMITTED", pageSize: 5 }),
+      listRemittances(actor, { status: "UNDER_VERIFICATION", pageSize: 5 }),
+      listInvoices(actor, { pageSize: 8 }),
+      // Recent payments — the console's one new small read: latest 8
+      // payments with their payer's display name and the invoice a
+      // row should drill to (first allocation, else the payment's
+      // own invoice, else null → the ledger).
+      prisma.payment.findMany({
+        orderBy: { createdAt: "desc" },
+        take: 8,
+        include: {
+          payerVendor: { select: { businessName: true } },
+          payerCustomer: { select: { fullName: true } },
+          allocations: {
+            orderBy: { createdAt: "asc" },
+            take: 1,
+            select: { invoiceId: true },
+          },
+        },
+      }),
+      // All-time COD accumulation — mirrors getCodReport's
+      // per-collection classification exactly (see header note).
+      prisma.deliveryCodCollection.findMany({
+        select: {
+          collectedPaisa: true,
+          remittanceLines: {
+            select: {
+              collectedPaisa: true,
+              verifiedPaisa: true,
+              remittance: { select: { status: true, resolution: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+  let codCollected = BigInt(0);
+  let codVerified = BigInt(0);
+  let codAwaiting = BigInt(0);
+  let codInOpen = BigInt(0);
+  for (const collection of collections) {
+    const line = collection.remittanceLines[0];
+    const isVerified =
+      line !== undefined &&
+      (line.remittance.status === "VERIFIED" ||
+        (line.remittance.status === "CLOSED" && line.remittance.resolution === "ACCEPTED_COUNTED"));
+    const verified = isVerified ? (line.verifiedPaisa ?? BigInt(0)) : BigInt(0);
+    let awaiting = BigInt(0);
+    let inOpen = BigInt(0);
+    if (!line) {
+      awaiting = collection.collectedPaisa;
+    } else if (isVerified) {
+      const tail = collection.collectedPaisa - verified;
+      if (tail > BigInt(0)) inOpen = tail;
+    } else if (line.remittance.status !== "CLOSED") {
+      inOpen = line.collectedPaisa;
+    } else {
+      awaiting = collection.collectedPaisa;
+    }
+    codCollected += collection.collectedPaisa;
+    codVerified += verified;
+    codAwaiting += awaiting;
+    codInOpen += inOpen;
+  }
+
+  const remittanceItems = [...submittedRemittances.items, ...verifyingRemittances.items]
+    .sort((a, b) => (a.submittedAt < b.submittedAt ? -1 : a.submittedAt > b.submittedAt ? 1 : 0))
+    .slice(0, 5)
+    .map((row) => ({
+      id: row.id,
+      remittanceNumber: row.remittanceNumber,
+      driverName: row.driverName,
+      declaredAmountPaisa: row.declaredAmountPaisa,
+      status: row.status,
+      submittedAt: row.submittedAt,
+    }));
+
+  return {
+    today: home.today,
+    period: {
+      from: report.range.from,
+      to: report.range.to,
+      invoiced: { count: report.invoiced.count, totalPaisa: report.invoiced.totalPaisa },
+      paymentsReceived: {
+        count: report.paymentsReceived.count,
+        totalPaisa: report.paymentsReceived.totalPaisa,
+      },
+      refunds: {
+        processedCount: report.refunds.processedCount,
+        processedPaisa: report.refunds.processedPaisa,
+        requestedOpen: report.refunds.requestedOpen,
+      },
+    },
+    summary: {
+      revenueLast30DaysPaisa: home.metrics.revenueLast30DaysPaisa,
+      outstandingReceivablesPaisa: home.metrics.outstandingReceivablesPaisa,
+      openInvoicesCount: home.metrics.openInvoicesCount,
+      vendorPayablePaisa: home.metrics.vendorPayablePaisa,
+      cod: {
+        collectedPaisa: codCollected.toString(),
+        awaitingRemittancePaisa: codAwaiting.toString(),
+        inOpenRemittancePaisa: codInOpen.toString(),
+        remittedVerifiedPaisa: codVerified.toString(),
+        outstandingPaisa: (codCollected - codVerified).toString(),
+      },
+    },
+    operationsToday: {
+      invoicesIssued: home.operationsToday.invoicesIssued,
+      paymentsReceived: home.operationsToday.paymentsReceived,
+    },
+    pending: {
+      settlements: {
+        count: home.attention.settlementsAwaitingAdminApproval.count,
+        netPayablePaisa: home.attention.settlementsAwaitingAdminApproval.netPayablePaisa,
+        items: pendingSettlements.items.map((row) => ({
+          id: row.id,
+          settlementNumber: row.settlementNumber,
+          vendorName: row.vendorName,
+          netPayablePaisa: row.netPayablePaisa,
+          createdAt: row.createdAt,
+        })),
+      },
+      adjustments: {
+        count: home.attention.adjustmentsRequested.count,
+        items: home.attention.adjustmentsRequested.items.map((row) => ({
+          id: row.id,
+          creatorName: row.creatorName,
+          amountPaisa: row.amountPaisa,
+          reason: row.reason,
+          awaiting: row.awaiting,
+          createdAt: row.createdAt,
+        })),
+      },
+      refunds: {
+        count: home.attention.refundsRequested.count,
+        items: home.attention.refundsRequested.items.map((row) => ({
+          id: row.id,
+          requesterName: row.requesterName,
+          amountPaisa: row.amountPaisa,
+          reason: row.reason,
+          awaiting: row.awaiting,
+          createdAt: row.createdAt,
+        })),
+      },
+      remittances: {
+        count: home.attention.remittancesAwaitingVerification.count,
+        items: remittanceItems,
+      },
+      remittanceDiscrepancies: {
+        count: home.attention.remittancesInDiscrepancy.count,
+        items: home.attention.remittancesInDiscrepancy.items.map((row) => ({
+          id: row.id,
+          remittanceNumber: row.remittanceNumber,
+          declaredAmountPaisa: row.declaredAmountPaisa,
+          discrepancyPaisa: row.discrepancyPaisa,
+          submittedAt: row.submittedAt,
+        })),
+      },
+    },
+    recentInvoices: invoices.items.map((row) => ({
+      id: row.id,
+      invoiceNumber: row.invoiceNumber,
+      vendorName: row.vendorName,
+      totalPaisa: row.totalPaisa,
+      status: row.status,
+      issuedAt: row.issuedAt,
+    })),
+    recentPayments: paymentRows.map((row) => ({
+      id: row.id,
+      amountPaisa: row.amountPaisa.toString(),
+      method: row.method,
+      status: row.status,
+      payerType: row.payerType,
+      payerName: row.payerVendor?.businessName ?? row.payerCustomer?.fullName ?? null,
+      invoiceId: row.allocations[0]?.invoiceId ?? row.invoiceId ?? null,
+      createdAt: row.createdAt.toISOString(),
+    })),
+    accounts: home.accounts
+      .filter((account) => !account.code.includes(":"))
+      .map((account) => ({
+        id: account.id,
+        code: account.code,
+        label: humaniseStatusValue(account.code),
+        kind: account.kind,
+        balancePaisa: account.balancePaisa,
+      })),
+    can: {
+      createInvoice: hasPermission(actor, "invoice.create"),
+      recordPayment: hasPermission(actor, "finance.record_payment"),
+      viewLedger: hasPermission(actor, "finance.read"),
+      codRemittances: hasPermission(actor, "cod.read"),
+      settlements: hasPermission(actor, "settlement.read"),
+      reports: hasPermission(actor, "report.read_all"),
+    },
   };
 }
