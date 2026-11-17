@@ -199,7 +199,7 @@ export function AuditListClient({
               ),
               time: formatDateTime(row.createdAt),
               detail: `${row.entityType} · ${row.outcome}`,
-              tone: row.outcome === "denied" ? ("danger" as const) : ("success" as const),
+              tone: row.outcome === "denied" ? ("danger" as const) : ("neutral" as const),
               onSelect: () => setSelected(row),
             }))}
           />
@@ -262,7 +262,7 @@ export function AuditListClient({
                   row.outcome === "denied" ? TONE_CLASSES.danger : TONE_CLASSES.success
                 }`}
               >
-                {row.outcome === "denied" ? "DENIED" : "RECORDED"}
+                {row.outcome === "denied" ? "Denied" : "Recorded"}
               </span>
             ),
           },

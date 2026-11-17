@@ -465,7 +465,7 @@ each other (study E1); "Fit active drivers" / "Fit selection" controls
 remain first-class. Marker popup and list rows show driver, vehicle, trip,
 package count, and **LocationFreshnessIndicator**: "Updated 40s ago" text
 with tone by the backend's existing freshness states (fresh = Success,
-stale = Pending, offline = Neutral + "last seen …"). No invented routes,
+delayed = Pending, stale = Failed, offline = Neutral + "last seen …"). No invented routes,
 movement animation, or ETAs. Mobile: List/Map toggle (existing), map
 height 60vh, list cards at field density.
 

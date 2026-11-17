@@ -322,7 +322,7 @@ export async function BookingCreatePage({
     const addresses = await listVendorAddresses(actor, actor.vendorId);
     return (
       <div className="grid gap-5">
-        <h1 className="text-[20px] font-bold text-ink">New booking</h1>
+        <PageHeader title="New booking" />
         <SectionCard title="Booking details">
           <BookingCreateForm
             mode="vendor"
@@ -355,7 +355,7 @@ export async function BookingCreatePage({
     : { vendors: [] as Awaited<ReturnType<typeof listVendors>>["vendors"] };
   return (
     <div className="grid gap-5">
-      <h1 className="text-[20px] font-bold text-ink">New booking</h1>
+      <PageHeader title="New booking" />
       <SectionCard title="Booking details">
         <BookingCreateForm
           mode="staff"

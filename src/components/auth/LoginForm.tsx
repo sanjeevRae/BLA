@@ -5,8 +5,8 @@ import { useState, type FormEvent } from "react";
 import { loginAction } from "@/app/(public)/login/actions";
 
 const inputClass =
-  "w-full rounded-md border border-line bg-surface px-3 py-2 text-[13px] text-ink outline-none focus:border-brand";
-const labelClass = "mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2";
+  "w-full rounded-md border border-border-control bg-card px-3 py-2 text-[13px] text-ink outline-none focus:border-primary";
+const labelClass = "mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-2";
 
 export function LoginForm() {
   const [email, setEmail] = useState("");
@@ -71,7 +71,7 @@ export function LoginForm() {
       {error !== null && (
         <div
           role="alert"
-          className="mb-4 rounded-md border border-line bg-[#fdecec] px-3 py-2 text-[13px] text-red"
+          className="mb-4 rounded-md border border-danger/30 bg-dangerbg px-3 py-2 text-[13px] text-danger"
         >
           {error}
         </div>
@@ -79,7 +79,7 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={submitting}
-        className="w-full rounded-md bg-brand px-3 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
+        className="w-full rounded-md bg-primary px-3 py-2 text-[13px] font-semibold text-white disabled:opacity-60"
       >
         {submitting ? "Signing in…" : "Sign in"}
       </button>

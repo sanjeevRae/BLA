@@ -19,6 +19,7 @@ import {
 import { SectionCard } from "@/components/warehouses/ui";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { statusLabel } from "@/lib/status/labels";
 import { DensityScope } from "@/components/ui/TableDensity";
 import {
   TABLE_CLASS,
@@ -191,8 +192,8 @@ async function VehicleRow({
         </div>
         <div className="text-right text-[12px] text-ink-2">
           <div>
-            Status <strong className="text-ink">{vehicle.status}</strong> · Inspection{" "}
-            <strong className="text-ink">{vehicle.inspectionStatus}</strong>
+            Status <strong className="text-ink">{statusLabel("generic", vehicle.status)}</strong> · Inspection{" "}
+            <strong className="text-ink">{statusLabel("generic", vehicle.inspectionStatus)}</strong>
           </div>
           <div>
             {vehicle.assignmentBlockers.length > 0
@@ -308,34 +309,9 @@ export async function DriverDetailPage({
 
       <DriverSummaryCard profile={profile} />
 
-      <SectionCard title="Driver profile">
-        <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
-          <ProfileField
-            label="Type"
-            value={profile.roles.join(", ") || "—"}
-          />
-          <ProfileField
-            label="Capabilities"
-            value={profile.capabilities.join(", ") || "—"}
-          />
-          <ProfileField label="Employment" value={profile.employmentStatus} />
-          <ProfileField label="Availability" value={profile.availabilityStatus} />
-          <ProfileField
-            label="Licence"
-            value={`${profile.licenseNumber}${profile.licenseCategory ? ` (${profile.licenseCategory})` : ""}`}
-          />
-          <ProfileField
-            label="Licence expiry"
-            value={`${profile.licenseExpiry}${profile.licenseExpired ? " — EXPIRED" : ""}`}
-          />
-          <ProfileField
-            label="Emergency contact"
-            value={`${profile.emergencyContactName ?? "—"}${profile.emergencyContactPhone ? ` · ${profile.emergencyContactPhone}` : ""}`}
-          />
-          <ProfileField label="Account status" value={profile.userStatus} />
-        </dl>
+      <SectionCard title="Manage driver">
         {canManage ? (
-          <div className="mt-4 flex flex-col gap-3">
+          <div className="flex flex-col gap-3">
             <DriverAdminButtons
               driverId={profile.id}
               employmentStatus={profile.employmentStatus}
@@ -349,24 +325,13 @@ export async function DriverDetailPage({
         ) : null}
       </SectionCard>
 
-      <SectionCard title="Current vehicle">
-        {profile.currentVehicle ? (
-          <p className="text-[13px] text-ink">
-            <span className="font-mono font-bold">{profile.currentVehicle.registration}</span>{" "}
-            · {profile.currentVehicle.type} · {profile.currentVehicle.status}
-          </p>
-        ) : (
-          <p className="text-[13px] text-ink-2">No vehicle currently assigned.</p>
-        )}
-      </SectionCard>
-
       <SectionCard title="Current work">
         {profile.currentTrip || profile.currentBatch ? (
           <div className="flex flex-col gap-3 text-[13px] text-ink">
             {profile.currentTrip ? (
               <div>
                 <div className="font-semibold">
-                  Trip {profile.currentTrip.tripNumber} · {profile.currentTrip.status}
+                  Trip {profile.currentTrip.tripNumber} · {statusLabel("generic", profile.currentTrip.status)}
                 </div>
                 <div className="text-ink-2">
                   {profile.currentTrip.origin.name} → {profile.currentTrip.destination.name}
@@ -379,7 +344,7 @@ export async function DriverDetailPage({
             {profile.currentBatch ? (
               <div>
                 <div className="font-semibold">
-                  {profile.currentBatch.kind} batch · {profile.currentBatch.status} ·{" "}
+                  {statusLabel("generic", profile.currentBatch.kind)} batch · {statusLabel("generic", profile.currentBatch.status)} ·{" "}
                   {profile.currentBatch.batchDate}
                 </div>
                 <div className="text-ink-2">
@@ -436,7 +401,7 @@ export async function DriverDetailPage({
               >
                 <span className="font-semibold">{trip.tripNumber}</span>
                 <span className="text-ink-2">
-                  {trip.origin.code} → {trip.destination.code} · {trip.status} ·{" "}
+                  {trip.origin.code} → {trip.destination.code} · {statusLabel("generic", trip.status)} ·{" "}
                   {new Date(trip.createdAt).toLocaleDateString("en-GB")}
                 </span>
               </li>
@@ -459,7 +424,7 @@ export async function DriverDetailPage({
                   {batch.warehouse.code} · {batch.batchDate}
                 </span>
                 <span className="text-ink-2">
-                  {batch.kind} · {batch.status} ·{" "}
+                  {statusLabel("generic", batch.kind)} · {statusLabel("generic", batch.status)} ·{" "}
                   <span className="tnum">{batch.assignedCount}</span> assigned ·{" "}
                   <span className="tnum">{batch.deliveredCount}</span> delivered ·{" "}
                   <span className="tnum">{batch.remainingCount}</span> remaining

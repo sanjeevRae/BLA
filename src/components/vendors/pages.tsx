@@ -178,15 +178,18 @@ export async function VendorDetailPage({
         <Link href={`${basePath}/vendors`} className="text-[12px] font-semibold text-primary">
           ← All vendors
         </Link>
-        <div className="mt-1 flex flex-wrap items-center gap-3">
-          <h1 className="text-[20px] font-bold text-ink">{vendor.businessName}</h1>
-          <StatusBadge status={vendor.verificationStatus} />
-        </div>
-        <p className="text-[13px] text-ink-2">
-          {vendor.contactName} · {vendor.phone}
-          {vendor.email ? ` · ${vendor.email}` : ""} · Billing: {vendor.billingPreference.replaceAll("_", " ")}
-          {vendor.creditLimitPaisa ? ` · Credit limit ${formatPaisa(vendor.creditLimitPaisa)}` : ""}
-        </p>
+        <PageHeader
+          title={vendor.businessName}
+          description={
+            <>
+              {vendor.contactName} · {vendor.phone}
+              {vendor.email ? ` · ${vendor.email}` : ""} · Billing: {vendor.billingPreference.replaceAll("_", " ")}
+              {vendor.creditLimitPaisa ? ` · Credit limit ${formatPaisa(vendor.creditLimitPaisa)}` : ""}
+            </>
+          }
+          actions={<StatusBadge status={vendor.verificationStatus} />}
+          className="mt-1"
+        />
       </div>
 
       {canApprove ? (

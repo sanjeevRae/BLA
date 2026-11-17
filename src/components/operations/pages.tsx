@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
-import { StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
+import { PriorityBadge, StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DensityScope } from "@/components/ui/TableDensity";
 import {
@@ -296,7 +296,7 @@ function TaskTable({ rows, basePath }: { rows: TaskView[]; basePath: string }) {
               <tr key={r.id} className={TR_CLASS}>
                 <td className={TD_CLASS}>{r.title}</td>
                 <td className={TD_CLASS}><StatusBadge status={r.status} /></td>
-                <td className={TD_CLASS}>{r.priority}</td>
+                <td className={TD_CLASS}><PriorityBadge priority={r.priority} /></td>
                 <td className={TD_CLASS}>{r.assigneeName ?? "—"}</td>
                 <td className={TD_CLASS}>
                   {r.dueAt ? (
@@ -336,7 +336,7 @@ export async function TaskDetailPage({
       <SectionCard title="Summary">
         <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
           <div><dt className="text-ink-2">Status</dt><dd><StatusBadge status={task.status} /></dd></div>
-          <div><dt className="text-ink-2">Priority</dt><dd className="text-ink">{task.priority}</dd></div>
+          <div><dt className="text-ink-2">Priority</dt><dd><PriorityBadge priority={task.priority} /></dd></div>
           <div><dt className="text-ink-2">Assignee</dt><dd className="text-ink">{task.assigneeName ?? "—"}</dd></div>
           <div><dt className="text-ink-2">Created by</dt><dd className="text-ink">{task.creatorName ?? "—"}</dd></div>
           <div>
@@ -444,7 +444,7 @@ function TicketTable({ rows, basePath }: { rows: TicketView[]; basePath: string 
                 <td className={TD_CLASS}>{r.subject}</td>
                 <td className={TD_CLASS}>{r.category}</td>
                 <td className={TD_CLASS}><StatusBadge status={r.status} /></td>
-                <td className={TD_CLASS}>{r.priority}</td>
+                <td className={TD_CLASS}><PriorityBadge priority={r.priority} /></td>
                 <td className={TD_CLASS}>{r.raiserName ?? r.contactPhone ?? "—"}</td>
                 <td className={TD_CLASS}>{fmtDate(r.createdAt)}</td>
                 <td className={TD_CLASS}>
@@ -480,7 +480,7 @@ export async function TicketDetailPage({
         <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
           <div><dt className="text-ink-2">Status</dt><dd><StatusBadge status={ticket.status} /></dd></div>
           <div><dt className="text-ink-2">Category</dt><dd className="text-ink">{ticket.category}</dd></div>
-          <div><dt className="text-ink-2">Priority</dt><dd className="text-ink">{ticket.priority}</dd></div>
+          <div><dt className="text-ink-2">Priority</dt><dd><PriorityBadge priority={ticket.priority} /></dd></div>
           <div><dt className="text-ink-2">Assigned to</dt><dd className="text-ink">{ticket.assigneeName ?? "Unassigned"}</dd></div>
           <div><dt className="text-ink-2">Package</dt><dd className="font-mono text-ink">{ticket.packageTrackingId ?? "—"}</dd></div>
           <div><dt className="text-ink-2">Raised by</dt><dd className="text-ink">{ticket.raiserName ?? ticket.contactPhone ?? "—"}</dd></div>

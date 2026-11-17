@@ -30,6 +30,7 @@ import {
   TR_CLASS,
 } from "@/components/ui/table-chrome";
 import { TransferSummaryCard } from "@/components/transfers/TransferSummaryCard";
+import { statusLabel } from "@/lib/status/labels";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import {
   AddItemsForm,
@@ -447,49 +448,11 @@ export async function TransferDetailPage({
 
       <TransferSummaryCard transfer={transfer} />
 
-      <SectionCard title="Overview">
-        <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
-          <div>
-            <dt className="text-ink-2">Origin</dt>
-            <dd className="font-medium text-ink">
-              {transfer.originWarehouseName} ({transfer.originWarehouseCode})
-            </dd>
-          </div>
-          <div>
-            <dt className="text-ink-2">Destination</dt>
-            <dd className="font-medium text-ink">
-              {transfer.destinationWarehouseName} ({transfer.destinationWarehouseCode})
-            </dd>
-          </div>
-          <div>
-            <dt className="text-ink-2">Driver</dt>
-            <dd className="font-medium text-ink">{transfer.driverName ?? "Not assigned"}</dd>
-          </div>
-          <div>
-            <dt className="text-ink-2">Vehicle</dt>
-            <dd className="font-medium text-ink">{transfer.vehicleRegistration ?? "Not assigned"}</dd>
-          </div>
-          <div>
-            <dt className="text-ink-2">Expected arrival</dt>
-            <dd className="font-medium text-ink">{fmtDate(transfer.expectedArrivalAt)}</dd>
-          </div>
-          <div>
-            <dt className="text-ink-2">Dispatched</dt>
-            <dd className="font-medium text-ink">{fmtDate(transfer.dispatchedAt)}</dd>
-          </div>
-          <div>
-            <dt className="text-ink-2">Created by</dt>
-            <dd className="font-medium text-ink">{transfer.createdByName}</dd>
-          </div>
-          <div>
-            <dt className="text-ink-2">Approved by</dt>
-            <dd className="font-medium text-ink">{transfer.approvedByName ?? "—"}</dd>
-          </div>
-        </dl>
+      <SectionCard title="Transfer actions">
         {transfer.instructions ? (
-          <p className="mt-3 text-[13px] text-ink-2">Instructions: {transfer.instructions}</p>
+          <p className="text-[13px] text-ink-2">Instructions: {transfer.instructions}</p>
         ) : null}
-        <div className="mt-4">
+        <div className={transfer.instructions ? "mt-4" : ""}>
           <TransferLifecycleButtons
             transferId={transfer.id}
             status={transfer.status}
@@ -824,11 +787,11 @@ export async function DriverDashboardPage({ actor }: { actor: ActorContext }) {
             </div>
             <div>
               <dt className="text-ink-2">Employment</dt>
-              <dd className="font-medium text-ink">{profile.employmentStatus}</dd>
+              <dd className="font-medium text-ink">{statusLabel("generic", profile.employmentStatus)}</dd>
             </div>
             <div>
               <dt className="text-ink-2">Availability</dt>
-              <dd className="font-medium text-ink">{profile.availabilityStatus}</dd>
+              <dd className="font-medium text-ink">{statusLabel("generic", profile.availabilityStatus)}</dd>
             </div>
           </dl>
         ) : (
@@ -848,20 +811,24 @@ export async function DriverDashboardPage({ actor }: { actor: ActorContext }) {
             </p>
             <TripPanel trip={activeTrip} />
             <div className="overflow-auto rounded-md border border-border">
-              <table className="w-full text-left text-[13px]">
+              <table className={TABLE_CLASS}>
                 <thead>
-                  <tr className="border-b border-border text-ink-2">
-                    <th className="px-3 py-2">Tracking ID</th>
-                    <th className="px-3 py-2">Item</th>
-                    <th className="px-3 py-2">Package</th>
+                  <tr className={THEAD_ROW_CLASS}>
+                    <th className={`${TH_CLASS} text-left`}>Tracking ID</th>
+                    <th className={`${TH_CLASS} text-left`}>Item</th>
+                    <th className={`${TH_CLASS} text-left`}>Package</th>
                   </tr>
                 </thead>
                 <tbody>
                   {activeTrip.packages.map((p) => (
-                    <tr key={p.packageId} className="border-b border-border last:border-0">
-                      <td className="px-3 py-2 font-mono">{p.trackingId}</td>
-                      <td className="px-3 py-2">{p.itemStatus}</td>
-                      <td className="px-3 py-2">{p.packageStatus}</td>
+                    <tr key={p.packageId} className={TR_CLASS}>
+                      <td className={TD_ID_CLASS}>{p.trackingId}</td>
+                      <td className={TD_CLASS}>
+                        <SharedStatusBadge domain="generic" status={p.itemStatus} density="compact" />
+                      </td>
+                      <td className={TD_CLASS}>
+                        <SharedStatusBadge domain="operational" status={p.packageStatus} density="compact" />
+                      </td>
                     </tr>
                   ))}
                 </tbody>

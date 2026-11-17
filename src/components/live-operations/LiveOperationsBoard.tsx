@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatPaisa } from "@/components/bookings/ui";
 import { Drawer } from "@/components/ui/Drawer";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import type {
   FreshnessState,
   LiveOperationDetail,
@@ -677,10 +678,14 @@ export function LiveOperationsBoard({
                       >
                         {pkg.trackingId}
                       </Link>
-                      <span className="text-[12px] text-ink-2">
-                        {pkg.packageStatus}
-                        {pkg.itemStatus ? ` · ${pkg.itemStatus}` : ""}
-                        {pkg.assignmentStatus ? ` · ${pkg.assignmentStatus}` : ""}
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <StatusBadge domain="operational" status={pkg.packageStatus} density="compact" />
+                        {pkg.itemStatus ? (
+                          <StatusBadge domain="generic" status={pkg.itemStatus} density="compact" />
+                        ) : null}
+                        {pkg.assignmentStatus ? (
+                          <StatusBadge domain="generic" status={pkg.assignmentStatus} density="compact" />
+                        ) : null}
                       </span>
                     </li>
                   ))}

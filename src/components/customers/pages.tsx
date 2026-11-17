@@ -133,12 +133,17 @@ export async function CustomerDetailPage({
         <Link href={`${basePath}/customers`} className="text-[12px] font-semibold text-primary">
           ← All customers
         </Link>
-        <h1 className="mt-1 text-[20px] font-bold text-ink">{customer.fullName}</h1>
-        <p className="text-[13px] text-ink-2">
-          {customer.phone}
-          {customer.email ? ` · ${customer.email}` : ""}
-          {customer.isMerged ? " · Merged duplicate" : ""}
-        </p>
+        <PageHeader
+          title={customer.fullName}
+          description={
+            <>
+              {customer.phone}
+              {customer.email ? ` · ${customer.email}` : ""}
+              {customer.isMerged ? " · Merged duplicate" : ""}
+            </>
+          }
+          className="mt-1"
+        />
       </div>
       {canManage ? (
         <SectionCard title="Profile">

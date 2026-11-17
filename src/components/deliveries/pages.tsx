@@ -57,6 +57,7 @@ import {
   type WarehouseOption,
 } from "@/components/deliveries/forms";
 import { DriverAssignmentIncidentForm } from "@/components/operations/forms";
+import { statusLabel } from "@/lib/status/labels";
 
 /**
  * Phase 6 delivery + returns screens (warehouse admin + staff
@@ -329,7 +330,7 @@ export async function DeliveryBatchDetailPage({
                   </span>
                   <DeliveryStatusBadge status={a.status} />
                   <span className="text-[13px] text-ink-2">
-                    Package: {a.packageStatus} · Attempts: {a.attemptsRecorded} (
+                    Package: {statusLabel("operational", a.packageStatus)} · Attempts: {a.attemptsRecorded} (
                     {a.failedAttempts} failed)
                     {BigInt(a.codExpectedPaisa) > BigInt(0)
                       ? ` · COD due ${formatPaisa(BigInt(a.codExpectedPaisa))}`
@@ -663,7 +664,7 @@ export async function RiderBatchPage({
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-3">
               <DeliveryStatusBadge status={a.status} />
-              <span className="text-[13px] text-ink-2">Package: {a.packageStatus}</span>
+              <span className="text-[13px] text-ink-2">Package: {statusLabel("operational", a.packageStatus)}</span>
               {a.failedAttempts > 0 ? (
                 <span className="text-[13px] text-ink-2">
                   {a.failedAttempts} failed attempt(s) so far
@@ -696,7 +697,7 @@ export async function RiderBatchPage({
                   {BigInt(a.codExpectedPaisa) > BigInt(0)
                     ? formatPaisa(BigInt(a.codExpectedPaisa))
                     : "None"}
-                  {a.codStatus ? ` · collected: ${a.codStatus}` : ""}
+                  {a.codStatus ? ` · collected: ${statusLabel("payment", a.codStatus)}` : ""}
                 </dd>
               </div>
             </dl>
