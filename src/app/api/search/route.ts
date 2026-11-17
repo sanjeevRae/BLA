@@ -34,7 +34,14 @@ import { listDrivers } from "@/server/services/drivers";
  * - packages: listPackages scopes by `package.read_all`, else the
  *   actor's vendor link, else the actor's customer link, else the
  *   actor's warehouse memberships (and audits + throws otherwise).
- *   Gate = exactly those four branches.
+ *   Gate = exactly those four branches, EXCEPT that a driver-primary
+ *   actor (RIDER / LINEHAUL_DRIVER) never qualifies through the
+ *   warehouse-membership branch: listPackages has no driver-
+ *   assignment branch, so a rider who also holds a warehouse
+ *   membership would otherwise search every package at that
+ *   warehouse. Driver-primary actors qualify only via read_all /
+ *   vendor / customer. The tracking-ID fallback applies the same
+ *   rule (no existence oracle via the warehouse branch either).
  * - bookings: listBookings scopes by `booking.read_all`, else
  *   vendor link, else customer link, else warehouse memberships
  *   (audits + throws otherwise). Gate = those branches AND the
@@ -111,10 +118,18 @@ function treeFor(actor: ActorContext): DashboardId | null {
   return actor.primaryRole ? ROLE_TO_DASHBOARD[actor.primaryRole] : null;
 }
 
+/** Driver-primary actors never inherit warehouse package scope (F1). */
+function isDriverPrimary(actor: ActorContext): boolean {
+  return actor.primaryRole === "RIDER" || actor.primaryRole === "LINEHAUL_DRIVER";
+}
+
 /** The branches listPackages / listBookings themselves scope by. */
 function hasRecordScope(actor: ActorContext): boolean {
+  const driverPrimary = isDriverPrimary(actor);
   return Boolean(
-    actor.vendorId || actor.customerId || actor.warehouseIds.length > 0,
+    actor.vendorId ||
+      actor.customerId ||
+      (!driverPrimary && actor.warehouseIds.length > 0),
   );
 }
 
@@ -136,7 +151,14 @@ async function packageGroup(
   // must never become an existence oracle for packages the actor may
   // not see.
   const trackingCandidate = q.toUpperCase();
-  if (isValidTrackingId(trackingCandidate)) {
+  // F1: for driver-primary actors the exact lookup is attempted only
+  // when they qualify via read_all / vendor / customer — never via a
+  // warehouse membership — so it cannot become an existence oracle.
+  const trackingAllowed =
+    !isDriverPrimary(actor) ||
+    actor.permissions.has("package.read_all") ||
+    Boolean(actor.vendorId || actor.customerId);
+  if (trackingAllowed && isValidTrackingId(trackingCandidate)) {
     try {
       const exact = await getPackageByTrackingId(actor, trackingCandidate);
       if (!rows.some((pkg) => pkg.id === exact.id)) rows.unshift(exact);

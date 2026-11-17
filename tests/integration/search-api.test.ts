@@ -88,6 +88,7 @@ const fx: Record<string, string> = {};
 let saActor: Actor;
 let ktmWaActor: Actor;
 let pkrWaActor: Actor;
+let riderWarehouseActor: Actor;
 let vendorActor: Actor;
 let customerActor: Actor;
 let serviceCode: string;
@@ -358,6 +359,13 @@ beforeAll(async () => {
   await addMembership(pkrWaUser, fx.whPkr, "WAREHOUSE_ADMIN");
   pkrWaActor = await actorFor(pkrWaUser);
 
+  // F1 fixture: RIDER-primary actor who ALSO holds a warehouse
+  // membership at KTM — the combination that previously inherited
+  // full warehouse package scope through the search gate.
+  const riderWhUser = await makeUser("rider-wh", "RIDER");
+  await addMembership(riderWhUser, fx.whKtm, "WAREHOUSE_STAFF");
+  riderWarehouseActor = await actorFor(riderWhUser);
+
   // Shipping service + catch-all tariff for this run.
   serviceCode = `S3Q${RUN.slice(-6)}`.toUpperCase();
   const service = await prisma.shippingService.create({
@@ -594,6 +602,39 @@ describe("GET /api/search — vendor scope", () => {
     expect(byName.body.groups.map((g) => g.id)).not.toContain("customers");
     expect(byName.body.groups.map((g) => g.id)).not.toContain("warehouses");
     expect(byName.body.groups.map((g) => g.id)).not.toContain("drivers");
+  });
+});
+
+describe("GET /api/search — driver-primary warehouse exclusion (F1)", () => {
+  it("RIDER-primary actor with a KTM warehouse membership gets NO packages group and no leakage", async () => {
+    expect(riderWarehouseActor.primaryRole).toBe("RIDER");
+    expect(riderWarehouseActor.warehouseIds).toContain(fx.whKtm);
+    expect(riderWarehouseActor.permissions.has("package.read_all")).toBe(false);
+    expect(riderWarehouseActor.vendorId).toBeNull();
+    expect(riderWarehouseActor.customerId).toBeNull();
+
+    const byRecipient = await search(riderWarehouseActor, "Recipient One");
+    expect(byRecipient.status).toBe(200);
+    expect(groupOf(byRecipient.body, "packages")).toBeUndefined();
+    expect(byRecipient.raw).not.toContain(fx.ktmTracking);
+    expect(byRecipient.raw).not.toContain("Recipient One");
+  });
+
+  it("tracking-ID query for the same rider actor also returns nothing (no existence oracle)", async () => {
+    const byTracking = await search(riderWarehouseActor, fx.ktmTracking);
+    expect(byTracking.status).toBe(200);
+    expect(byTracking.raw).not.toContain(fx.ktmTracking);
+    expect(byTracking.raw).not.toContain("Recipient One");
+    expect(groupOf(byTracking.body, "packages")).toBeUndefined();
+    expect(byTracking.body.groups).toEqual([]);
+  });
+
+  it("positive control: warehouse actor at the same warehouse still finds the package", async () => {
+    const byTracking = await search(ktmWaActor, fx.ktmTracking);
+    expect(byTracking.status).toBe(200);
+    const packages = groupOf(byTracking.body, "packages");
+    expect(packages).toBeDefined();
+    expect(packages!.results.some((r) => r.label === fx.ktmTracking)).toBe(true);
   });
 });
 
