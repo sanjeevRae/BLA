@@ -3,6 +3,16 @@ import Link from "next/link";
 import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import { StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { DensityScope } from "@/components/ui/TableDensity";
+import {
+  TABLE_CLASS,
+  TD_CLASS,
+  TD_ID_CLASS,
+  THEAD_ROW_CLASS,
+  TH_CLASS,
+  TR_CLASS,
+} from "@/components/ui/table-chrome";
 import { listWarehouses } from "@/server/services/warehouses";
 import {
   getIncident,
@@ -46,17 +56,6 @@ import {
  * from the services — scoped inside their queries — never from
  * client-supplied state.
  */
-
-function PageHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
-  return (
-    <div>
-      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
-        {eyebrow}
-      </div>
-      <h1 className="mt-0.5 text-[22px] font-bold text-ink">{title}</h1>
-    </div>
-  );
-}
 
 export function StatusBadge({ status }: { status: string }) {
   return <SharedStatusBadge domain="generic" status={status} />;
@@ -113,43 +112,45 @@ export async function IncidentsQueuePage({
 
 function IncidentTable({ rows, basePath }: { rows: IncidentView[]; basePath: string }) {
   if (rows.length === 0) {
-    return <p className="text-[13px] text-slate2">No incidents here.</p>;
+    return <p className="text-[13px] text-ink-2">No incidents here.</p>;
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-[13px]">
-        <thead>
-          <tr className="border-b border-line text-[11px] uppercase tracking-wide text-slate2">
-            <th className="py-2 pr-3">Number</th>
-            <th className="py-2 pr-3">Category</th>
-            <th className="py-2 pr-3">Severity</th>
-            <th className="py-2 pr-3">Status</th>
-            <th className="py-2 pr-3">Package</th>
-            <th className="py-2 pr-3">Assignee</th>
-            <th className="py-2 pr-3">Raised</th>
-            <th className="py-2" />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id} className="border-b border-line/60">
-              <td className="py-2 pr-3 font-mono">{r.incidentNumber}</td>
-              <td className="py-2 pr-3">{r.category}</td>
-              <td className="py-2 pr-3"><SeverityBadge severity={r.severity} /></td>
-              <td className="py-2 pr-3"><StatusBadge status={r.status} /></td>
-              <td className="py-2 pr-3 font-mono">{r.packageTrackingId ?? "—"}</td>
-              <td className="py-2 pr-3">{r.assigneeName ?? "—"}</td>
-              <td className="py-2 pr-3">{fmtDate(r.createdAt)}</td>
-              <td className="py-2">
-                <Link className={subtleButtonClass} href={`${basePath}/incidents/${r.id}`}>
-                  Open
-                </Link>
-              </td>
+    <DensityScope showToggle>
+      <div className="overflow-x-auto">
+        <table className={TABLE_CLASS}>
+          <thead>
+            <tr className={THEAD_ROW_CLASS}>
+              <th className={`${TH_CLASS} text-left`}>Number</th>
+              <th className={`${TH_CLASS} text-left`}>Category</th>
+              <th className={`${TH_CLASS} text-left`}>Severity</th>
+              <th className={`${TH_CLASS} text-left`}>Status</th>
+              <th className={`${TH_CLASS} text-left`}>Package</th>
+              <th className={`${TH_CLASS} text-left`}>Assignee</th>
+              <th className={`${TH_CLASS} text-left`}>Raised</th>
+              <th className={`${TH_CLASS} text-left`} />
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className={TR_CLASS}>
+                <td className={TD_ID_CLASS}>{r.incidentNumber}</td>
+                <td className={TD_CLASS}>{r.category}</td>
+                <td className={TD_CLASS}><SeverityBadge severity={r.severity} /></td>
+                <td className={TD_CLASS}><StatusBadge status={r.status} /></td>
+                <td className={TD_ID_CLASS}>{r.packageTrackingId ?? "—"}</td>
+                <td className={TD_CLASS}>{r.assigneeName ?? "—"}</td>
+                <td className={TD_CLASS}>{fmtDate(r.createdAt)}</td>
+                <td className={TD_CLASS}>
+                  <Link className={subtleButtonClass} href={`${basePath}/incidents/${r.id}`}>
+                    Open
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </DensityScope>
   );
 }
 
@@ -170,20 +171,20 @@ export async function IncidentDetailPage({
       <PageHeader eyebrow={`Incident ${incident.incidentNumber}`} title={incident.category} />
       <SectionCard title="Summary">
         <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
-          <div><dt className="text-slate2">Status</dt><dd><StatusBadge status={incident.status} /></dd></div>
-          <div><dt className="text-slate2">Severity</dt><dd><SeverityBadge severity={incident.severity} /></dd></div>
-          <div><dt className="text-slate2">Team</dt><dd className="text-ink">{incident.responsibleTeam ?? "—"}</dd></div>
-          <div><dt className="text-slate2">Reporter</dt><dd className="text-ink">{incident.reporterName ?? "—"}</dd></div>
-          <div><dt className="text-slate2">Assignee</dt><dd className="text-ink">{incident.assigneeName ?? "Unassigned"}</dd></div>
-          <div><dt className="text-slate2">Package</dt><dd className="font-mono text-ink">{incident.packageTrackingId ?? "—"}</dd></div>
-          <div><dt className="text-slate2">Raised</dt><dd className="text-ink">{fmtDate(incident.createdAt)}</dd></div>
-          <div><dt className="text-slate2">Resolved</dt><dd className="text-ink">{fmtDate(incident.resolvedAt)}</dd></div>
+          <div><dt className="text-ink-2">Status</dt><dd><StatusBadge status={incident.status} /></dd></div>
+          <div><dt className="text-ink-2">Severity</dt><dd><SeverityBadge severity={incident.severity} /></dd></div>
+          <div><dt className="text-ink-2">Team</dt><dd className="text-ink">{incident.responsibleTeam ?? "—"}</dd></div>
+          <div><dt className="text-ink-2">Reporter</dt><dd className="text-ink">{incident.reporterName ?? "—"}</dd></div>
+          <div><dt className="text-ink-2">Assignee</dt><dd className="text-ink">{incident.assigneeName ?? "Unassigned"}</dd></div>
+          <div><dt className="text-ink-2">Package</dt><dd className="font-mono text-ink">{incident.packageTrackingId ?? "—"}</dd></div>
+          <div><dt className="text-ink-2">Raised</dt><dd className="text-ink">{fmtDate(incident.createdAt)}</dd></div>
+          <div><dt className="text-ink-2">Resolved</dt><dd className="text-ink">{fmtDate(incident.resolvedAt)}</dd></div>
         </dl>
         <p className="mt-3 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">
           {incident.description}
         </p>
         {incident.resolution ? (
-          <p className="mt-3 rounded-md border border-line bg-page px-3 py-2 text-[13px] text-ink">
+          <p className="mt-3 rounded-md border border-border bg-page px-3 py-2 text-[13px] text-ink">
             <strong>Resolution:</strong> {incident.resolution}
           </p>
         ) : null}
@@ -191,12 +192,12 @@ export async function IncidentDetailPage({
 
       <SectionCard title="Investigation thread">
         {incident.notes.length === 0 ? (
-          <p className="text-[13px] text-slate2">No notes yet.</p>
+          <p className="text-[13px] text-ink-2">No notes yet.</p>
         ) : (
           <ul className="grid gap-3">
             {incident.notes.map((n) => (
-              <li key={n.id} className="rounded-md border border-line bg-page px-3 py-2">
-                <div className="text-[12px] text-slate2">
+              <li key={n.id} className="rounded-md border border-border bg-page px-3 py-2">
+                <div className="text-[12px] text-ink-2">
                   {n.authorName} · {fmtDate(n.createdAt)}
                 </div>
                 <p className="whitespace-pre-wrap text-[13px] text-ink">{n.body}</p>
@@ -274,45 +275,47 @@ export async function TasksBoardPage({
 
 function TaskTable({ rows, basePath }: { rows: TaskView[]; basePath: string }) {
   if (rows.length === 0) {
-    return <p className="text-[13px] text-slate2">No tasks here.</p>;
+    return <p className="text-[13px] text-ink-2">No tasks here.</p>;
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-[13px]">
-        <thead>
-          <tr className="border-b border-line text-[11px] uppercase tracking-wide text-slate2">
-            <th className="py-2 pr-3">Title</th>
-            <th className="py-2 pr-3">Status</th>
-            <th className="py-2 pr-3">Priority</th>
-            <th className="py-2 pr-3">Assignee</th>
-            <th className="py-2 pr-3">Due</th>
-            <th className="py-2" />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id} className="border-b border-line/60">
-              <td className="py-2 pr-3 text-ink">{r.title}</td>
-              <td className="py-2 pr-3"><StatusBadge status={r.status} /></td>
-              <td className="py-2 pr-3">{r.priority}</td>
-              <td className="py-2 pr-3">{r.assigneeName ?? "—"}</td>
-              <td className="py-2 pr-3">
-                {r.dueAt ? (
-                  <span className={r.overdue ? "font-semibold text-red" : ""}>
-                    {fmtDate(r.dueAt)}{r.overdue ? " (overdue)" : ""}
-                  </span>
-                ) : "—"}
-              </td>
-              <td className="py-2">
-                <Link className={subtleButtonClass} href={`${basePath}/tasks/${r.id}`}>
-                  Open
-                </Link>
-              </td>
+    <DensityScope showToggle>
+      <div className="overflow-x-auto">
+        <table className={TABLE_CLASS}>
+          <thead>
+            <tr className={THEAD_ROW_CLASS}>
+              <th className={`${TH_CLASS} text-left`}>Title</th>
+              <th className={`${TH_CLASS} text-left`}>Status</th>
+              <th className={`${TH_CLASS} text-left`}>Priority</th>
+              <th className={`${TH_CLASS} text-left`}>Assignee</th>
+              <th className={`${TH_CLASS} text-left`}>Due</th>
+              <th className={`${TH_CLASS} text-left`} />
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className={TR_CLASS}>
+                <td className={TD_CLASS}>{r.title}</td>
+                <td className={TD_CLASS}><StatusBadge status={r.status} /></td>
+                <td className={TD_CLASS}>{r.priority}</td>
+                <td className={TD_CLASS}>{r.assigneeName ?? "—"}</td>
+                <td className={TD_CLASS}>
+                  {r.dueAt ? (
+                    <span className={r.overdue ? "font-semibold text-red" : ""}>
+                      {fmtDate(r.dueAt)}{r.overdue ? " (overdue)" : ""}
+                    </span>
+                  ) : "—"}
+                </td>
+                <td className={TD_CLASS}>
+                  <Link className={subtleButtonClass} href={`${basePath}/tasks/${r.id}`}>
+                    Open
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </DensityScope>
   );
 }
 
@@ -332,36 +335,36 @@ export async function TaskDetailPage({
       <PageHeader eyebrow="Task" title={task.title} />
       <SectionCard title="Summary">
         <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
-          <div><dt className="text-slate2">Status</dt><dd><StatusBadge status={task.status} /></dd></div>
-          <div><dt className="text-slate2">Priority</dt><dd className="text-ink">{task.priority}</dd></div>
-          <div><dt className="text-slate2">Assignee</dt><dd className="text-ink">{task.assigneeName ?? "—"}</dd></div>
-          <div><dt className="text-slate2">Created by</dt><dd className="text-ink">{task.creatorName ?? "—"}</dd></div>
+          <div><dt className="text-ink-2">Status</dt><dd><StatusBadge status={task.status} /></dd></div>
+          <div><dt className="text-ink-2">Priority</dt><dd className="text-ink">{task.priority}</dd></div>
+          <div><dt className="text-ink-2">Assignee</dt><dd className="text-ink">{task.assigneeName ?? "—"}</dd></div>
+          <div><dt className="text-ink-2">Created by</dt><dd className="text-ink">{task.creatorName ?? "—"}</dd></div>
           <div>
-            <dt className="text-slate2">Due</dt>
+            <dt className="text-ink-2">Due</dt>
             <dd className={task.overdue ? "font-semibold text-red" : "text-ink"}>
               {fmtDate(task.dueAt)}{task.overdue ? " (overdue)" : ""}
             </dd>
           </div>
-          <div><dt className="text-slate2">Accepted</dt><dd className="text-ink">{fmtDate(task.acceptedAt)}</dd></div>
-          <div><dt className="text-slate2">Submitted</dt><dd className="text-ink">{fmtDate(task.submittedAt)}</dd></div>
-          <div><dt className="text-slate2">Verified</dt><dd className="text-ink">{fmtDate(task.verifiedAt)}</dd></div>
+          <div><dt className="text-ink-2">Accepted</dt><dd className="text-ink">{fmtDate(task.acceptedAt)}</dd></div>
+          <div><dt className="text-ink-2">Submitted</dt><dd className="text-ink">{fmtDate(task.submittedAt)}</dd></div>
+          <div><dt className="text-ink-2">Verified</dt><dd className="text-ink">{fmtDate(task.verifiedAt)}</dd></div>
         </dl>
         {task.description ? (
           <p className="mt-3 whitespace-pre-wrap text-[13px] leading-relaxed text-ink">{task.description}</p>
         ) : null}
         {task.reassignmentReason ? (
-          <p className="mt-2 text-[13px] text-slate2">Last reassignment: {task.reassignmentReason}</p>
+          <p className="mt-2 text-[13px] text-ink-2">Last reassignment: {task.reassignmentReason}</p>
         ) : null}
       </SectionCard>
 
       <SectionCard title="Comments">
         {task.comments.length === 0 ? (
-          <p className="text-[13px] text-slate2">No comments yet.</p>
+          <p className="text-[13px] text-ink-2">No comments yet.</p>
         ) : (
           <ul className="grid gap-3">
             {task.comments.map((c) => (
-              <li key={c.id} className="rounded-md border border-line bg-page px-3 py-2">
-                <div className="text-[12px] text-slate2">{c.authorName} · {fmtDate(c.createdAt)}</div>
+              <li key={c.id} className="rounded-md border border-border bg-page px-3 py-2">
+                <div className="text-[12px] text-ink-2">{c.authorName} · {fmtDate(c.createdAt)}</div>
                 <p className="whitespace-pre-wrap text-[13px] text-ink">{c.body}</p>
               </li>
             ))}
@@ -416,43 +419,45 @@ export async function TicketsInboxPage({
 
 function TicketTable({ rows, basePath }: { rows: TicketView[]; basePath: string }) {
   if (rows.length === 0) {
-    return <p className="text-[13px] text-slate2">No tickets here.</p>;
+    return <p className="text-[13px] text-ink-2">No tickets here.</p>;
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-[13px]">
-        <thead>
-          <tr className="border-b border-line text-[11px] uppercase tracking-wide text-slate2">
-            <th className="py-2 pr-3">Number</th>
-            <th className="py-2 pr-3">Subject</th>
-            <th className="py-2 pr-3">Category</th>
-            <th className="py-2 pr-3">Status</th>
-            <th className="py-2 pr-3">Priority</th>
-            <th className="py-2 pr-3">Raised by</th>
-            <th className="py-2 pr-3">Raised</th>
-            <th className="py-2" />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id} className="border-b border-line/60">
-              <td className="py-2 pr-3 font-mono">{r.ticketNumber}</td>
-              <td className="py-2 pr-3 text-ink">{r.subject}</td>
-              <td className="py-2 pr-3">{r.category}</td>
-              <td className="py-2 pr-3"><StatusBadge status={r.status} /></td>
-              <td className="py-2 pr-3">{r.priority}</td>
-              <td className="py-2 pr-3">{r.raiserName ?? r.contactPhone ?? "—"}</td>
-              <td className="py-2 pr-3">{fmtDate(r.createdAt)}</td>
-              <td className="py-2">
-                <Link className={subtleButtonClass} href={`${basePath}/tickets/${r.id}`}>
-                  Open
-                </Link>
-              </td>
+    <DensityScope showToggle>
+      <div className="overflow-x-auto">
+        <table className={TABLE_CLASS}>
+          <thead>
+            <tr className={THEAD_ROW_CLASS}>
+              <th className={`${TH_CLASS} text-left`}>Number</th>
+              <th className={`${TH_CLASS} text-left`}>Subject</th>
+              <th className={`${TH_CLASS} text-left`}>Category</th>
+              <th className={`${TH_CLASS} text-left`}>Status</th>
+              <th className={`${TH_CLASS} text-left`}>Priority</th>
+              <th className={`${TH_CLASS} text-left`}>Raised by</th>
+              <th className={`${TH_CLASS} text-left`}>Raised</th>
+              <th className={`${TH_CLASS} text-left`} />
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} className={TR_CLASS}>
+                <td className={TD_ID_CLASS}>{r.ticketNumber}</td>
+                <td className={TD_CLASS}>{r.subject}</td>
+                <td className={TD_CLASS}>{r.category}</td>
+                <td className={TD_CLASS}><StatusBadge status={r.status} /></td>
+                <td className={TD_CLASS}>{r.priority}</td>
+                <td className={TD_CLASS}>{r.raiserName ?? r.contactPhone ?? "—"}</td>
+                <td className={TD_CLASS}>{fmtDate(r.createdAt)}</td>
+                <td className={TD_CLASS}>
+                  <Link className={subtleButtonClass} href={`${basePath}/tickets/${r.id}`}>
+                    Open
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </DensityScope>
   );
 }
 
@@ -473,17 +478,17 @@ export async function TicketDetailPage({
       <PageHeader eyebrow={`Ticket ${ticket.ticketNumber}`} title={ticket.subject} />
       <SectionCard title="Summary">
         <dl className="grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
-          <div><dt className="text-slate2">Status</dt><dd><StatusBadge status={ticket.status} /></dd></div>
-          <div><dt className="text-slate2">Category</dt><dd className="text-ink">{ticket.category}</dd></div>
-          <div><dt className="text-slate2">Priority</dt><dd className="text-ink">{ticket.priority}</dd></div>
-          <div><dt className="text-slate2">Assigned to</dt><dd className="text-ink">{ticket.assigneeName ?? "Unassigned"}</dd></div>
-          <div><dt className="text-slate2">Package</dt><dd className="font-mono text-ink">{ticket.packageTrackingId ?? "—"}</dd></div>
-          <div><dt className="text-slate2">Raised by</dt><dd className="text-ink">{ticket.raiserName ?? ticket.contactPhone ?? "—"}</dd></div>
-          <div><dt className="text-slate2">Raised</dt><dd className="text-ink">{fmtDate(ticket.createdAt)}</dd></div>
-          <div><dt className="text-slate2">Resolved</dt><dd className="text-ink">{fmtDate(ticket.resolvedAt)}</dd></div>
+          <div><dt className="text-ink-2">Status</dt><dd><StatusBadge status={ticket.status} /></dd></div>
+          <div><dt className="text-ink-2">Category</dt><dd className="text-ink">{ticket.category}</dd></div>
+          <div><dt className="text-ink-2">Priority</dt><dd className="text-ink">{ticket.priority}</dd></div>
+          <div><dt className="text-ink-2">Assigned to</dt><dd className="text-ink">{ticket.assigneeName ?? "Unassigned"}</dd></div>
+          <div><dt className="text-ink-2">Package</dt><dd className="font-mono text-ink">{ticket.packageTrackingId ?? "—"}</dd></div>
+          <div><dt className="text-ink-2">Raised by</dt><dd className="text-ink">{ticket.raiserName ?? ticket.contactPhone ?? "—"}</dd></div>
+          <div><dt className="text-ink-2">Raised</dt><dd className="text-ink">{fmtDate(ticket.createdAt)}</dd></div>
+          <div><dt className="text-ink-2">Resolved</dt><dd className="text-ink">{fmtDate(ticket.resolvedAt)}</dd></div>
         </dl>
         {ticket.resolutionNote ? (
-          <p className="mt-3 rounded-md border border-line bg-page px-3 py-2 text-[13px] text-ink">
+          <p className="mt-3 rounded-md border border-border bg-page px-3 py-2 text-[13px] text-ink">
             <strong>Resolution:</strong> {ticket.resolutionNote}
           </p>
         ) : null}
@@ -495,10 +500,10 @@ export async function TicketDetailPage({
             <li
               key={m.id}
               className={`rounded-md border px-3 py-2 ${
-                m.visibility === "INTERNAL" ? "border-red/40 bg-page" : "border-line bg-page"
+                m.visibility === "INTERNAL" ? "border-red/40 bg-page" : "border-border bg-page"
               }`}
             >
-              <div className="text-[12px] text-slate2">
+              <div className="text-[12px] text-ink-2">
                 {m.authorName} · {fmtDate(m.createdAt)}
                 {m.visibility === "INTERNAL" ? " · INTERNAL (staff only)" : ""}
               </div>
@@ -534,7 +539,7 @@ export async function NotificationsPage({ actor }: { actor: ActorContext }) {
       <div className="grid gap-5">
         <PageHeader eyebrow="Account" title="Notifications" />
         <SectionCard title="Inbox">
-          <p className="text-[13px] text-slate2">
+          <p className="text-[13px] text-ink-2">
             This account receives delivery updates on the tracking page instead of an
             in-app inbox.
           </p>
@@ -555,14 +560,14 @@ export async function NotificationsPage({ actor }: { actor: ActorContext }) {
           <MarkAllReadButton />
         </div>
         {list.items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No notifications.</p>
+          <p className="text-[13px] text-ink-2">No notifications.</p>
         ) : (
           <ul className="grid gap-2">
             {list.items.map((n) => (
               <li
                 key={n.id}
                 className={`flex items-start justify-between gap-3 rounded-md border px-3 py-2 ${
-                  n.readAt ? "border-line bg-surface" : "border-line bg-page"
+                  n.readAt ? "border-border bg-card" : "border-border bg-page"
                 }`}
               >
                 <div>
@@ -570,8 +575,8 @@ export async function NotificationsPage({ actor }: { actor: ActorContext }) {
                     {n.title}
                     {!n.readAt ? <span className="ml-2 text-[11px] font-bold text-red">NEW</span> : null}
                   </div>
-                  <p className="text-[13px] text-slate2">{n.body}</p>
-                  <div className="text-[12px] text-faint">
+                  <p className="text-[13px] text-ink-2">{n.body}</p>
+                  <div className="text-[12px] text-ink-2">
                     {n.category} · {fmtDate(n.createdAt)}
                   </div>
                 </div>
@@ -582,7 +587,7 @@ export async function NotificationsPage({ actor }: { actor: ActorContext }) {
         )}
       </SectionCard>
       <SectionCard title="Channel preferences">
-        <p className="mb-3 text-[13px] text-slate2">
+        <p className="mb-3 text-[13px] text-ink-2">
           In-app notifications are always delivered here. Email and SMS take effect when a
           provider is connected; today they are recorded as intent only.
         </p>

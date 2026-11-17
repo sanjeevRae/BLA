@@ -17,6 +17,16 @@ import {
 } from "@/server/services/inventory";
 import { listCustody, listHandovers } from "@/server/services/custody";
 import { listStockItems, listStockMovements } from "@/server/services/supplies";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { DensityScope } from "@/components/ui/TableDensity";
+import {
+  TABLE_CLASS,
+  TD_CLASS,
+  TD_ID_CLASS,
+  THEAD_ROW_CLASS,
+  TH_CLASS,
+  TR_CLASS,
+} from "@/components/ui/table-chrome";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import {
   CloseHandoverButton,
@@ -48,23 +58,12 @@ async function actorWarehouses(actor: ActorContext): Promise<WarehouseView[]> {
 
 function NoWarehouseNotice() {
   return (
-    <div className="rounded-lg border border-line bg-surface p-6">
+    <div className="rounded-lg border border-border bg-card p-6">
       <h1 className="text-[22px] font-bold text-ink">No warehouse assigned</h1>
-      <p className="mt-2 max-w-[640px] text-[13px] leading-relaxed text-slate2">
+      <p className="mt-2 max-w-[640px] text-[13px] leading-relaxed text-ink-2">
         Your account has no active warehouse membership, so there is no warehouse stock,
         custody or supplies to show. Ask an Admin to assign you to a warehouse.
       </p>
-    </div>
-  );
-}
-
-function PageHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
-  return (
-    <div>
-      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
-        {eyebrow}
-      </div>
-      <h1 className="mt-0.5 text-[22px] font-bold text-ink">{title}</h1>
     </div>
   );
 }
@@ -129,11 +128,11 @@ export async function WarehouseOpsHomePanel({
         {summaries.map((summary) => (
           <div
             key={summary.warehouseId}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-2 text-[13px]"
+            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-[13px]"
           >
             <span className="font-mono font-semibold text-ink">{summary.warehouseCode}</span>
             <CapacityLine summary={summary} />
-            <span className="text-slate2">
+            <span className="text-ink-2">
               {summary.damagedPackages} damaged · {summary.pendingHandovers} handover(s)
               open · {summary.lowStockItems} low-stock supply item(s)
             </span>
@@ -232,10 +231,10 @@ export async function OperationsPage({
         <div key={warehouse.id} className="flex flex-col gap-4">
           <h2 className="text-[15px] font-bold text-ink">
             {warehouse.name}{" "}
-            <span className="font-mono text-[12px] font-semibold text-slate2">
+            <span className="font-mono text-[12px] font-semibold text-ink-2">
               {warehouse.code}
             </span>{" "}
-            <span className="text-[12px] font-normal text-slate2">
+            <span className="text-[12px] font-normal text-ink-2">
               · <CapacityLine summary={summary} />
             </span>
           </h2>
@@ -246,7 +245,7 @@ export async function OperationsPage({
           ) : null}
           <SectionCard title={`In the building (${inventory.length})`}>
             {inventory.length === 0 ? (
-              <p className="text-[13px] text-faint">
+              <p className="text-[13px] text-ink-2">
                 Nothing in stock. Received parcels appear here immediately.
               </p>
             ) : (
@@ -254,17 +253,17 @@ export async function OperationsPage({
                 {inventory.map((row) => (
                   <div
                     key={row.id}
-                    className="grid gap-2 rounded-md border border-line px-3 py-2"
+                    className="grid gap-2 rounded-md border border-border px-3 py-2"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]">
                       <span className="font-mono font-semibold text-ink">
                         {row.trackingId}
                       </span>
-                      <span className="text-slate2">
+                      <span className="text-ink-2">
                         {row.recipientName} · {row.deliveryDistrict}
                       </span>
                       <span className="text-ink">{row.packageStatus.replaceAll("_", " ")}</span>
-                      <span className="text-slate2">
+                      <span className="text-ink-2">
                         {row.locationCode ?? "No location yet"}
                         {row.zoneKind ? ` (${row.zoneKind.toLowerCase()})` : ""}
                       </span>
@@ -342,16 +341,16 @@ export async function InventoryPage({
           <div key={warehouse.id} className="flex flex-col gap-4">
             <h2 className="text-[15px] font-bold text-ink">
               {warehouse.name}{" "}
-              <span className="font-mono text-[12px] font-semibold text-slate2">
+              <span className="font-mono text-[12px] font-semibold text-ink-2">
                 {warehouse.code}
               </span>{" "}
-              <span className="text-[12px] font-normal text-slate2">
+              <span className="text-[12px] font-normal text-ink-2">
                 · <CapacityLine summary={summary} />
               </span>
             </h2>
             <SectionCard title="Stock by zone">
               {byZone.size === 0 ? (
-                <p className="text-[13px] text-faint">No stock on hand.</p>
+                <p className="text-[13px] text-ink-2">No stock on hand.</p>
               ) : (
                 <div className="flex flex-wrap gap-2">
                   {[...byZone.entries()].map(([zone, count]) => (
@@ -367,58 +366,58 @@ export async function InventoryPage({
             </SectionCard>
             <SectionCard title={`Parcels in stock (${inventory.length})`}>
               {inventory.length === 0 ? (
-                <p className="text-[13px] text-faint">Nothing in stock.</p>
+                <p className="text-[13px] text-ink-2">Nothing in stock.</p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-[13px]">
-                    <thead>
-                      <tr className="text-[11px] uppercase tracking-[0.12em] text-slate2">
-                        <th className="py-1 pr-3">Tracking ID</th>
-                        <th className="py-1 pr-3">Recipient</th>
-                        <th className="py-1 pr-3">Status</th>
-                        <th className="py-1 pr-3">Location</th>
-                        <th className="py-1 pr-3">Condition</th>
-                        <th className="py-1">Received</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {inventory.map((row) => (
-                        <tr key={row.id} className="border-t border-line">
-                          <td className="py-1.5 pr-3 font-mono font-semibold text-ink">
-                            {row.trackingId}
-                          </td>
-                          <td className="py-1.5 pr-3 text-ink">
-                            {row.recipientName} · {row.deliveryDistrict}
-                          </td>
-                          <td className="py-1.5 pr-3 text-ink">
-                            {row.packageStatus.replaceAll("_", " ")}
-                          </td>
-                          <td className="py-1.5 pr-3 text-slate2">
-                            {row.locationCode ?? "—"}
-                          </td>
-                          <td className="py-1.5 pr-3 text-ink">
-                            {row.packageCondition}
-                            {row.exceptionStatus !== "NONE"
-                              ? ` (${row.exceptionStatus.replaceAll("_", " ")})`
-                              : ""}
-                          </td>
-                          <td className="py-1.5 text-slate2">
-                            {new Date(row.receivedAt).toLocaleString()} · {row.receivedByName}
-                          </td>
+                <DensityScope showToggle>
+                  <div className="overflow-x-auto">
+                    <table className={TABLE_CLASS}>
+                      <thead>
+                        <tr className={THEAD_ROW_CLASS}>
+                          <th className={`${TH_CLASS} text-left`}>Tracking ID</th>
+                          <th className={`${TH_CLASS} text-left`}>Recipient</th>
+                          <th className={`${TH_CLASS} text-left`}>Status</th>
+                          <th className={`${TH_CLASS} text-left`}>Location</th>
+                          <th className={`${TH_CLASS} text-left`}>Condition</th>
+                          <th className={`${TH_CLASS} text-left`}>Received</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {inventory.map((row) => (
+                          <tr key={row.id} className={TR_CLASS}>
+                            <td className={`${TD_ID_CLASS} font-semibold`}>{row.trackingId}</td>
+                            <td className={TD_CLASS}>
+                              {row.recipientName} · {row.deliveryDistrict}
+                            </td>
+                            <td className={TD_CLASS}>
+                              {row.packageStatus.replaceAll("_", " ")}
+                            </td>
+                            <td className="px-3 py-2 text-table text-ink-2">
+                              {row.locationCode ?? "—"}
+                            </td>
+                            <td className={TD_CLASS}>
+                              {row.packageCondition}
+                              {row.exceptionStatus !== "NONE"
+                                ? ` (${row.exceptionStatus.replaceAll("_", " ")})`
+                                : ""}
+                            </td>
+                            <td className="px-3 py-2 text-table text-ink-2">
+                              {new Date(row.receivedAt).toLocaleString()} · {row.receivedByName}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </DensityScope>
               )}
             </SectionCard>
             <SectionCard title="Recent movements">
               {movements.length === 0 ? (
-                <p className="text-[13px] text-faint">No movements recorded yet.</p>
+                <p className="text-[13px] text-ink-2">No movements recorded yet.</p>
               ) : (
                 <div className="grid gap-1.5">
                   {movements.map((m) => (
-                    <div key={m.id} className="text-[13px] text-slate2">
+                    <div key={m.id} className="text-[13px] text-ink-2">
                       <span className="font-semibold text-ink">
                         {m.type.replaceAll("_", " ")}
                       </span>{" "}
@@ -493,22 +492,22 @@ export async function HandoversPage({
           <div key={warehouse.id} className="flex flex-col gap-4">
             <h2 className="text-[15px] font-bold text-ink">
               {warehouse.name}{" "}
-              <span className="font-mono text-[12px] font-semibold text-slate2">
+              <span className="font-mono text-[12px] font-semibold text-ink-2">
                 {warehouse.code}
               </span>
             </h2>
             <SectionCard title={`Who holds what (${custody.length} parcels)`}>
               {custody.length === 0 ? (
-                <p className="text-[13px] text-faint">No open custodies — nothing in stock.</p>
+                <p className="text-[13px] text-ink-2">No open custodies — nothing in stock.</p>
               ) : (
                 <div className="grid gap-1.5">
                   {custody.map((row) => (
                     <div
                       key={row.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line px-3 py-1.5 text-[13px]"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-1.5 text-[13px]"
                     >
                       <span className="font-mono font-semibold text-ink">{row.trackingId}</span>
-                      <span className="text-slate2">
+                      <span className="text-ink-2">
                         {row.packageStatus.replaceAll("_", " ")}
                         {row.locationCode ? ` · ${row.locationCode}` : ""}
                       </span>
@@ -537,16 +536,16 @@ export async function HandoversPage({
             ))}
             <SectionCard title={`Handover batches (${batches.length})`}>
               {batches.length === 0 ? (
-                <p className="text-[13px] text-faint">No handovers yet.</p>
+                <p className="text-[13px] text-ink-2">No handovers yet.</p>
               ) : (
                 <div className="grid gap-3">
                   {batches.map((batch) => (
-                    <div key={batch.id} className="rounded-md border border-line px-3 py-2">
+                    <div key={batch.id} className="rounded-md border border-border px-3 py-2">
                       <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]">
                         <span className="text-ink">
                           <strong>{batch.fromLabel}</strong> → <strong>{batch.toLabel}</strong>
                         </span>
-                        <span className="text-slate2">
+                        <span className="text-ink-2">
                           {batch.confirmedCount}/{batch.expectedCount} confirmed ·{" "}
                           {new Date(batch.createdAt).toLocaleString()} · by{" "}
                           {batch.initiatedByName}
@@ -570,7 +569,7 @@ export async function HandoversPage({
                             className="flex flex-wrap items-center justify-between gap-2 text-[13px]"
                           >
                             <span className="font-mono text-ink">{line.trackingId}</span>
-                            <span className="text-slate2">{line.status}</span>
+                            <span className="text-ink-2">{line.status}</span>
                             {line.status === "PENDING" &&
                             (batch.status === "PENDING" ||
                               batch.status === "PARTIALLY_CONFIRMED") ? (
@@ -640,7 +639,7 @@ export async function SuppliesPage({
         <div key={warehouse.id} className="flex flex-col gap-4">
           <h2 className="text-[15px] font-bold text-ink">
             {warehouse.name}{" "}
-            <span className="font-mono text-[12px] font-semibold text-slate2">
+            <span className="font-mono text-[12px] font-semibold text-ink-2">
               {warehouse.code}
             </span>
           </h2>
@@ -651,11 +650,11 @@ export async function SuppliesPage({
           ) : null}
           <SectionCard title={`Stock items (${items.length})`}>
             {items.length === 0 ? (
-              <p className="text-[13px] text-faint">No supplies tracked yet.</p>
+              <p className="text-[13px] text-ink-2">No supplies tracked yet.</p>
             ) : (
               <div className="grid gap-3">
                 {items.map((item) => (
-                  <div key={item.id} className="rounded-md border border-line px-3 py-2">
+                  <div key={item.id} className="rounded-md border border-border px-3 py-2">
                     <div className="flex flex-wrap items-center justify-between gap-2 text-[13px]">
                       <span className="text-ink">
                         <span className="font-mono font-semibold">{item.sku}</span> ·{" "}
@@ -670,7 +669,7 @@ export async function SuppliesPage({
                           </span>
                         ) : null}
                         {!item.isActive ? (
-                          <span className="ml-2 text-faint">Inactive</span>
+                          <span className="ml-2 text-ink-2">Inactive</span>
                         ) : null}
                       </span>
                     </div>
@@ -685,9 +684,9 @@ export async function SuppliesPage({
                       </div>
                     ) : null}
                     {(movementsByItem.get(item.id) ?? []).length > 0 ? (
-                      <div className="mt-2 grid gap-1 border-t border-line pt-2">
+                      <div className="mt-2 grid gap-1 border-t border-border pt-2">
                         {(movementsByItem.get(item.id) ?? []).map((m) => (
-                          <div key={m.id} className="text-[12px] text-slate2">
+                          <div key={m.id} className="text-[12px] text-ink-2">
                             {m.type.replaceAll("_", " ")} {m.quantityDelta > 0 ? "+" : ""}
                             {m.quantityDelta} · {m.quantityBefore} → {m.quantityAfter} ·{" "}
                             {m.performedByName} · {new Date(m.createdAt).toLocaleString()}

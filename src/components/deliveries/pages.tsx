@@ -3,6 +3,16 @@ import Link from "next/link";
 import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { formatPaisa } from "@/components/bookings/ui";
 import { StatusBadge as SharedStatusBadge } from "@/components/ui/StatusBadge";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { DensityScope } from "@/components/ui/TableDensity";
+import {
+  TABLE_CLASS,
+  TD_CLASS,
+  TD_ID_CLASS,
+  THEAD_ROW_CLASS,
+  TH_CLASS,
+  TR_CLASS,
+} from "@/components/ui/table-chrome";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import { listWarehouses } from "@/server/services/warehouses";
 import {
@@ -56,17 +66,6 @@ import { DriverAssignmentIncidentForm } from "@/components/operations/forms";
  * rider's own batch view.
  */
 
-function PageHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
-  return (
-    <div>
-      <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate2">
-        {eyebrow}
-      </div>
-      <h1 className="mt-0.5 text-[22px] font-bold text-ink">{title}</h1>
-    </div>
-  );
-}
-
 export function DeliveryStatusBadge({ status }: { status: string }) {
   return <SharedStatusBadge domain="generic" status={status} />;
 }
@@ -100,7 +99,7 @@ export async function DeliveriesHomePanel({
   return (
     <SectionCard title="Last-mile delivery">
       <div className="flex flex-col gap-3">
-        <p className="text-[13px] text-slate2">
+        <p className="text-[13px] text-ink-2">
           {open.length} open batch(es) · {outNow} package(s) out with riders right now
         </p>
         <div className="flex flex-wrap gap-2">
@@ -140,68 +139,73 @@ export async function DeliveriesListPage({
   const canScanBack = hasPermission(actor, "package.receive");
   return (
     <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <PageHeader eyebrow="Deliveries" title="Delivery batches" />
-        <div className="flex flex-wrap gap-2">
-          <Link href={`${basePath}/returns`} className={subtleButtonClass}>
-            Returns →
-          </Link>
-          {canAssign ? (
-            <Link href={`${basePath}/deliveries/new`} className={subtleButtonClass}>
-              New batch →
+      <PageHeader
+        eyebrow="Deliveries"
+        title="Delivery batches"
+        actions={
+          <>
+            <Link href={`${basePath}/returns`} className={subtleButtonClass}>
+              Returns →
             </Link>
-          ) : null}
-        </div>
-      </div>
+            {canAssign ? (
+              <Link href={`${basePath}/deliveries/new`} className={subtleButtonClass}>
+                New batch →
+              </Link>
+            ) : null}
+          </>
+        }
+      />
 
       <SectionCard title={`Batches (${items.length})`}>
         {items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No delivery batches yet.</p>
+          <p className="text-[13px] text-ink-2">No delivery batches yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-[13px]">
-              <thead>
-                <tr className="border-b border-line text-slate2">
-                  <th className="py-2 pr-3 font-semibold">Date</th>
-                  <th className="py-2 pr-3 font-semibold">Rider</th>
-                  <th className="py-2 pr-3 font-semibold">Warehouse</th>
-                  <th className="py-2 pr-3 font-semibold">Status</th>
-                  <th className="py-2 pr-3 font-semibold">Packages</th>
-                  <th className="py-2 font-semibold" />
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((b) => (
-                  <tr key={b.id} className="border-b border-line last:border-0">
-                    <td className="py-2 pr-3">{b.batchDate}</td>
-                    <td className="py-2 pr-3">{b.riderName}</td>
-                    <td className="py-2 pr-3 font-mono">{b.warehouseCode}</td>
-                    <td className="py-2 pr-3">
-                      <DeliveryStatusBadge status={b.status} />
-                    </td>
-                    <td className="py-2 pr-3">
-                      {b.counts.total} total · {b.counts.completed} delivered ·{" "}
-                      {b.counts.inProgress} out · {b.counts.failed} failed
-                    </td>
-                    <td className="py-2 text-right">
-                      <Link
-                        href={`${basePath}/deliveries/${b.id}`}
-                        className="font-semibold text-brand"
-                      >
-                        Open →
-                      </Link>
-                    </td>
+          <DensityScope showToggle>
+            <div className="overflow-x-auto">
+              <table className={TABLE_CLASS}>
+                <thead>
+                  <tr className={THEAD_ROW_CLASS}>
+                    <th className={`${TH_CLASS} text-left`}>Date</th>
+                    <th className={`${TH_CLASS} text-left`}>Rider</th>
+                    <th className={`${TH_CLASS} text-left`}>Warehouse</th>
+                    <th className={`${TH_CLASS} text-left`}>Status</th>
+                    <th className={`${TH_CLASS} text-left`}>Packages</th>
+                    <th className={`${TH_CLASS} text-left`} />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((b) => (
+                    <tr key={b.id} className={TR_CLASS}>
+                      <td className={TD_CLASS}>{b.batchDate}</td>
+                      <td className={TD_CLASS}>{b.riderName}</td>
+                      <td className={TD_ID_CLASS}>{b.warehouseCode}</td>
+                      <td className={TD_CLASS}>
+                        <DeliveryStatusBadge status={b.status} />
+                      </td>
+                      <td className={TD_CLASS}>
+                        {b.counts.total} total · {b.counts.completed} delivered ·{" "}
+                        {b.counts.inProgress} out · {b.counts.failed} failed
+                      </td>
+                      <td className={`${TD_CLASS} text-right`}>
+                        <Link
+                          href={`${basePath}/deliveries/${b.id}`}
+                          className="font-semibold text-primary"
+                        >
+                          Open →
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </DensityScope>
         )}
       </SectionCard>
 
       {canScanBack && warehouses.length > 0 ? (
         <SectionCard title="Scan back an undelivered package">
-          <p className="mb-3 text-[13px] text-slate2">
+          <p className="mb-3 text-[13px] text-ink-2">
             When a rider hands a package back, scan it here: custody and stock reopen, and an
             open return advances to RECEIVED.
           </p>
@@ -265,22 +269,25 @@ export async function DeliveryBatchDetailPage({
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <Link href={`${basePath}/deliveries`} className="text-[12px] font-semibold text-brand">
+        <Link href={`${basePath}/deliveries`} className="text-[12px] font-semibold text-primary">
           ← All batches
         </Link>
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <h1 className="text-[22px] font-bold text-ink">
-            {batch.riderName} · {batch.batchDate}
-          </h1>
-          <DeliveryStatusBadge status={batch.status} />
+        <div className="mt-2">
+          <PageHeader
+            title={`${batch.riderName} · ${batch.batchDate}`}
+            actions={<DeliveryStatusBadge status={batch.status} />}
+            description={
+              <>
+                Warehouse <span className="font-mono">{batch.warehouseCode}</span> ·{" "}
+                {batch.counts.total} package(s): {batch.counts.pending} waiting pickup,{" "}
+                {batch.counts.inProgress} out, {batch.counts.completed} delivered,{" "}
+                {batch.counts.failed} failed,{" "}
+                {batch.counts.cancelled + batch.counts.reassigned} cancelled/reassigned
+                {batch.closedAt ? ` · Closed ${new Date(batch.closedAt).toLocaleString()}` : ""}
+              </>
+            }
+          />
         </div>
-        <p className="mt-1 text-[13px] text-slate2">
-          Warehouse <span className="font-mono">{batch.warehouseCode}</span> · {batch.counts.total}{" "}
-          package(s): {batch.counts.pending} waiting pickup, {batch.counts.inProgress} out,{" "}
-          {batch.counts.completed} delivered, {batch.counts.failed} failed,{" "}
-          {batch.counts.cancelled + batch.counts.reassigned} cancelled/reassigned
-          {batch.closedAt ? ` · Closed ${new Date(batch.closedAt).toLocaleString()}` : ""}
-        </p>
       </div>
 
       {canAssign ? (
@@ -311,17 +318,17 @@ export async function DeliveryBatchDetailPage({
 
       <SectionCard title={`Assignments (${assignments.length})`}>
         {assignments.length === 0 ? (
-          <p className="text-[13px] text-slate2">No packages assigned yet.</p>
+          <p className="text-[13px] text-ink-2">No packages assigned yet.</p>
         ) : (
           <div className="grid gap-3">
             {assignments.map((a) => (
-              <div key={a.id} className="rounded-md border border-line bg-page px-3 py-2">
+              <div key={a.id} className="rounded-md border border-border bg-page px-3 py-2">
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="font-mono text-[13px] font-semibold text-ink">
                     {a.trackingId}
                   </span>
                   <DeliveryStatusBadge status={a.status} />
-                  <span className="text-[13px] text-slate2">
+                  <span className="text-[13px] text-ink-2">
                     Package: {a.packageStatus} · Attempts: {a.attemptsRecorded} (
                     {a.failedAttempts} failed)
                     {BigInt(a.codExpectedPaisa) > BigInt(0)
@@ -330,7 +337,7 @@ export async function DeliveryBatchDetailPage({
                   </span>
                 </div>
                 {a.failureNote ? (
-                  <p className="mt-1 text-[12px] text-slate2">{a.failureNote}</p>
+                  <p className="mt-1 text-[12px] text-ink-2">{a.failureNote}</p>
                 ) : null}
                 {canAssign && (a.status === "PENDING" || a.status === "ACCEPTED") ? (
                   <div className="mt-2 flex flex-wrap gap-4">
@@ -364,43 +371,45 @@ export async function ReturnsListPage({
       <PageHeader eyebrow="Returns" title="Return requests" />
       <SectionCard title={`Returns (${items.length})`}>
         {items.length === 0 ? (
-          <p className="text-[13px] text-slate2">No return requests in your scope.</p>
+          <p className="text-[13px] text-ink-2">No return requests in your scope.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-[13px]">
-              <thead>
-                <tr className="border-b border-line text-slate2">
-                  <th className="py-2 pr-3 font-semibold">Return</th>
-                  <th className="py-2 pr-3 font-semibold">Tracking ID</th>
-                  <th className="py-2 pr-3 font-semibold">Reason</th>
-                  <th className="py-2 pr-3 font-semibold">Status</th>
-                  <th className="py-2 pr-3 font-semibold">Warehouse</th>
-                  <th className="py-2 font-semibold" />
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((r) => (
-                  <tr key={r.id} className="border-b border-line last:border-0">
-                    <td className="py-2 pr-3 font-mono">{r.returnNumber}</td>
-                    <td className="py-2 pr-3 font-mono">{r.trackingId}</td>
-                    <td className="py-2 pr-3">{r.reason}</td>
-                    <td className="py-2 pr-3">
-                      <DeliveryStatusBadge status={r.status} />
-                    </td>
-                    <td className="py-2 pr-3 font-mono">{r.warehouseCode}</td>
-                    <td className="py-2 text-right">
-                      <Link
-                        href={`${basePath}/returns/${r.id}`}
-                        className="font-semibold text-brand"
-                      >
-                        Open →
-                      </Link>
-                    </td>
+          <DensityScope showToggle>
+            <div className="overflow-x-auto">
+              <table className={TABLE_CLASS}>
+                <thead>
+                  <tr className={THEAD_ROW_CLASS}>
+                    <th className={`${TH_CLASS} text-left`}>Return</th>
+                    <th className={`${TH_CLASS} text-left`}>Tracking ID</th>
+                    <th className={`${TH_CLASS} text-left`}>Reason</th>
+                    <th className={`${TH_CLASS} text-left`}>Status</th>
+                    <th className={`${TH_CLASS} text-left`}>Warehouse</th>
+                    <th className={`${TH_CLASS} text-left`} />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {items.map((r) => (
+                    <tr key={r.id} className={TR_CLASS}>
+                      <td className={TD_ID_CLASS}>{r.returnNumber}</td>
+                      <td className={TD_ID_CLASS}>{r.trackingId}</td>
+                      <td className={TD_CLASS}>{r.reason}</td>
+                      <td className={TD_CLASS}>
+                        <DeliveryStatusBadge status={r.status} />
+                      </td>
+                      <td className={TD_ID_CLASS}>{r.warehouseCode}</td>
+                      <td className={`${TD_CLASS} text-right`}>
+                        <Link
+                          href={`${basePath}/returns/${r.id}`}
+                          className="font-semibold text-primary"
+                        >
+                          Open →
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </DensityScope>
         )}
       </SectionCard>
     </div>
@@ -423,32 +432,36 @@ export async function ReturnDetailPage({
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <Link href={`${basePath}/returns`} className="text-[12px] font-semibold text-brand">
+        <Link href={`${basePath}/returns`} className="text-[12px] font-semibold text-primary">
           ← All returns
         </Link>
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <h1 className="font-mono text-[22px] font-bold text-ink">{r.returnNumber}</h1>
-          <DeliveryStatusBadge status={r.status} />
+        <div className="mt-2">
+          <PageHeader
+            title={r.returnNumber}
+            actions={<DeliveryStatusBadge status={r.status} />}
+            description={
+              <>
+                Package <span className="font-mono">{r.trackingId}</span> · Order {r.orderNumber}{" "}
+                · Warehouse <span className="font-mono">{r.warehouseCode}</span> · Reason{" "}
+                {r.reason} · Requested by {r.requestedByName}
+              </>
+            }
+          />
         </div>
-        <p className="mt-1 text-[13px] text-slate2">
-          Package <span className="font-mono">{r.trackingId}</span> · Order {r.orderNumber} ·
-          Warehouse <span className="font-mono">{r.warehouseCode}</span> · Reason {r.reason} ·
-          Requested by {r.requestedByName}
-        </p>
       </div>
 
       <SectionCard title="Return record">
         <dl className="grid grid-cols-1 gap-2 text-[13px] sm:grid-cols-2">
           <div>
-            <dt className="text-slate2">Condition at initiation</dt>
+            <dt className="text-ink-2">Condition at initiation</dt>
             <dd className="font-semibold text-ink">{r.conditionAtInitiation}</dd>
           </div>
           <div>
-            <dt className="text-slate2">Condition at inspection</dt>
+            <dt className="text-ink-2">Condition at inspection</dt>
             <dd className="font-semibold text-ink">{r.conditionAtInspection ?? "—"}</dd>
           </div>
           <div>
-            <dt className="text-slate2">Charges borne by</dt>
+            <dt className="text-ink-2">Charges borne by</dt>
             <dd className="font-semibold text-ink">
               {r.chargeBearer ?? "—"}
               {BigInt(r.chargeAmountPaisa) > BigInt(0)
@@ -457,20 +470,20 @@ export async function ReturnDetailPage({
             </dd>
           </div>
           <div>
-            <dt className="text-slate2">Received at warehouse</dt>
+            <dt className="text-ink-2">Received at warehouse</dt>
             <dd className="font-semibold text-ink">
               {r.receivedAt ? new Date(r.receivedAt).toLocaleString() : "—"}
             </dd>
           </div>
           {r.rejectionReason ? (
             <div>
-              <dt className="text-slate2">Rejection reason</dt>
+              <dt className="text-ink-2">Rejection reason</dt>
               <dd className="font-semibold text-ink">{r.rejectionReason}</dd>
             </div>
           ) : null}
           {r.notes ? (
             <div>
-              <dt className="text-slate2">Notes</dt>
+              <dt className="text-ink-2">Notes</dt>
               <dd className="font-semibold text-ink">{r.notes}</dd>
             </div>
           ) : null}
@@ -487,7 +500,7 @@ export async function ReturnDetailPage({
       ) : null}
       {r.status === "APPROVED" ? (
         <SectionCard title="Awaiting the package">
-          <p className="text-[13px] text-slate2">
+          <p className="text-[13px] text-ink-2">
             This return is approved. When the rider hands the package back, scan it on the
             Delivery batches page — the return will advance to RECEIVED automatically.
           </p>
@@ -500,7 +513,7 @@ export async function ReturnDetailPage({
       ) : null}
       {r.status === "INSPECTED" && canComplete ? (
         <SectionCard title="Complete the return">
-          <p className="mb-3 text-[13px] text-slate2">
+          <p className="mb-3 text-[13px] text-ink-2">
             Completing hands the package back to the vendor: stock releases, custody moves to
             the vendor&apos;s owner user, and the package becomes RETURNED_TO_SENDER.
           </p>
@@ -611,15 +624,19 @@ export async function RiderBatchPage({
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <Link href="/rider" className="text-[12px] font-semibold text-brand">
+        <Link href="/rider" className="text-[12px] font-semibold text-primary">
           ← Today&apos;s batches
         </Link>
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <h1 className="text-[22px] font-bold text-ink">
-            {batch.warehouseCode} · {batch.batchDate}
-          </h1>
-          <DeliveryStatusBadge status={batch.status} />
-          {isPickupBatch ? <DeliveryStatusBadge status="PICKUP" /> : null}
+        <div className="mt-2">
+          <PageHeader
+            title={`${batch.warehouseCode} · ${batch.batchDate}`}
+            actions={
+              <>
+                <DeliveryStatusBadge status={batch.status} />
+                {isPickupBatch ? <DeliveryStatusBadge status="PICKUP" /> : null}
+              </>
+            }
+          />
         </div>
       </div>
 
@@ -646,27 +663,27 @@ export async function RiderBatchPage({
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-3">
               <DeliveryStatusBadge status={a.status} />
-              <span className="text-[13px] text-slate2">Package: {a.packageStatus}</span>
+              <span className="text-[13px] text-ink-2">Package: {a.packageStatus}</span>
               {a.failedAttempts > 0 ? (
-                <span className="text-[13px] text-slate2">
+                <span className="text-[13px] text-ink-2">
                   {a.failedAttempts} failed attempt(s) so far
                 </span>
               ) : null}
             </div>
             <dl className="grid grid-cols-1 gap-2 text-[13px] sm:grid-cols-2">
               <div>
-                <dt className="text-slate2">Recipient</dt>
+                <dt className="text-ink-2">Recipient</dt>
                 <dd className="font-semibold text-ink">{a.recipientName}</dd>
               </div>
               <div>
-                <dt className="text-slate2">Phone</dt>
+                <dt className="text-ink-2">Phone</dt>
                 <dd className="font-semibold text-ink">
                   {a.recipientPhone}
                   {a.recipientAltPhone ? ` · ${a.recipientAltPhone}` : ""}
                 </dd>
               </div>
               <div>
-                <dt className="text-slate2">Address</dt>
+                <dt className="text-ink-2">Address</dt>
                 <dd className="font-semibold text-ink">
                   {a.destinationAddress}
                   {a.destinationLandmark ? ` (near ${a.destinationLandmark})` : ""} ·{" "}
@@ -674,7 +691,7 @@ export async function RiderBatchPage({
                 </dd>
               </div>
               <div>
-                <dt className="text-slate2">COD due</dt>
+                <dt className="text-ink-2">COD due</dt>
                 <dd className="font-semibold text-ink">
                   {BigInt(a.codExpectedPaisa) > BigInt(0)
                     ? formatPaisa(BigInt(a.codExpectedPaisa))
@@ -683,7 +700,7 @@ export async function RiderBatchPage({
                 </dd>
               </div>
             </dl>
-            {a.failureNote ? <p className="text-[12px] text-slate2">{a.failureNote}</p> : null}
+            {a.failureNote ? <p className="text-[12px] text-ink-2">{a.failureNote}</p> : null}
             {isPickupBatch && (a.status === "PENDING" || a.status === "ACCEPTED") ? (
               <PickupFailedForm assignmentId={a.id} />
             ) : null}
@@ -702,7 +719,7 @@ export async function RiderBatchPage({
 
       {(batch.status === "OPEN" || batch.status === "IN_PROGRESS") && assignments.length > 0 ? (
         <SectionCard title="End of day">
-          <p className="mb-3 text-[13px] text-slate2">
+          <p className="mb-3 text-[13px] text-ink-2">
             The batch closes only when every package is delivered, scanned back at the
             warehouse, or formally returned — unaccounted packages block closure and are
             named.
