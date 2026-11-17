@@ -164,10 +164,24 @@ export function CommandMenu({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [recordGroups, setRecordGroups] = useState<RecordGroup[]>([]);
-  const [loading, setLoading] = useState(false);
+  // Record results are stored tagged with the query that produced
+  // them; the rows on screen are DERIVED (they render only while the
+  // tag matches the current query), so the fetch effect never has to
+  // clear state synchronously when the query changes.
+  const [searchState, setSearchState] = useState<{
+    query: string;
+    groups: RecordGroup[];
+  }>({ query: "", groups: [] });
+  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
   const [recents, setRecents] = useState<PaletteEntry[]>([]);
   const requestSeq = useRef(0);
+
+  // Every open path funnels through here so recents are re-read from
+  // localStorage at open time (a client-only, per-open snapshot).
+  function applyOpen(next: boolean) {
+    if (next) setRecents(readRecents(items));
+    setOpen(next);
+  }
 
   // Ctrl+K / Cmd+K toggles from anywhere; the header trigger opens
   // via the window event. Escape is handled by the Dialog itself,
@@ -177,10 +191,14 @@ export function CommandMenu({
     function onKey(event: KeyboardEvent) {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setOpen((value) => !value);
+        setOpen((value) => {
+          if (!value) setRecents(readRecents(items));
+          return !value;
+        });
       }
     }
     function onOpenRequest() {
+      setRecents(readRecents(items));
       setOpen(true);
     }
     document.addEventListener("keydown", onKey);
@@ -189,41 +207,41 @@ export function CommandMenu({
       document.removeEventListener("keydown", onKey);
       window.removeEventListener(OPEN_PALETTE_EVENT, onOpenRequest);
     };
-  }, []);
-
-  // Recents are read when the palette opens (never during render —
-  // localStorage is a client-only, per-open snapshot).
-  useEffect(() => {
-    if (open) setRecents(readRecents(items));
-  }, [open, items ]);
+  }, [items]);
 
   const trimmed = query.trim();
+  const recordGroups = useMemo(
+    () => (searchState.query === trimmed ? searchState.groups : []),
+    [searchState, trimmed],
+  );
+  const loading =
+    trimmed.length >= 2 && pendingQuery === trimmed && searchState.query !== trimmed;
 
   // Debounced record search. Zero requests below 2 characters; a
   // monotonically increasing sequence number makes stale responses
   // no-ops, so a slow earlier query can never overwrite a newer one.
+  // All state writes happen inside the timer/async continuation,
+  // never synchronously in the effect body.
   useEffect(() => {
-    if (!open) return;
-    if (trimmed.length < 2) {
-      setRecordGroups([]);
-      setLoading(false);
-      return;
-    }
+    if (!open || trimmed.length < 2) return;
     const seq = ++requestSeq.current;
-    setLoading(true);
     const timer = window.setTimeout(async () => {
+      setPendingQuery(trimmed);
       try {
         const response = await fetch(
           `/api/search?q=${encodeURIComponent(trimmed)}`,
         );
         const body = (await response.json()) as { groups?: RecordGroup[] };
         if (requestSeq.current !== seq) return;
-        setRecordGroups(Array.isArray(body.groups) ? body.groups : []);
+        setSearchState({
+          query: trimmed,
+          groups: Array.isArray(body.groups) ? body.groups : [],
+        });
       } catch {
         if (requestSeq.current !== seq) return;
-        setRecordGroups([]);
+        setSearchState({ query: trimmed, groups: [] });
       } finally {
-        if (requestSeq.current === seq) setLoading(false);
+        if (requestSeq.current === seq) setPendingQuery(null);
       }
     }, SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
@@ -291,14 +309,15 @@ export function CommandMenu({
     storeRecent(items, entry);
     setOpen(false);
     setQuery("");
-    setRecordGroups([]);
+    setSearchState({ query: "", groups: [] });
+    setPendingQuery(null);
     router.push(entry.href);
   }
 
   return (
     <Command.Dialog
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={applyOpen}
       label="Search or jump to"
       aria-label="Search or jump to"
       shouldFilter={false}

@@ -147,8 +147,8 @@ describe("CommandMenu", () => {
     openWithCtrlK();
     const input = await screen.findByPlaceholderText("Search or jump to…");
     fireEvent.change(input, { target: { value: "zzzz" } });
-    expect(await screen.findByText(/No matches for/)).not.toBeNull();
-    expect(screen.getByText(/zzzz/)).not.toBeNull();
+    const empty = await screen.findByText(/No matches for/);
+    expect(empty.textContent).toContain("zzzz");
   });
 
   it("remembers the last selection as a Recent on the next open", async () => {
