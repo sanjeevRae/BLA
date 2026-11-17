@@ -106,15 +106,29 @@ describe("ShellFrame — role navigation rendering", () => {
   it("Customer sidebar shows packages, tickets, notifications and the Phase 6 self-service pages (audit H-3, M-3)", () => {
     const { container } = render(<ShellFrame {...framePropsFor("CUSTOMER")} />);
     const hrefs = navLinks(container);
+    // V3 regrouping renders the same href SET in DS §6 group order:
+    // overview (packages, notifications) → work-management (tickets,
+    // incidents) → finance (invoices) → management (profile).
     expect(hrefs).toEqual([
       "/customer",
-      "/customer/tickets",
       "/customer/notifications",
+      "/customer/tickets",
       "/customer/incidents",
       "/customer/incidents/new",
       "/customer/billing",
       "/customer/profile",
     ]);
+    expect([...hrefs].sort()).toEqual(
+      [
+        "/customer",
+        "/customer/tickets",
+        "/customer/notifications",
+        "/customer/incidents",
+        "/customer/incidents/new",
+        "/customer/billing",
+        "/customer/profile",
+      ].sort(),
+    );
   });
 
   it("notifications chrome (bell) renders only for actors holding notification.read_own", () => {
@@ -140,12 +154,78 @@ describe("ShellFrame — role navigation rendering", () => {
   });
 });
 
+describe("ShellFrame — V3 dark sidebar (DS §7.1)", () => {
+  it("renders the dark sidebar with the six V3 group labels and a user card", () => {
+    const { container } = render(<ShellFrame {...framePropsFor("SUPER_ADMIN")} />);
+    const aside = container.querySelector("aside");
+    expect(aside?.className).toContain("bg-sidebar");
+    expect(aside?.className).toContain("w-[248px]");
+    const sidebar = within(aside as HTMLElement);
+    const groupLabels = Array.from(aside.querySelectorAll(".text-sidebar-label")).map(
+      (el) => el.textContent,
+    );
+    expect(groupLabels).toEqual([
+      "Overview",
+      "Operations",
+      "Network",
+      "Work Management",
+      "Finance",
+      "Management",
+    ]);
+    // Brand wordmark + user card (name + role) at the sidebar bottom.
+    expect(sidebar.getByText("BLA")).toBeTruthy();
+    expect(sidebar.getByText("Logistics")).toBeTruthy();
+    expect(sidebar.getByText("Test User")).toBeTruthy();
+    expect(sidebar.getByText("Test Dashboard")).toBeTruthy();
+  });
+
+  it("marks the active item with the primary-dark fill and accent indicator", () => {
+    const { container } = render(<ShellFrame {...framePropsFor("WAREHOUSE_ADMIN")} />);
+    const current = container.querySelector('aside a[aria-current="page"]');
+    expect(current?.getAttribute("href")).toBe("/warehouse/inventory");
+    expect(current?.className).toContain("bg-primary-dark");
+    expect(current?.className).toContain("text-white");
+    expect(current?.querySelector(".bg-accent")).toBeTruthy();
+  });
+
+  it("collapse toggle switches to the 72px icon rail with labelled icon links", () => {
+    const { container } = render(<ShellFrame {...framePropsFor("WAREHOUSE_ADMIN")} />);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    const aside = container.querySelector("aside");
+    expect(aside?.className).toContain("w-[72px]");
+    const sidebar = within(aside as HTMLElement);
+    // Group labels are replaced by hairlines; items keep accessible names.
+    expect(sidebar.queryByText("Operations")).toBeNull();
+    expect(sidebar.getByRole("link", { name: "Inventory" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+    expect(container.querySelector("aside")?.className).toContain("w-[248px]");
+    expect(sidebar.getByText("Operations")).toBeTruthy();
+  });
+
+  it("mobile drawer opens a second Dashboard navigation and closes on navigate", () => {
+    render(<ShellFrame {...framePropsFor("WAREHOUSE_ADMIN")} />);
+    expect(screen.getAllByRole("navigation", { name: "Dashboard" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    const navs = screen.getAllByRole("navigation", { name: "Dashboard" });
+    expect(navs).toHaveLength(2);
+    const drawerLink = within(navs[1]).getByRole("link", { name: /inventory/i });
+    fireEvent.click(drawerLink);
+    expect(screen.getAllByRole("navigation", { name: "Dashboard" })).toHaveLength(1);
+  });
+
+  it("header carries the command-menu trigger instead of the old search field", () => {
+    render(<ShellFrame {...framePropsFor("ADMIN")} />);
+    expect(screen.getByRole("button", { name: /search or jump to/i })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: /search pages/i })).toBeNull();
+  });
+});
+
 describe("StatusBadge — shared component", () => {
   it("renders the operational domain tone for DELIVERED", () => {
     render(<StatusBadge domain="operational" status="DELIVERED" />);
-    const badge = screen.getByText("DELIVERED");
-    expect(badge.className).toContain("bg-greenbg");
-    expect(badge.className).toContain("text-greendeep");
+    const badge = screen.getByText("Delivered");
+    expect(badge.className).toContain("bg-successbg");
+    expect(badge.className).toContain("text-success");
   });
 
   it("renders exception MISSING as danger and payment COD_DUE as warning", () => {
@@ -155,8 +235,8 @@ describe("StatusBadge — shared component", () => {
         <StatusBadge domain="payment" status="COD_DUE" />
       </>,
     );
-    expect(screen.getByText("MISSING").className).toContain("bg-redbg");
-    expect(screen.getByText("COD DUE").className).toContain("bg-amberbg");
+    expect(screen.getByText("Missing").className).toContain("bg-dangerbg");
+    expect(screen.getByText("COD due").className).toContain("bg-warningbg");
   });
 });
 

@@ -37,9 +37,9 @@ export function WarehouseSelector({
     const only = warehouses[0];
     return (
       <span className="hidden h-11 items-center gap-2 rounded-md border border-line bg-page px-3 text-[13px] font-medium text-ink sm:flex">
-        <NavIcon name="warehouse" className="h-[18px] w-[18px] text-faint" />
+        <NavIcon name="warehouse" className="h-[18px] w-[18px] text-ink-2" />
         <span className="max-w-[180px] truncate">
-          {only.name} <span className="text-faint">({only.code})</span>
+          {only.name} <span className="text-ink-2">({only.code})</span>
         </span>
       </span>
     );
@@ -47,7 +47,7 @@ export function WarehouseSelector({
 
   return (
     <label className="hidden h-11 items-center gap-2 rounded-md border border-line bg-page px-3 sm:flex">
-      <NavIcon name="warehouse" className="h-[18px] w-[18px] shrink-0 text-faint" />
+      <NavIcon name="warehouse" className="h-[18px] w-[18px] shrink-0 text-ink-2" />
       <span className="sr-only">Warehouse context</span>
       <select
         aria-label="Warehouse context"

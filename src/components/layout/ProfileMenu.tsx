@@ -51,7 +51,7 @@ export function ProfileMenu({
     .join("");
 
   const linkClass =
-    "flex min-h-[44px] items-center px-3 text-[13px] font-medium text-ink hover:bg-cream";
+    "flex min-h-[44px] items-center px-3 text-[13px] font-medium text-ink hover:bg-surface-2";
 
   return (
     <div className="relative" ref={boxRef}>
@@ -60,12 +60,12 @@ export function ProfileMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Account menu for ${name}`}
-        className="flex h-11 items-center gap-2.5 rounded-md px-2 hover:bg-cream"
+        className="flex h-11 items-center gap-2.5 rounded-md px-2 hover:bg-surface-2"
         onClick={() => setOpen((v) => !v)}
       >
         <span
           aria-hidden="true"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accentbg text-[12px] font-bold text-brand"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-light text-[12px] font-bold text-primary-dark"
         >
           {initials || "?"}
         </span>
@@ -73,18 +73,18 @@ export function ProfileMenu({
           <span className="block max-w-[160px] truncate text-[13px] font-semibold text-ink">
             {name}
           </span>
-          <span className="block max-w-[160px] truncate text-[11px] text-faint">{roleLabel}</span>
+          <span className="block max-w-[160px] truncate text-[11px] text-ink-2">{roleLabel}</span>
         </span>
       </button>
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 z-50 mt-2 w-[260px] overflow-hidden rounded-lg border border-line bg-surface shadow-pop"
+          className="absolute right-0 z-50 mt-2 w-[260px] overflow-hidden rounded-lg border border-line bg-card shadow-pop"
         >
           <div className="border-b border-line px-3 py-2.5">
             <div className="truncate text-[13px] font-semibold text-ink">{name}</div>
-            <div className="truncate text-[12px] text-faint">{email}</div>
-            <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate2">
+            <div className="truncate text-[12px] text-ink-2">{email}</div>
+            <div className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-2">
               {roleLabel}
             </div>
           </div>

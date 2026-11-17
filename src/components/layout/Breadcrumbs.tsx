@@ -50,7 +50,7 @@ export function Breadcrumbs({
           return (
             <li key={crumb.href} className="flex min-w-0 items-center gap-1.5">
               {index > 0 ? (
-                <span aria-hidden="true" className="text-faint">
+                <span aria-hidden="true" className="text-ink-2">
                   /
                 </span>
               ) : null}
@@ -59,7 +59,7 @@ export function Breadcrumbs({
                   {crumb.label}
                 </span>
               ) : (
-                <Link href={crumb.href} className="truncate text-slate2 hover:text-ink">
+                <Link href={crumb.href} className="truncate text-ink-2 hover:text-ink">
                   {crumb.label}
                 </Link>
               )}
