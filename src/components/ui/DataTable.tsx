@@ -224,13 +224,30 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
                       : "descending"
                     : "none"
                   : undefined;
-                const indicator = !column.sortable
-                  ? null
-                  : isSorted
-                    ? sort?.direction === "asc"
-                      ? " ▲"
-                      : " ▼"
-                    : " ↕";
+                const indicator = !column.sortable ? null : (
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-[12px] w-[12px]"
+                  >
+                    {isSorted ? (
+                      sort?.direction === "asc" ? (
+                        <path d="m6 15 6-6 6 6" />
+                      ) : (
+                        <path d="m6 9 6 6 6-6" />
+                      )
+                    ) : (
+                      <>
+                        <path d="m7 10 5-5 5 5" />
+                        <path d="m7 14 5 5 5-5" />
+                      </>
+                    )}
+                  </svg>
+                );
                 return (
                   <th
                     key={column.key}
