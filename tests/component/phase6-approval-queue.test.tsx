@@ -49,7 +49,7 @@ describe("InvitationQueueRow — four-eyes approval queue (Phase 6)", () => {
       </ul>,
     );
     expect(screen.getByText("new.admin@test.local")).toBeTruthy();
-    expect(screen.getByText("PENDING APPROVAL")).toBeTruthy();
+    expect(screen.getByText("Pending approval")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
     expect(onApprove).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: /reject/i }));

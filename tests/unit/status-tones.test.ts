@@ -9,7 +9,13 @@ import {
   PACKAGE_EXCEPTION_STATUSES,
   PACKAGE_PAYMENT_STATUSES,
 } from "@/lib/bookings/domain";
-import { statusLabel, statusTone } from "@/lib/status/status-tones";
+import {
+  statusLabel,
+  statusTone,
+  TONE_CLASSES,
+  TONE_HEX,
+  TONE_ICONS,
+} from "@/lib/status/status-tones";
 
 /**
  * V2 Phase 1 — the shared StatusBadge tone mapping (audit M-11).
@@ -93,5 +99,31 @@ describe("status tones — package domains", () => {
     expect(statusLabel("OUT_FOR_DELIVERY")).toBe("OUT FOR DELIVERY");
     expect(statusLabel("COD_DUE")).toBe("COD DUE");
     expect(statusLabel("ACTIVE")).toBe("ACTIVE");
+  });
+});
+
+describe("status tones — V3 hex values (design system §4)", () => {
+  it("each tone carries exactly the DS text/bg hex pair", () => {
+    expect(TONE_HEX.success).toEqual({ text: "#18794E", bg: "#E3F4E8" });
+    expect(TONE_HEX.warning).toEqual({ text: "#99610A", bg: "#FFF0D6" });
+    expect(TONE_HEX.danger).toEqual({ text: "#B42318", bg: "#FDE8E7" });
+    expect(TONE_HEX.info).toEqual({ text: "#285EA8", bg: "#E7EFFB" });
+    expect(TONE_HEX.neutral).toEqual({ text: "#53635D", bg: "#EDF1EE" });
+  });
+
+  it("tone classes reference the dedicated status tokens", () => {
+    expect(TONE_CLASSES.success).toBe("bg-successbg text-success");
+    expect(TONE_CLASSES.warning).toBe("bg-warningbg text-warning");
+    expect(TONE_CLASSES.danger).toBe("bg-dangerbg text-danger");
+    expect(TONE_CLASSES.info).toBe("bg-infobg text-info");
+    expect(TONE_CLASSES.neutral).toBe("bg-neutralbg text-neutral");
+  });
+
+  it("each tone has its DS icon", () => {
+    expect(TONE_ICONS.success).toBe("check-circle");
+    expect(TONE_ICONS.warning).toBe("clock");
+    expect(TONE_ICONS.danger).toBe("alert-octagon");
+    expect(TONE_ICONS.info).toBe("info");
+    expect(TONE_ICONS.neutral).toBe("minus-circle");
   });
 });
