@@ -43,12 +43,12 @@ export function Field({
       ) : null}
       {children}
       {hint ? (
-        <p id={hintId} className="text-[12px] text-faint">
+        <p id={hintId} className="text-[12px] text-ink-2">
           {hint}
         </p>
       ) : null}
       {error ? (
-        <p id={errorId} role="alert" className="text-[12px] font-medium text-reddeep">
+        <p id={errorId} role="alert" className="text-[12px] font-medium text-danger">
           {error}
         </p>
       ) : null}
@@ -64,7 +64,9 @@ function describedByFor(id: string, hint?: string, error?: string): string | und
 }
 
 function controlBorder(error?: string): string {
-  return error ? "border-red" : "border-line";
+  // DS §2.3.3: controls are identified by `border-control` (3:1+);
+  // the decorative `border` token must never outline a control alone.
+  return error ? "border-danger" : "border-border-control";
 }
 
 export type TextInputProps = {
@@ -91,7 +93,7 @@ export function TextInput({
         required={required}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedByFor(id, hint, error)}
-        className={`min-h-[44px] w-full rounded-md border bg-surface px-3 text-[13px] text-ink ${controlBorder(error)} ${className ?? ""}`}
+        className={`min-h-[44px] w-full rounded-md border bg-card px-3 text-[13px] text-ink ${controlBorder(error)} ${className ?? ""}`}
         {...props}
       />
     </Field>
@@ -122,7 +124,7 @@ export function TextArea({
         required={required}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedByFor(id, hint, error)}
-        className={`w-full rounded-md border bg-surface px-3 py-2 text-[13px] text-ink ${controlBorder(error)} ${className ?? ""}`}
+        className={`w-full rounded-md border bg-card px-3 py-2 text-[13px] text-ink ${controlBorder(error)} ${className ?? ""}`}
         {...props}
       />
     </Field>
@@ -155,7 +157,7 @@ export function Select({
         required={required}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedByFor(id, hint, error)}
-        className={`min-h-[44px] w-full rounded-md border bg-surface px-3 text-[13px] text-ink ${controlBorder(error)} ${className ?? ""}`}
+        className={`min-h-[44px] w-full rounded-md border bg-card px-3 text-[13px] text-ink ${controlBorder(error)} ${className ?? ""}`}
         {...props}
       >
         {children}

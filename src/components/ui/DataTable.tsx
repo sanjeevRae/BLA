@@ -40,6 +40,10 @@ export interface DataTableProps<Row> {
   emptyState?: ReactNode;
   loading?: boolean;
   ariaLabel?: string;
+  /** Row key of the selected row, rendered with the primary-light wash
+   * + left indicator (DS §7.6). Optional; no selection state is owned
+   * by the table itself. */
+  selectedRowKey?: string;
 }
 
 function alignClass(align: DataTableColumn<unknown>["align"]): string {
@@ -61,6 +65,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
     emptyState,
     loading = false,
     ariaLabel,
+    selectedRowKey,
   } = props;
 
   const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(() => new Set());
@@ -102,7 +107,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
     const canPrev = page > 1;
     const canNext = page * pageSize < total;
     paginationSummary = (
-      <span className="text-[13px] text-slate2">
+      <span className="text-[13px] text-ink-2">
         Showing {from}–{to} of {total}
       </span>
     );
@@ -112,7 +117,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
           type="button"
           disabled={!canPrev}
           onClick={() => onPageChange(page - 1)}
-          className="inline-flex min-h-[44px] items-center rounded-md border border-line bg-surface px-3 text-[13px] font-semibold text-ink disabled:opacity-60"
+          className="inline-flex min-h-[44px] items-center rounded-lg border border-border-control bg-card px-3 text-[13px] font-semibold text-ink hover:bg-surface-2 disabled:opacity-45"
         >
           Previous
         </button>
@@ -120,7 +125,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
           type="button"
           disabled={!canNext}
           onClick={() => onPageChange(page + 1)}
-          className="inline-flex min-h-[44px] items-center rounded-md border border-line bg-surface px-3 text-[13px] font-semibold text-ink disabled:opacity-60"
+          className="inline-flex min-h-[44px] items-center rounded-lg border border-border-control bg-card px-3 text-[13px] font-semibold text-ink hover:bg-surface-2 disabled:opacity-45"
         >
           Next
         </button>
@@ -129,9 +134,9 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
   }
 
   return (
-    <div className="rounded-md border border-line bg-surface">
+    <div className="rounded-lg border border-border bg-card">
       {hasToolbar ? (
-        <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
           {search ? (
             <input
               type="search"
@@ -139,7 +144,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
               onChange={(event) => search.onChange(event.target.value)}
               placeholder={search.placeholder ?? "Search…"}
               aria-label={search.placeholder ?? "Search"}
-              className="h-11 min-w-[200px] flex-1 rounded-md border border-line bg-surface px-3 text-[13px] text-ink sm:flex-none sm:basis-64"
+              className="h-11 min-w-[200px] flex-1 rounded-md border border-border-control bg-card px-3 text-[13px] text-ink sm:flex-none sm:basis-64"
             />
           ) : null}
           {filters}
@@ -151,12 +156,12 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
                 aria-haspopup="true"
                 aria-expanded={columnsOpen}
                 onClick={() => setColumnsOpen((value) => !value)}
-                className="inline-flex min-h-[44px] items-center rounded-md border border-line bg-surface px-3 text-[13px] font-semibold text-ink"
+                className="inline-flex min-h-[44px] items-center rounded-lg border border-border-control bg-card px-3 text-[13px] font-semibold text-ink hover:bg-surface-2"
               >
                 Columns
               </button>
               {columnsOpen ? (
-                <div className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-line bg-surface p-2 shadow-pop">
+                <div className="absolute right-0 z-20 mt-1 w-56 rounded-lg border border-border bg-card p-2 shadow-pop">
                   {hideableColumns.map((column) => {
                     const visible = !hiddenKeys.has(column.key);
                     const checkboxId = `datatable-column-${column.key}`;
@@ -208,7 +213,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
                     key={column.key}
                     scope="col"
                     aria-sort={ariaSort}
-                    className={`bg-cream/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate2 ${alignClass(column.align)} ${column.className ?? ""}`}
+                    className={`bg-surface-2 px-3 py-2 text-[12px] font-semibold uppercase tracking-wide text-ink-2 ${alignClass(column.align)} ${column.className ?? ""}`}
                   >
                     {column.sortable && sort ? (
                       <button
@@ -231,7 +236,15 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
           {!loading && !isEmpty ? (
             <tbody>
               {rows.map((row) => (
-                <tr key={rowKey(row)} className="border-t border-line">
+                <tr
+                  key={rowKey(row)}
+                  aria-selected={selectedRowKey !== undefined ? rowKey(row) === selectedRowKey : undefined}
+                  className={`h-11 border-t border-border hover:bg-surface-2 ${
+                    selectedRowKey !== undefined && rowKey(row) === selectedRowKey
+                      ? "bg-primary-light shadow-[inset_3px_0_0_0_var(--color-primary)] hover:bg-primary-light"
+                      : ""
+                  }`}
+                >
                   {visibleColumns.map((column) => {
                     const content = column.render
                       ? column.render(row)
@@ -241,7 +254,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
                     return (
                       <td
                         key={column.key}
-                        className={`px-3 py-2 text-[13px] text-ink ${alignClass(column.align)} ${column.className ?? ""}`}
+                        className={`px-3 py-2 text-table text-ink ${alignClass(column.align)} ${column.className ?? ""}`}
                       >
                         {content}
                       </td>
@@ -255,13 +268,13 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
       </div>
 
       {loading ? (
-        <div className="border-t border-line">
+        <div className="border-t border-border">
           <SkeletonRows rows={4} />
         </div>
       ) : null}
 
       {isEmpty ? (
-        <div className="border-t border-line p-3">
+        <div className="border-t border-border p-3">
           {emptyState ?? (
             <EmptyState
               title="No records"
@@ -272,7 +285,7 @@ export function DataTable<Row>(props: DataTableProps<Row>) {
       ) : null}
 
       {pagination ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-3 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2">
           {paginationSummary}
           {paginationControls}
         </div>

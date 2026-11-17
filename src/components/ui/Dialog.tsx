@@ -38,23 +38,23 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-lg rounded-xl bg-surface shadow-pop"
+        className="w-full max-w-lg rounded-xl bg-card shadow-pop"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-line px-4 py-3">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-[14px] font-semibold text-ink">{title}</h2>
           <button
             type="button"
             aria-label="Close dialog"
             onClick={onClose}
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md px-3 text-[16px] text-slate2"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md px-3 text-[16px] text-ink-2"
           >
             ×
           </button>
         </div>
         <div className="px-4 py-3">{children}</div>
         {footer ? (
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line px-4 py-3">
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-4 py-3">
             {footer}
           </div>
         ) : null}
