@@ -408,7 +408,15 @@ beforeAll(async () => {
       reporterId: adminId,
       warehouseId: whA,
       description: "P6 critical fixture",
-      createdAt: todayInstant,
+      // Real now, NOT todayInstant: bla_test is append-only, and
+      // every run used to plant its CRITICAL at the identical
+      // todayInstant — once more than five runs had accumulated,
+      // the top-5 (severity, createdAt desc) membership assertion
+      // below became a coin flip among tied timestamps. Open
+      // incidents are a snapshot (not day-scoped), so the exact
+      // instant is free; real now makes this run's CRITICAL
+      // strictly the newest. (Step 4 drive-by fix, 2026-11-17.)
+      createdAt: new Date(),
     },
   });
   await prisma.incident.create({
