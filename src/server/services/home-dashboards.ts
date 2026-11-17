@@ -1642,3 +1642,490 @@ export async function getLinehaulFieldHome(
     recentActivity: activity.slice(0, 6),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Vendor + Customer homes (V3 Step 7)
+// ---------------------------------------------------------------------------
+
+import { getVendor, listVendorAssignments } from "@/server/services/vendors";
+import { getVendorReport } from "@/server/services/reports";
+import { listBookings } from "@/server/services/bookings";
+import { listPackages } from "@/server/services/packages";
+import type { PackageView } from "@/server/services/package-lifecycle";
+import { listReturns } from "@/server/services/returns";
+import { listTickets } from "@/server/services/support-tickets";
+import { listInvoices } from "@/server/services/invoices";
+import { listMyNotifications } from "@/server/services/notifications";
+
+/** Vendor-shipment row shared by the recent + attention lists. Mapped
+ *  field-by-field from PackageView (never spread): the vendor surface
+ *  gets the parcel's identity, destination district/city, statuses and
+ *  COD amount — nothing else from the shared view. */
+export interface VendorShipmentRow {
+  id: string;
+  trackingId: string;
+  orderId: string;
+  recipientName: string;
+  deliveryCity: string;
+  deliveryDistrict: string;
+  operationalStatus: string;
+  deliveryStatus: string;
+  codAmountPaisa: string;
+  createdAt: string;
+}
+
+function toVendorShipmentRow(pkg: PackageView): VendorShipmentRow {
+  return {
+    id: pkg.id,
+    trackingId: pkg.trackingId,
+    orderId: pkg.orderId,
+    recipientName: pkg.recipientName,
+    deliveryCity: pkg.deliveryCity,
+    deliveryDistrict: pkg.deliveryDistrict,
+    operationalStatus: pkg.operationalStatus,
+    deliveryStatus: pkg.deliveryStatus,
+    codAmountPaisa: pkg.codAmountPaisa,
+    createdAt: pkg.createdAt,
+  };
+}
+
+/** Current package count for a set of operational statuses, summed
+ *  from the scoped list's totals (pageSize 1 — only the count is
+ *  read). Mirrors the current vendor page's own helper. */
+async function vendorPackageCount(
+  actor: ActorContext,
+  statuses: readonly string[],
+): Promise<number> {
+  const parts = await Promise.all(
+    statuses.map(
+      async (status) =>
+        (await listPackages(actor, { status, page: 1, pageSize: 1 })).meta.total,
+    ),
+  );
+  return parts.reduce((sum, n) => sum + n, 0);
+}
+
+export interface VendorHomeData {
+  vendor: {
+    id: string;
+    businessName: string;
+    verificationStatus: string;
+    isActive: boolean;
+    /** The vendor's warehouse assignments (listVendorAssignments —
+     *  readable by the vendor's own users via requireVendorReadable).
+     *  VendorView itself carries no primary-warehouse field, so the
+     *  assignments are the honest warehouse picture: every assigned
+     *  warehouse, no invented "primary". */
+    warehouses: {
+      warehouseId: string;
+      warehouseCode: string;
+      kind: string;
+      isActive: boolean;
+    }[];
+  };
+  metrics: {
+    /** The vendor report's own range (its default 30-day window) —
+     *  carried through so the page labels the windowed figures with
+     *  the exact dates the report used. */
+    range: { from: string; to: string };
+    /** Orders booked in the report range (report row). */
+    bookings: number;
+    /** Live ProofOfDelivery rows in the report range (report row). */
+    delivered: number;
+    /** Returns created in the report range (report row). */
+    returnsCreated: number;
+    /** Current packages booked but not yet picked up
+     *  (BOOKED + PICKUP_ASSIGNED + PICKUP_IN_PROGRESS). */
+    pendingPickup: number;
+    /** Current packages on a warehouse-to-warehouse leg
+     *  (DISPATCHED + IN_TRANSIT — the file's IN_TRANSIT_STATUSES). */
+    inTransit: number;
+    outForDelivery: number;
+    deliveryAttempted: number;
+    /** The vendor-payable LEDGER balance from the report row
+     *  (payableBalancePaisa). This is COD payable TO the vendor —
+     *  it is never the report's codCollectedPaisa and is never
+     *  labelled "COD collected". */
+    codPayablePaisa: string;
+    /** Open-invoice totals minus derived paid components (report
+     *  row). The report row carries NO open-invoice count (its
+     *  invoicesIssued counts invoices issued inside the range, a
+     *  different figure), so this model carries no such count
+     *  rather than mislabelling one. */
+    outstandingPaisa: string;
+  };
+  attention: {
+    deliveryAttempted: number;
+    /** Returns in REQUESTED — asked for, not yet approved/collected. */
+    returnsAwaiting: number;
+    /** Open incidents on the vendor's own packages. Scoping proof:
+     *  listIncidents branches on actor type — a vendor actor holds
+     *  incident.report, not incident.manage (permissions catalog),
+     *  so it lands in the `actor.vendorId` branch, which scopes the
+     *  query to `{ package: { order: { vendorId } } }`. */
+    openIncidents: number;
+    /** Open tickets on the vendor organisation. Scoping proof:
+     *  listTickets scopes `{ vendorId: actor.vendorId }` for every
+     *  actor without support.ticket.manage (a staff-only grant the
+     *  vendor role does not hold). */
+    openTickets: number;
+  };
+  recentShipments: VendorShipmentRow[];
+  /** The DELIVERY_ATTEMPTED packages behind attention.deliveryAttempted. */
+  attentionShipments: VendorShipmentRow[];
+  recentBookings: {
+    id: string;
+    orderNumber: string;
+    destinationDistrict: string;
+    packageCount: number;
+    status: string;
+    approvalStatus: string;
+    createdAt: string;
+  }[];
+  recentReturns: {
+    id: string;
+    returnNumber: string;
+    trackingId: string;
+    reason: string;
+    status: string;
+    createdAt: string;
+  }[];
+}
+
+/**
+ * The V3 Vendor home read model: a 1:1 data replacement for the
+ * composition the current vendor page performs inline. Every read is
+ * force-scoped to the vendor organisation inside its own service —
+ * getVendor / listVendorAssignments (requireVendorReadable: own org
+ * or vendor.read_all), getVendorReport (vendor actors resolve to
+ * their own row only), listPackages / listBookings (vendor branch:
+ * order.vendorId = actor.vendorId), listReturns (vendor branch:
+ * order.vendorId), listIncidents / listTickets (see the attention
+ * field comments for their vendor branches). Every list row is
+ * field-mapped explicitly, never spread.
+ *
+ * The page handles the unlinked case (!actor.vendorId) before
+ * calling; this model assumes the link exists and throws otherwise,
+ * matching the fail-closed posture of the sibling models.
+ */
+export async function getVendorHome(actor: ActorContext): Promise<VendorHomeData> {
+  if (!actor.vendorId) {
+    throw new Error("getVendorHome requires an actor linked to a vendor organisation");
+  }
+  const vendorId = actor.vendorId;
+
+  const vendor = await getVendor(actor, vendorId);
+  const assignments = await listVendorAssignments(actor, vendorId);
+  const report = await getVendorReport(actor, {});
+  const row = report.rows[0];
+
+  const [
+    pendingPickup,
+    inTransit,
+    outForDelivery,
+    attemptedPage,
+    recentPage,
+    returnsAwaitingPage,
+    recentReturnsPage,
+    recentBookingsPage,
+    openIncidentsPage,
+    openTicketsPage,
+  ] = await Promise.all([
+    vendorPackageCount(actor, AWAITING_PICKUP_STATUSES),
+    vendorPackageCount(actor, IN_TRANSIT_STATUSES),
+    vendorPackageCount(actor, ["OUT_FOR_DELIVERY"]),
+    listPackages(actor, { status: "DELIVERY_ATTEMPTED", page: 1, pageSize: 5 }),
+    listPackages(actor, { page: 1, pageSize: 8 }),
+    listReturns(actor, { status: "REQUESTED", page: 1, pageSize: 1 }),
+    listReturns(actor, { page: 1, pageSize: 5 }),
+    listBookings(actor, { page: 1, pageSize: 5 }),
+    listIncidents(actor, { openOnly: true, page: 1, pageSize: 1 }),
+    listTickets(actor, { openOnly: true, page: 1, pageSize: 1 }),
+  ]);
+
+  return {
+    vendor: {
+      id: vendor.id,
+      businessName: vendor.businessName,
+      verificationStatus: vendor.verificationStatus,
+      isActive: vendor.isActive,
+      warehouses: assignments.map((assignment) => ({
+        warehouseId: assignment.warehouseId,
+        warehouseCode: assignment.warehouseCode,
+        kind: assignment.kind,
+        isActive: assignment.isActive,
+      })),
+    },
+    metrics: {
+      range: { from: report.range.from, to: report.range.to },
+      bookings: row?.bookings ?? 0,
+      delivered: row?.delivered ?? 0,
+      returnsCreated: row?.returnsCreated ?? 0,
+      pendingPickup,
+      inTransit,
+      outForDelivery,
+      deliveryAttempted: attemptedPage.meta.total,
+      codPayablePaisa: row?.payableBalancePaisa ?? "0",
+      outstandingPaisa: row?.outstandingPaisa ?? "0",
+    },
+    attention: {
+      deliveryAttempted: attemptedPage.meta.total,
+      returnsAwaiting: returnsAwaitingPage.meta.total,
+      openIncidents: openIncidentsPage.meta.total,
+      openTickets: openTicketsPage.meta.total,
+    },
+    recentShipments: recentPage.packages.map(toVendorShipmentRow),
+    attentionShipments: attemptedPage.packages.map(toVendorShipmentRow),
+    recentBookings: recentBookingsPage.bookings.map((booking) => ({
+      id: booking.id,
+      orderNumber: booking.orderNumber,
+      destinationDistrict: booking.destinationDistrict,
+      packageCount: booking.packageCount,
+      status: booking.status,
+      approvalStatus: booking.approvalStatus,
+      createdAt: booking.createdAt,
+    })),
+    recentReturns: recentReturnsPage.items.map((ret) => ({
+      id: ret.id,
+      returnNumber: ret.returnNumber,
+      trackingId: ret.trackingId,
+      reason: ret.reason,
+      status: ret.status,
+      createdAt: ret.createdAt,
+    })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Customer home (V3 Step 7)
+// ---------------------------------------------------------------------------
+
+export interface CustomerHomeData {
+  metrics: {
+    /** Every package addressed to this customer. */
+    total: number;
+    /** On a warehouse-to-warehouse leg: DISPATCHED + IN_TRANSIT —
+     *  the same bucket this file's executive home uses
+     *  (IN_TRANSIT_STATUSES / bucketPackageStates). DISPATCHED joins
+     *  it deliberately: the parcel has left its origin warehouse and
+     *  is travelling, which is what "in transit" means on this home. */
+    inTransit: number;
+    /** OUT_FOR_DELIVERY, carried SEPARATELY from inTransit — the
+     *  current UI folds it into the "In transit" tile with an OFD
+     *  sub-line; the model keeps the two counts distinct so the page
+     *  can present each honestly. */
+    outForDelivery: number;
+    delivered: number;
+    /** ReturnRequests whose package is addressed to this customer.
+     *  Source: ONE direct count scoped exactly
+     *  `package.recipientCustomerId = actor.customerId` — listReturns
+     *  has NO customer branch (a customer actor falls through to the
+     *  warehouse branch and reads nothing), so the returns service
+     *  cannot supply a customer figure; the direct count follows the
+     *  same own-scope predicate listPackages uses for customers. */
+    returned: number;
+  };
+  attention: {
+    deliveryAttempted: number;
+    /** Open tickets — listTickets scopes a customer actor to
+     *  `{ customerId: actor.customerId }` (raisedBy fallthrough does
+     *  not apply: the customerId branch precedes it, and the actor
+     *  holds no support.ticket.manage). */
+    openTickets: number;
+    /** Invoices addressed to the customer with money still owing —
+     *  the current home's own derivation over listInvoices
+     *  (status !== CANCELLED && outstandingPaisa !== "0"). */
+    unpaidInvoices: number;
+    unpaidTotalPaisa: string;
+  };
+  /** The DELIVERY_ATTEMPTED packages behind attention.deliveryAttempted. */
+  attemptedShipments: {
+    id: string;
+    trackingId: string;
+    description: string;
+    operationalStatus: string;
+    deliveryStatus: string;
+    deliveryCity: string;
+    deliveryDistrict: string;
+    createdAt: string;
+  }[];
+  /**
+   * Active shipments (not DELIVERED / CANCELLED), newest first,
+   * capped at 5. Source: ONE direct query scoped exactly
+   * `recipientCustomerId = actor.customerId` — listPackages'
+   * PackageView carries neither the shipment's expectedDeliveryAt
+   * nor the current warehouse, and both are real stored fields the
+   * home shows. The select names ONLY the fields below plus
+   * shipment.expectedDeliveryAt and currentWarehouse { name, city }:
+   * no coordinates, no driver fields, no recipient phone/address.
+   */
+  currentShipments: {
+    trackingId: string;
+    description: string;
+    operationalStatus: string;
+    deliveryCity: string;
+    deliveryDistrict: string;
+    /** The shipment's stored estimate, set at booking from the
+     *  shipping service. Null when the data carries none — never
+     *  computed here; the page shows it only when present. */
+    expectedDeliveryAt: string | null;
+    /** "<warehouse name>, <city>" of the package's current
+     *  warehouse; null when the package is not at a warehouse. */
+    currentLocationLabel: string | null;
+    lastUpdateAt: string;
+  }[];
+  recentDeliveries: {
+    trackingId: string;
+    description: string;
+    deliveryCity: string;
+    deliveryDistrict: string;
+    /** PackageView carries no delivered-at timestamp (the
+     *  ProofOfDelivery row is not exposed by any package read), so
+     *  this is the package's own updatedAt — the page labels it as
+     *  a last-update time, never as a proven delivery instant. */
+    lastUpdateAt: string;
+  }[];
+  /** The customer's own in-app notifications, newest first; null
+   *  when the read failed — the current home's catch-to-null
+   *  tolerance, so a notification outage never fails the home. */
+  recentNotifications:
+    | { id: string; title: string; body: string; createdAt: string }[]
+    | null;
+}
+
+/**
+ * The V3 Customer home read model: a composition over the same
+ * force-scoped reads the current customer home uses — listPackages
+ * (customer branch: recipientCustomerId = actor.customerId),
+ * listTickets (customer branch: customerId), listInvoices
+ * (invoiceScope: customerId) and listMyNotifications (own userId) —
+ * plus the two direct own-scope queries documented on the model
+ * fields above (returned count, current shipments).
+ *
+ * HARD RULE — the customer surface carries NO coordinates, NO driver
+ * identity or contact, NO other customer's data, and no recipient
+ * phone or street address (city/district only). Every service view
+ * is field-mapped explicitly so nothing extra can leak through a
+ * shared type; the Step 7 integration test serialises the model and
+ * scans for the forbidden keys.
+ *
+ * The page handles the unlinked case (!actor.customerId) before
+ * calling; this model assumes the link exists and throws otherwise.
+ */
+export async function getCustomerHome(actor: ActorContext): Promise<CustomerHomeData> {
+  if (!actor.customerId) {
+    throw new Error("getCustomerHome requires an actor linked to a customer record");
+  }
+  const customerId = actor.customerId;
+
+  const totalFor = async (status?: string) =>
+    (await listPackages(actor, { status, page: 1, pageSize: 1 })).meta.total;
+
+  const [
+    total,
+    dispatched,
+    inTransitStatus,
+    outForDelivery,
+    delivered,
+    attemptedPage,
+    deliveredPage,
+    openTicketsPage,
+    invoicesPage,
+    notificationsPage,
+    returned,
+    currentRows,
+  ] = await Promise.all([
+    totalFor(),
+    totalFor("DISPATCHED"),
+    totalFor("IN_TRANSIT"),
+    totalFor("OUT_FOR_DELIVERY"),
+    totalFor("DELIVERED"),
+    listPackages(actor, { status: "DELIVERY_ATTEMPTED", page: 1, pageSize: 5 }),
+    listPackages(actor, { status: "DELIVERED", page: 1, pageSize: 5 }),
+    listTickets(actor, { openOnly: true, page: 1, pageSize: 1 }),
+    listInvoices(actor, { page: 1, pageSize: 100 }),
+    listMyNotifications(actor, { page: 1, pageSize: 5 }).catch(() => null),
+    prisma.returnRequest.count({
+      where: { package: { recipientCustomerId: customerId } },
+    }),
+    prisma.package.findMany({
+      where: {
+        recipientCustomerId: customerId,
+        operationalStatus: { notIn: ["DELIVERED", "CANCELLED"] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: {
+        trackingId: true,
+        description: true,
+        operationalStatus: true,
+        deliveryCity: true,
+        deliveryDistrict: true,
+        updatedAt: true,
+        shipment: { select: { expectedDeliveryAt: true } },
+        currentWarehouse: { select: { name: true, city: true } },
+      },
+    }),
+  ]);
+
+  const unpaid = invoicesPage.items.filter(
+    (invoice) => invoice.status !== "CANCELLED" && invoice.outstandingPaisa !== "0",
+  );
+  const unpaidTotal = unpaid.reduce(
+    (sum, invoice) => sum + BigInt(invoice.outstandingPaisa),
+    BigInt(0),
+  );
+
+  return {
+    metrics: {
+      total,
+      inTransit: dispatched + inTransitStatus,
+      outForDelivery,
+      delivered,
+      returned,
+    },
+    attention: {
+      deliveryAttempted: attemptedPage.meta.total,
+      openTickets: openTicketsPage.meta.total,
+      unpaidInvoices: unpaid.length,
+      unpaidTotalPaisa: unpaidTotal.toString(),
+    },
+    attemptedShipments: attemptedPage.packages.map((pkg) => ({
+      id: pkg.id,
+      trackingId: pkg.trackingId,
+      description: pkg.description,
+      operationalStatus: pkg.operationalStatus,
+      deliveryStatus: pkg.deliveryStatus,
+      deliveryCity: pkg.deliveryCity,
+      deliveryDistrict: pkg.deliveryDistrict,
+      createdAt: pkg.createdAt,
+    })),
+    currentShipments: currentRows.map((row) => ({
+      trackingId: row.trackingId,
+      description: row.description,
+      operationalStatus: row.operationalStatus,
+      deliveryCity: row.deliveryCity,
+      deliveryDistrict: row.deliveryDistrict,
+      expectedDeliveryAt: row.shipment.expectedDeliveryAt?.toISOString() ?? null,
+      currentLocationLabel: row.currentWarehouse
+        ? `${row.currentWarehouse.name}, ${row.currentWarehouse.city}`
+        : null,
+      lastUpdateAt: row.updatedAt.toISOString(),
+    })),
+    recentDeliveries: deliveredPage.packages.map((pkg) => ({
+      trackingId: pkg.trackingId,
+      description: pkg.description,
+      deliveryCity: pkg.deliveryCity,
+      deliveryDistrict: pkg.deliveryDistrict,
+      lastUpdateAt: pkg.updatedAt,
+    })),
+    recentNotifications: notificationsPage
+      ? notificationsPage.items.map((note) => ({
+          id: note.id,
+          title: note.title,
+          body: note.body,
+          createdAt: note.createdAt,
+        }))
+      : null,
+  };
+}
