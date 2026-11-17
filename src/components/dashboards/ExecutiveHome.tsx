@@ -134,8 +134,8 @@ export async function ExecutiveHome({
 
   const quickActions: { label: string; href: string; icon: NavIconName; show: boolean }[] = [
     { label: "Create Booking", href: `${basePath}/bookings/new`, icon: "package", show: can("booking.create") },
-    { label: "Add Customer", href: `${basePath}/customers/new`, icon: "user", show: can("customer.create") },
-    { label: "Register Vendor", href: `${basePath}/vendors/new`, icon: "store", show: can("vendor.create") },
+    { label: "Add Customer", href: `${basePath}/customers/new`, icon: "user", show: can("customer.manage") },
+    { label: "Register Vendor", href: `${basePath}/vendors/new`, icon: "store", show: can("vendor.manage") },
     { label: "Add Warehouse", href: `${basePath}/warehouses/new`, icon: "warehouse", show: can("warehouse.create") },
     { label: "Create Task", href: `${basePath}/tasks`, icon: "tasks", show: can("task.create") },
     { label: "Assign Driver", href: `${basePath}/drivers`, icon: "truck", show: can("driver.assign") },
@@ -199,7 +199,7 @@ export async function ExecutiveHome({
                 Create Booking
               </Link>
             ) : null}
-            {can("vendor.create") ? (
+            {can("vendor.manage") ? (
               <Link href={`${basePath}/vendors/new`} className={SECONDARY_LINK}>
                 Add Vendor
               </Link>
@@ -225,7 +225,7 @@ export async function ExecutiveHome({
           }
           icon={<NavIcon name="package" />}
           tint="brand"
-          href={`${basePath}/bookings`}
+          href={can("booking.read_all") ? `${basePath}/bookings` : undefined}
           trend={
             kpis.bookingsDelta ? (
               <TrendIndicator
@@ -242,7 +242,7 @@ export async function ExecutiveHome({
           context={`Of which ${readyCount} ready for dispatch or delivery`}
           icon={<NavIcon name="warehouse" />}
           tint="info"
-          href={`${basePath}/reports`}
+          href={can("report.read_all") ? `${basePath}/reports` : undefined}
         />
         <StatCard
           label="In Transit"
@@ -250,7 +250,7 @@ export async function ExecutiveHome({
           context={`${ops.activeTransfers} active transfers`}
           icon={<NavIcon name="truck" />}
           tint="info"
-          href={`${basePath}/reports`}
+          href={can("report.read_all") ? `${basePath}/reports` : undefined}
         />
         <StatCard
           label="Out for Delivery"
@@ -258,7 +258,7 @@ export async function ExecutiveHome({
           context={`${buckets.assignedToRiders} more assigned to riders`}
           icon={<NavIcon name="hand" />}
           tint="warning"
-          href={`${basePath}/reports?status=OUT_FOR_DELIVERY`}
+          href={can("report.read_all") ? `${basePath}/reports?status=OUT_FOR_DELIVERY` : undefined}
         />
         <StatCard
           label="Delivered"
@@ -266,7 +266,7 @@ export async function ExecutiveHome({
           context={`All time · ${deliveredLast30} in the last 30 days`}
           icon={<NavIcon name="inbox" />}
           tint="success"
-          href={`${basePath}/reports?status=DELIVERED`}
+          href={can("report.read_all") ? `${basePath}/reports?status=DELIVERED` : undefined}
           trend={
             kpis.deliveredDelta ? (
               <TrendIndicator
@@ -393,12 +393,14 @@ export async function ExecutiveHome({
         <Section
           title="Money — Last 30 Days"
           action={
-            <Link
-              href={`${basePath}/reports`}
-              className="text-[13px] font-semibold text-primary hover:text-primary-dark"
-            >
-              Full reports →
-            </Link>
+            can("report.read_all") ? (
+              <Link
+                href={`${basePath}/reports`}
+                className="text-[13px] font-semibold text-primary hover:text-primary-dark"
+              >
+                Full reports →
+              </Link>
+            ) : undefined
           }
         >
           <dl className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">

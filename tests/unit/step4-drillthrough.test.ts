@@ -26,6 +26,10 @@ const bookingsPage = readFileSync(
   join(ROOT, "src/app/(dashboards)/admin/bookings/page.tsx"),
   "utf8",
 );
+const catalog = readFileSync(
+  join(ROOT, "src/lib/permissions/catalog.ts"),
+  "utf8",
+);
 
 /** Distinct `${basePath}/…` path templates used by the home. */
 function homePaths(): string[] {
@@ -88,6 +92,22 @@ describe("Step 4 ExecutiveHome drill-through contract", () => {
     expect(home).not.toContain("/receive");
     expect(home).not.toContain(">Create Transfer<");
     expect(home).not.toContain(">Receive Package<");
+  });
+
+  it("every permission code the home gates on exists in the catalog", () => {
+    // Regression guard for the Step 4 security review's LOW-1: the
+    // home originally gated Add Vendor / Add Customer on
+    // vendor.create / customer.create, which do not exist — the
+    // actions silently never rendered. Every can("…") literal in
+    // the component must be a real catalog code.
+    const codes = new Set<string>();
+    for (const m of home.matchAll(/can\("([a-z0-9._]+)"\)/g)) codes.add(m[1]);
+    expect(codes.size).toBeGreaterThan(6);
+    for (const code of codes) {
+      expect(catalog, `catalog has ${code}`).toContain(`P("${code}"`);
+    }
+    expect(codes.has("vendor.manage")).toBe(true);
+    expect(codes.has("customer.manage")).toBe(true);
   });
 
   it("activity and attention detail links use the [id] routes", () => {

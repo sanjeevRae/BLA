@@ -644,7 +644,7 @@ export function mapAuditActivity(
       createdAt: row.createdAt,
       href:
         row.entityId !== null && segment
-          ? `${basePath}/${segment}/${row.entityId}`
+          ? `${basePath}/${segment}/${encodeURIComponent(row.entityId)}`
           : null,
     });
   }
