@@ -285,7 +285,7 @@ export async function BookingDetailPage({
       ) : null}
 
       <SectionCard title="Labels">
-        <div className="flex flex-wrap gap-4">
+        <div className="flex max-w-full flex-wrap gap-4 overflow-x-auto pb-1">
           {packages.map((pkg) => (
             <PackageLabelCard key={pkg.id} actor={actor} packageId={pkg.id} baseUrl={publicBaseUrl} />
           ))}
