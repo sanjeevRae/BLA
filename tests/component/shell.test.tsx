@@ -53,6 +53,7 @@ function framePropsFor(role: RoleCode, stripPermissions: string[] = []): ShellFr
     groups: toNavGroupViews(groupNavItems(items)),
     quickActions: visibleQuickActions(permissions, dashboard).map(toView),
     searchItems: items.map(toView),
+    recentsScope: "test-user-id",
     warehouses: null,
     selectedWarehouseId: null,
     canSelectAllWarehouses: false,

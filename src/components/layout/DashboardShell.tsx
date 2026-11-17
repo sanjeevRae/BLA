@@ -76,6 +76,7 @@ export async function DashboardShell({
       groups={groups}
       quickActions={quickActions}
       searchItems={searchItems}
+      recentsScope={actor.userId}
       warehouses={warehouses}
       selectedWarehouseId={selectedWarehouseId}
       canSelectAllWarehouses={canSelectAllWarehouses}

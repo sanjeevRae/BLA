@@ -100,19 +100,19 @@ export function CommandMenuTrigger({ className = "" }: { className?: string }) {
   );
 }
 
-function recentsKey(items: NavItemView[]): string {
-  // Per-user keying: the actor's dashboard tree is the first segment
-  // of every href the shell hands this actor, so recents never bleed
-  // across roles on a shared browser. Sign-out clearing rides the
-  // existing server-side cookie flow; a stale key for another tree
-  // is simply never read again by this actor.
-  const tree = items[0]?.href.split("/")[1] ?? "default";
-  return `bla:palette-recents:${tree}`;
+function recentsKey(recentsScope: string): string {
+  // Per-USER keying (F3): recents are keyed by the actor's userId
+  // (threaded from DashboardShell via ShellFrame as `recentsScope`),
+  // never by dashboard tree — record selections carry a tracking-ID
+  // label + recipient hint + href, so two users of the same tree on
+  // a shared browser must never see each other's records. A stale
+  // key for another user is simply never read again by this actor.
+  return `bla:palette-recents:${recentsScope}`;
 }
 
-function readRecents(items: NavItemView[]): PaletteEntry[] {
+function readRecents(recentsScope: string): PaletteEntry[] {
   try {
-    const raw = window.localStorage.getItem(recentsKey(items));
+    const raw = window.localStorage.getItem(recentsKey(recentsScope));
     if (!raw) return [];
     const parsed = JSON.parse(raw) as PaletteEntry[];
     return Array.isArray(parsed)
@@ -123,13 +123,13 @@ function readRecents(items: NavItemView[]): PaletteEntry[] {
   }
 }
 
-function storeRecent(items: NavItemView[], entry: PaletteEntry) {
+function storeRecent(recentsScope: string, entry: PaletteEntry) {
   try {
     const next = [
       entry,
-      ...readRecents(items).filter((recent) => recent.href !== entry.href),
+      ...readRecents(recentsScope).filter((recent) => recent.href !== entry.href),
     ].slice(0, RECENTS_LIMIT);
-    window.localStorage.setItem(recentsKey(items), JSON.stringify(next));
+    window.localStorage.setItem(recentsKey(recentsScope), JSON.stringify(next));
   } catch {
     // Private-mode storage failures just mean no recents next time.
   }
@@ -157,9 +157,11 @@ function PaletteRow({ entry }: { entry: PaletteEntry }) {
 export function CommandMenu({
   items,
   quickActions,
+  recentsScope,
 }: {
   items: NavItemView[];
   quickActions: NavItemView[];
+  recentsScope: string;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -179,7 +181,7 @@ export function CommandMenu({
   // Every open path funnels through here so recents are re-read from
   // localStorage at open time (a client-only, per-open snapshot).
   function applyOpen(next: boolean) {
-    if (next) setRecents(readRecents(items));
+    if (next) setRecents(readRecents(recentsScope));
     setOpen(next);
   }
 
@@ -192,13 +194,13 @@ export function CommandMenu({
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setOpen((value) => {
-          if (!value) setRecents(readRecents(items));
+          if (!value) setRecents(readRecents(recentsScope));
           return !value;
         });
       }
     }
     function onOpenRequest() {
-      setRecents(readRecents(items));
+      setRecents(readRecents(recentsScope));
       setOpen(true);
     }
     document.addEventListener("keydown", onKey);
@@ -207,7 +209,7 @@ export function CommandMenu({
       document.removeEventListener("keydown", onKey);
       window.removeEventListener(OPEN_PALETTE_EVENT, onOpenRequest);
     };
-  }, [items]);
+  }, [recentsScope]);
 
   const trimmed = query.trim();
   const recordGroups = useMemo(
@@ -306,7 +308,7 @@ export function CommandMenu({
     (trimmed.length === 0 ? recents.length : 0);
 
   function choose(entry: PaletteEntry) {
-    storeRecent(items, entry);
+    storeRecent(recentsScope, entry);
     setOpen(false);
     setQuery("");
     setSearchState({ query: "", groups: [] });

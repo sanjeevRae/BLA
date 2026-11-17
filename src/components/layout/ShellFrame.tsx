@@ -22,6 +22,8 @@ export interface ShellFrameProps {
   groups: NavGroupView[];
   quickActions: NavItemView[];
   searchItems: NavItemView[];
+  /** Actor userId — scopes palette recents per user (F3). */
+  recentsScope: string;
   warehouses: WarehouseOption[] | null;
   selectedWarehouseId: string | null;
   canSelectAllWarehouses: boolean;
@@ -248,7 +250,11 @@ export function ShellFrame(props: ShellFrameProps) {
         </main>
       </div>
 
-      <CommandMenu items={props.searchItems} quickActions={props.quickActions} />
+      <CommandMenu
+        items={props.searchItems}
+        quickActions={props.quickActions}
+        recentsScope={props.recentsScope}
+      />
     </div>
   );
 }

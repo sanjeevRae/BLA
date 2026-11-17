@@ -32,6 +32,9 @@ const QUICK_ACTIONS: NavItemView[] = [
   { id: "admin:bookings/new", label: "New booking", href: "/admin/bookings/new", icon: "package" },
 ];
 
+const USER_A = "user-a-id";
+const USER_B = "user-b-id";
+
 const SEARCH_BODY = {
   groups: [
     {
@@ -83,7 +86,7 @@ function openWithCtrlK() {
 
 describe("CommandMenu", () => {
   it("renders Navigate + Actions groups when opened with Ctrl+K", async () => {
-    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} />);
+    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} recentsScope={USER_A} />);
     expect(screen.queryByPlaceholderText("Search or jump to…")).toBeNull();
     openWithCtrlK();
     const input = await screen.findByPlaceholderText("Search or jump to…");
@@ -100,7 +103,7 @@ describe("CommandMenu", () => {
     render(
       <>
         <CommandMenuTrigger />
-        <CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} />
+        <CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} recentsScope={USER_A} />
       </>,
     );
     fireEvent.click(screen.getByRole("button", { name: /Search or jump to/ }));
@@ -108,7 +111,7 @@ describe("CommandMenu", () => {
   });
 
   it("does not fetch for queries under 2 characters", async () => {
-    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} />);
+    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} recentsScope={USER_A} />);
     openWithCtrlK();
     const input = await screen.findByPlaceholderText("Search or jump to…");
     fireEvent.change(input, { target: { value: "b" } });
@@ -118,7 +121,7 @@ describe("CommandMenu", () => {
   });
 
   it("fetches records at ≥2 characters and navigates on selection", async () => {
-    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} />);
+    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} recentsScope={USER_A} />);
     openWithCtrlK();
     const input = await screen.findByPlaceholderText("Search or jump to…");
     fireEvent.change(input, { target: { value: "BLA-4839" } });
@@ -143,7 +146,7 @@ describe("CommandMenu", () => {
       ok: true,
       json: async () => ({ groups: [] }),
     }));
-    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} />);
+    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} recentsScope={USER_A} />);
     openWithCtrlK();
     const input = await screen.findByPlaceholderText("Search or jump to…");
     fireEvent.change(input, { target: { value: "zzzz" } });
@@ -152,13 +155,47 @@ describe("CommandMenu", () => {
   });
 
   it("remembers the last selection as a Recent on the next open", async () => {
-    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} />);
+    render(<CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} recentsScope={USER_A} />);
     openWithCtrlK();
     const input = await screen.findByPlaceholderText("Search or jump to…");
     fireEvent.change(input, { target: { value: "BLA-4839" } });
     const row = await screen.findByText("BLA-4839201756");
     fireEvent.click(row);
     await waitFor(() => expect(nav.push).toHaveBeenCalledTimes(1));
+    openWithCtrlK();
+    expect(await screen.findByText("Recent")).not.toBeNull();
+    expect(screen.getByText("BLA-4839201756")).not.toBeNull();
+  });
+
+  it("does not bleed recents across users on the same browser (F3)", async () => {
+    const first = render(
+      <CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} recentsScope={USER_A} />,
+    );
+    openWithCtrlK();
+    const input = await screen.findByPlaceholderText("Search or jump to…");
+    fireEvent.change(input, { target: { value: "BLA-4839" } });
+    const row = await screen.findByText("BLA-4839201756");
+    fireEvent.click(row);
+    await waitFor(() => expect(nav.push).toHaveBeenCalledTimes(1));
+    expect(
+      window.localStorage.getItem("bla:palette-recents:user-a-id"),
+    ).toContain("BLA-4839201756");
+    expect(window.localStorage.getItem("bla:palette-recents:user-b-id")).toBeNull();
+    expect(window.localStorage.getItem("bla:palette-recents:admin")).toBeNull();
+    first.unmount();
+
+    const second = render(
+      <CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} recentsScope={USER_B} />,
+    );
+    openWithCtrlK();
+    await screen.findByPlaceholderText("Search or jump to…");
+    expect(screen.queryByText("Recent")).toBeNull();
+    expect(screen.queryByText("BLA-4839201756")).toBeNull();
+    second.unmount();
+
+    render(
+      <CommandMenu items={ITEMS} quickActions={QUICK_ACTIONS} recentsScope={USER_A} />,
+    );
     openWithCtrlK();
     expect(await screen.findByText("Recent")).not.toBeNull();
     expect(screen.getByText("BLA-4839201756")).not.toBeNull();
