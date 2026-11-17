@@ -183,7 +183,7 @@ export function DensityScope({
   const apply = onDensityChange ?? internal.setDensity;
 
   return (
-    <div data-density={density} className={className}>
+    <div data-density={density} className={`min-w-0 ${className ?? ""}`}>
       {showToggle ? (
         <div className="flex items-center justify-end pb-2">
           <DensityToggle density={density} onDensityChange={apply} />

@@ -69,7 +69,7 @@ export function ProfileMenu({
         >
           {initials || "?"}
         </span>
-        <span className="hidden text-left leading-tight md:block">
+        <span className="hidden text-left leading-tight lg:block">
           <span className="block max-w-[160px] truncate text-[13px] font-semibold text-ink">
             {name}
           </span>

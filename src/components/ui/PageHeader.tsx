@@ -23,7 +23,7 @@ export function PageHeader({
   className?: string;
 }) {
   return (
-    <div className={`flex flex-wrap items-start justify-between gap-4 ${className}`}>
+    <div className={`flex min-w-0 flex-wrap items-start justify-between gap-4 ${className}`}>
       <div className="min-w-0">
         {eyebrow ? (
           <p className="text-[12.5px] font-semibold uppercase tracking-wide text-ink-2">
