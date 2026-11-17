@@ -2,9 +2,15 @@ import "server-only";
 
 import { prisma } from "@/lib/db/prisma";
 import type { ActorContext } from "@/lib/auth/actor";
-import { kathmanduToday, percent } from "@/lib/reports/domain";
+import { addDays, kathmanduToday, percent } from "@/lib/reports/domain";
+import type { IncidentCategory } from "@/lib/operations/domain";
 import { requirePermAudited } from "@/server/services/scoping";
-import { getDailyReport } from "@/server/services/reports";
+import {
+  getDailyReport,
+  getOverviewReport,
+  type OverviewReport,
+} from "@/server/services/reports";
+import { listAuditLogs, type AuditLogView } from "@/server/services/audit-log";
 import { listIncidents, type IncidentView } from "@/server/services/incidents";
 import { listTasks, type TaskView } from "@/server/services/tasks";
 import { listRemittances } from "@/server/services/cod-remittances";
@@ -123,6 +129,11 @@ export interface LiveOpsStaleMovement {
 export interface LiveOperationsSummary {
   /** Sessions ACTIVE or PAUSED right now (recently-ended excluded). */
   activeMovements: number;
+  /** Distinct drivers with an ACTIVE or PAUSED session right now. */
+  activeDrivers: number;
+  /** Active movements whose latest report is DELAYED (mirrors
+   *  byFreshness.delayed, surfaced flat for the executive home). */
+  delayedMovements: number;
   byType: { transfers: number; pickups: number; deliveries: number };
   byFreshness: { fresh: number; delayed: number; stale: number; offline: number };
   /** The stalest few active movements, least-recent report first
@@ -170,7 +181,15 @@ export function summarizeLiveOperations(
       originCode: item.origin.code,
       destinationCode: item.destination?.code ?? null,
     }));
-  return { activeMovements: active.length, byType, byFreshness, stalest, generatedAt };
+  return {
+    activeMovements: active.length,
+    activeDrivers: new Set(active.map((item) => item.driverId)).size,
+    delayedMovements: byFreshness.delayed,
+    byType,
+    byFreshness,
+    stalest,
+    generatedAt,
+  };
 }
 
 export async function getLiveOperationsSummary(
@@ -178,6 +197,147 @@ export async function getLiveOperationsSummary(
 ): Promise<LiveOperationsSummary> {
   const { items, generatedAt } = await listLiveOperations(actor);
   return summarizeLiveOperations(items, generatedAt);
+}
+
+// ---------------------------------------------------------------------------
+// Executive home helpers (V3 Step 4 — pure, exported for unit tests)
+// ---------------------------------------------------------------------------
+
+/** Packages physically sitting in a warehouse right now: received at
+ *  origin or destination and not yet dispatched / out for delivery. */
+export const AT_WAREHOUSE_STATUSES = [
+  "RECEIVED_AT_ORIGIN",
+  "INSPECTION_PENDING",
+  "PROCESSING",
+  "SORTED",
+  "READY_FOR_DISPATCH",
+  "TRANSFER_ASSIGNED",
+  "ARRIVED_AT_DESTINATION",
+  "RECEIVING_INSPECTION",
+  "RECEIVED_AT_DESTINATION",
+  "READY_FOR_DELIVERY",
+];
+
+/** Packages on a line-haul leg between warehouses. */
+export const IN_TRANSIT_STATUSES = ["DISPATCHED", "IN_TRANSIT"];
+
+export interface PackageStateBuckets {
+  atWarehouses: number;
+  inTransit: number;
+  outForDelivery: number;
+  delivered: number;
+  awaitingPickup: number;
+  assignedToRiders: number;
+  cancelled: number;
+  total: number;
+}
+
+/** Bucket an overview report's packagesByStatus snapshot into the
+ *  executive home's package-state groups. Statuses in no named bucket
+ *  (DRAFT, PICKED_UP, DELIVERY_ATTEMPTED, …) count toward `total`
+ *  only. The bucket status sets are disjoint, so every named status
+ *  lands in exactly one bucket. */
+export function bucketPackageStates(
+  packagesByStatus: { status: string; count: number }[],
+): PackageStateBuckets {
+  const atWarehouses = new Set(AT_WAREHOUSE_STATUSES);
+  const inTransit = new Set(IN_TRANSIT_STATUSES);
+  const awaitingPickup = new Set(AWAITING_PICKUP_STATUSES);
+  const buckets: PackageStateBuckets = {
+    atWarehouses: 0,
+    inTransit: 0,
+    outForDelivery: 0,
+    delivered: 0,
+    awaitingPickup: 0,
+    assignedToRiders: 0,
+    cancelled: 0,
+    total: 0,
+  };
+  for (const row of packagesByStatus) {
+    buckets.total += row.count;
+    if (atWarehouses.has(row.status)) buckets.atWarehouses += row.count;
+    else if (inTransit.has(row.status)) buckets.inTransit += row.count;
+    else if (row.status === "OUT_FOR_DELIVERY") buckets.outForDelivery += row.count;
+    else if (row.status === "DELIVERED") buckets.delivered += row.count;
+    else if (awaitingPickup.has(row.status)) buckets.awaitingPickup += row.count;
+    else if (row.status === "DELIVERY_ASSIGNED") buckets.assignedToRiders += row.count;
+    else if (row.status === "CANCELLED") buckets.cancelled += row.count;
+  }
+  return buckets;
+}
+
+const MONTH_ABBREVIATIONS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+/** The Monday (YYYY-MM-DD) of the calendar week containing `date`.
+ *  All math runs on the string parts through UTC — the input is a
+ *  Kathmandu calendar date, and local-Date math would shift the week
+ *  boundary with the host timezone. */
+function mondayOfWeek(date: string): string {
+  const [y, m, d] = date.split("-").map((part) => Number(part));
+  const dayOfWeek = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 = Sunday
+  const daysSinceMonday = (dayOfWeek + 6) % 7;
+  return addDays(date, -daysSinceMonday);
+}
+
+function weekLabel(monday: string): string {
+  const [, month, day] = monday.split("-").map((part) => Number(part));
+  return `${day} ${MONTH_ABBREVIATIONS[month - 1]}`;
+}
+
+/** Roll a daily bookings/delivered series up to calendar weeks
+ *  (Monday-start), ascending by week. Only weeks present in the
+ *  input appear — the overview series is zero-filled, so in
+ *  practice every week of the window is present. */
+export function weeklyDeliveredSeries(
+  dailySeries: { date: string; bookings: number; delivered: number }[],
+): { label: string; bookings: number; delivered: number }[] {
+  const byMonday = new Map<string, { label: string; bookings: number; delivered: number }>();
+  for (const row of dailySeries) {
+    const monday = mondayOfWeek(row.date);
+    const week = byMonday.get(monday) ?? {
+      label: weekLabel(monday),
+      bookings: 0,
+      delivered: 0,
+    };
+    week.bookings += row.bookings;
+    week.delivered += row.delivered;
+    byMonday.set(monday, week);
+  }
+  return [...byMonday.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([, week]) => week);
+}
+
+/** Today-vs-yesterday counts from a daily series. A metric is null
+ *  when either day's row is absent from the series (the series does
+ *  not cover that day, so no honest delta exists). */
+export function dayDelta(
+  dailySeries: { date: string; bookings: number; delivered: number }[],
+  today: string,
+): {
+  bookings: { today: number; yesterday: number } | null;
+  delivered: { today: number; yesterday: number } | null;
+} {
+  const todayRow = dailySeries.find((row) => row.date === today);
+  const yesterdayRow = dailySeries.find((row) => row.date === addDays(today, -1));
+  if (!todayRow || !yesterdayRow) return { bookings: null, delivered: null };
+  return {
+    bookings: { today: todayRow.bookings, yesterday: yesterdayRow.bookings },
+    delivered: { today: todayRow.delivered, yesterday: yesterdayRow.delivered },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +538,310 @@ export async function getAdminHome(actor: ActorContext): Promise<AdminHomeData> 
     recentActivity: {
       incidents: recentIncidentsPage?.items ?? [],
       transfers: recentTransfersPage?.items ?? [],
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Executive home (V3 Step 4 — the Admin / Super Admin landing read)
+// ---------------------------------------------------------------------------
+
+export interface ExecutiveActivityItem {
+  id: string;
+  label: string;
+  actorName: string | null;
+  createdAt: string;
+  href: string | null;
+}
+
+/** Entity types that belong on an operations activity feed — user /
+ *  session / settings / finance-admin audit rows stay off it. */
+const ACTIVITY_ENTITY_TYPES: ReadonlySet<string> = new Set([
+  "Order",
+  "Package",
+  "Transfer",
+  "Trip",
+  "DeliveryBatch",
+  "DeliveryAssignment",
+  "Task",
+  "Incident",
+  "Driver",
+  "ReturnRequest",
+  "VendorSettlement",
+  "Warehouse",
+  "Vendor",
+  "Customer",
+]);
+
+/** Friendly labels for the audit actions the feed names explicitly.
+ *  Anything else falls back to a humanised action (see below). */
+const ACTIVITY_LABELS: Readonly<Record<string, string>> = {
+  "booking.create": "New booking created",
+  "booking.approve": "Booking approved",
+  "booking.cancel": "Booking cancelled",
+  "booking.reject": "Booking rejected",
+  "booking.update": "Booking updated",
+  "transfer.create": "Transfer created",
+  "transfer.dispatch": "Transfer dispatched",
+  "transfer.dispatched": "Transfer dispatched",
+  "transfer.receive": "Transfer received",
+  "transfer.reconciled": "Transfer reconciled",
+  "trip.departed": "Trip departed",
+  "trip.arrived": "Trip arrived",
+  "delivery.confirmed": "Delivery completed",
+  "delivery.attempt_recorded": "Delivery attempt recorded",
+  "delivery.assign": "Driver assigned to a delivery",
+  "driver.assign": "Driver assigned",
+  "package.inspect": "Package inspected",
+  "transfer.package_received_scan": "Package received",
+  "task.created": "Task created",
+  "task.create": "Task created",
+  "task.verify": "Task verified",
+  "task.status_changed": "Task updated",
+  "incident.reported": "Incident reported",
+  "incident.report": "Incident reported",
+  "incident.resolve": "Incident resolved",
+};
+
+/** Deep links for the entity types that have a detail page under
+ *  every dashboard tree; the rest render as plain feed rows. */
+const ACTIVITY_HREF_SEGMENTS: Readonly<Record<string, string>> = {
+  Order: "bookings",
+  Incident: "incidents",
+  Task: "tasks",
+  Vendor: "vendors",
+  Customer: "customers",
+  Driver: "drivers",
+  Warehouse: "warehouses",
+  VendorSettlement: "settlements",
+};
+
+function humaniseAction(action: string): string {
+  const last = action.split(".").pop() ?? action;
+  const words = last.replaceAll("_", " ").trim();
+  if (!words) return action;
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Project audit-log rows onto the executive activity feed: recorded
+ *  operational events only (reads and denials are noise here),
+ *  newest first as delivered by listAuditLogs, capped at 8. */
+export function mapAuditActivity(
+  rows: AuditLogView[],
+  basePath: string,
+): ExecutiveActivityItem[] {
+  const items: ExecutiveActivityItem[] = [];
+  for (const row of rows) {
+    if (items.length >= 8) break;
+    if (row.outcome !== "recorded") continue;
+    if (!ACTIVITY_ENTITY_TYPES.has(row.entityType)) continue;
+    if (row.action.includes("read_") || row.action === "access.denied") continue;
+    const segment = ACTIVITY_HREF_SEGMENTS[row.entityType];
+    items.push({
+      id: row.id,
+      label: ACTIVITY_LABELS[row.action] ?? humaniseAction(row.action),
+      actorName: row.actorName,
+      createdAt: row.createdAt,
+      href:
+        row.entityId !== null && segment
+          ? `${basePath}/${segment}/${row.entityId}`
+          : null,
+    });
+  }
+  return items;
+}
+
+export interface ExecutiveAttentionGroup {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/** Open-incident category groups for the attention panel. The COD
+ *  group additionally folds in finance's DISCREPANCY remittances
+ *  (added by the caller, not an incident category). */
+const ATTENTION_GROUP_DEFS: {
+  key: string;
+  label: string;
+  categories: IncidentCategory[];
+}[] = [
+  {
+    key: "missing",
+    label: "Missing packages",
+    categories: ["MISSING_PACKAGE", "TRANSFER_SHORTAGE"],
+  },
+  {
+    key: "transferDiscrepancies",
+    label: "Transfer discrepancies",
+    categories: [
+      "TRANSFER_EXCESS",
+      "HANDOVER_DISCREPANCY",
+      "WRONG_PACKAGE_RECEIVED",
+      "WRONG_WAREHOUSE",
+    ],
+  },
+  { key: "delayed", label: "Delayed deliveries", categories: ["DELAYED_SHIPMENT"] },
+  { key: "damaged", label: "Damaged packages", categories: ["DAMAGED_PACKAGE"] },
+  { key: "codMismatches", label: "COD mismatches", categories: ["COD_DISCREPANCY"] },
+];
+
+export interface ExecutiveHomeData {
+  today: string;
+  kpis: {
+    /** Every order ever booked (snapshot count, not windowed). */
+    totalBookings: number;
+    /** Every package on record; null when package.read_all is denied. */
+    totalPackages: number | null;
+    bookingsLast30Days: number;
+    buckets: PackageStateBuckets;
+    openExceptions: number;
+    bookingsDelta: { today: number; yesterday: number } | null;
+    deliveredDelta: { today: number; yesterday: number } | null;
+  };
+  analytics: {
+    dailySeries: OverviewReport["dailySeries"];
+    distribution: OverviewReport["packagesByStatus"];
+    weekly: { label: string; bookings: number; delivered: number }[];
+  };
+  attention: {
+    openIncidents: number;
+    bySeverity: AdminHomeData["needsAttention"]["incidentsBySeverity"];
+    /** Alias of bySeverity under the Admin home's own field name. */
+    incidentsBySeverity: AdminHomeData["needsAttention"]["incidentsBySeverity"];
+    topOpenIncidents: IncidentView[];
+    codAwaitingVerification: number;
+    codDiscrepancies: number;
+    overdueTasks: number;
+    topOverdueTasks: TaskView[];
+    failedDeliveriesToday: number;
+    /** Open-incident category groups; null when incidents are unreadable. */
+    groups: ExecutiveAttentionGroup[] | null;
+    allClear: boolean;
+  };
+  activity: ExecutiveActivityItem[];
+  ops: {
+    deliverySuccessPercent: number | null;
+    activeTransfers: number;
+    activeDrivers: number;
+    pendingCod: number;
+  };
+  money: {
+    invoicedPaisa: string;
+    invoicedCount: number;
+    outstandingPaisa: string;
+    openInvoices: number;
+    codCollectedPaisa: string;
+    codWithRidersPaisa: string;
+    onTimePercent: number | null;
+    returnRatePercent: number | null;
+  } | null;
+}
+
+/**
+ * The V3 executive home for Admin / Super Admin: one composed read
+ * over the overview report (30-day window), the Admin operations
+ * home (attention + ops metrics — reused, never re-queried here),
+ * two gated snapshot counts, incident category groups and the audit
+ * activity feed. Like getAdminHome this is a global-role read: the
+ * report.read_all + booking.read_all gates run up front with
+ * audited denials, so warehouse-scoped actors are refused outright.
+ * Sections whose own permission can still be missing for an actor
+ * who passes the top gates degrade through optional() instead.
+ */
+export async function getExecutiveHome(
+  actor: ActorContext,
+  basePath: string,
+): Promise<ExecutiveHomeData> {
+  await requirePermAudited(actor, "report.read_all", "Report");
+  await requirePermAudited(actor, "booking.read_all", "Order");
+  const today = kathmanduToday();
+
+  const overview = await getOverviewReport(actor, {});
+  const admin = await getAdminHome(actor);
+
+  // Snapshot totals no report exposes: gated counts, following the
+  // same pattern as the Admin home's direct aggregations.
+  await requirePermAudited(actor, "booking.read_all", "Order");
+  const totalBookings = await prisma.order.count({});
+  const totalPackages = await optional(async () => {
+    await requirePermAudited(actor, "package.read_all", "Package");
+    return prisma.package.count({});
+  });
+
+  const delta = dayDelta(overview.dailySeries, today);
+  const needsAttention = admin.needsAttention;
+
+  const groups = await optional(async () => {
+    const counted: ExecutiveAttentionGroup[] = [];
+    for (const def of ATTENTION_GROUP_DEFS) {
+      let count = 0;
+      for (const category of def.categories) {
+        const page = await listIncidents(actor, {
+          openOnly: true,
+          category,
+          pageSize: 1,
+        });
+        count += page.meta.total;
+      }
+      if (def.key === "codMismatches") count += needsAttention.codDiscrepancies;
+      counted.push({ key: def.key, label: def.label, count });
+    }
+    return counted;
+  });
+
+  const auditPage = await optional(() => listAuditLogs(actor, { pageSize: 40 }));
+  const activity = auditPage ? mapAuditActivity(auditPage.items, basePath) : [];
+
+  return {
+    today,
+    kpis: {
+      totalBookings,
+      totalPackages,
+      bookingsLast30Days: overview.bookings,
+      buckets: bucketPackageStates(overview.packagesByStatus),
+      openExceptions: overview.incidents.open,
+      bookingsDelta: delta.bookings,
+      deliveredDelta: delta.delivered,
+    },
+    analytics: {
+      dailySeries: overview.dailySeries,
+      distribution: overview.packagesByStatus,
+      weekly: weeklyDeliveredSeries(overview.dailySeries),
+    },
+    attention: {
+      openIncidents: needsAttention.openIncidents,
+      bySeverity: needsAttention.incidentsBySeverity,
+      incidentsBySeverity: needsAttention.incidentsBySeverity,
+      topOpenIncidents: needsAttention.topOpenIncidents,
+      codAwaitingVerification: needsAttention.codAwaitingVerification,
+      codDiscrepancies: needsAttention.codDiscrepancies,
+      overdueTasks: needsAttention.overdueTasks,
+      topOverdueTasks: needsAttention.topOverdueTasks,
+      failedDeliveriesToday: needsAttention.failedDeliveriesToday,
+      groups,
+      allClear:
+        needsAttention.openIncidents === 0 &&
+        needsAttention.overdueTasks === 0 &&
+        needsAttention.codDiscrepancies === 0 &&
+        needsAttention.codAwaitingVerification === 0 &&
+        needsAttention.failedDeliveriesToday === 0,
+    },
+    activity,
+    ops: {
+      deliverySuccessPercent: admin.metrics.deliverySuccessPercent,
+      activeTransfers: admin.metrics.activeTransfers,
+      activeDrivers: admin.metrics.activeDrivers,
+      pendingCod: admin.metrics.pendingCod,
+    },
+    money: {
+      invoicedPaisa: overview.invoiced.totalPaisa,
+      invoicedCount: overview.invoiced.count,
+      outstandingPaisa: overview.outstanding.outstandingPaisa,
+      openInvoices: overview.outstanding.openInvoices,
+      codCollectedPaisa: overview.cod.collectedPaisa,
+      codWithRidersPaisa: overview.cod.outstandingWithRidersPaisa,
+      onTimePercent: overview.onTimePercent,
+      returnRatePercent: overview.returnRatePercent,
     },
   };
 }
