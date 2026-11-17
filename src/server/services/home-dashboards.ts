@@ -998,3 +998,141 @@ export async function getStaffMyWork(actor: ActorContext): Promise<StaffMyWorkDa
     totals,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Warehouse Staff work console (V3 Step 5, brief §8)
+// ---------------------------------------------------------------------------
+
+import { getWarehouseHomeSummary } from "@/server/services/warehouse-home";
+
+/**
+ * The V3 Staff home read model: a finance-free reshaping of
+ * `getStaffMyWork` plus the two figures the Warehouse Admin home
+ * aggregate (`getWarehouseHomeSummary`) already computes per
+ * warehouse — packages received today (Asia/Kathmandu) and the
+ * warehouse-scoped inventory-movement feed.
+ *
+ * HARD RULE — NO FINANCE: this model carries no money figure of any
+ * kind. Tasks and movements are mapped field-by-field (never spread)
+ * so nothing from a shared view type can leak an amount into the
+ * Staff surface; the Step 5 integration test serialises the model and
+ * asserts no finance key exists anywhere in it.
+ *
+ * "Today" honesty: the warehouse-home aggregate exposes ONLY
+ * `receivedToday` as a today-scoped count. No existing read provides
+ * inspected / packed / transferred today counts, so the console does
+ * not present them — the remaining summary cards are the LIVE queue
+ * totals from `getStaffMyWork`, labelled as current queues.
+ *
+ * Task order is the task service's own order (listTasks queue="mine":
+ * dueAt asc, then newest first) and is preserved verbatim — the next
+ * task is simply the first row; nothing here re-sorts.
+ */
+export interface StaffConsoleTask {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  dueAt: string | null;
+  overdue: boolean;
+}
+
+export interface StaffConsoleActivityItem {
+  id: string;
+  /** Inventory movement type (RECEIVING, PUT_AWAY, INTERNAL_MOVE, …). */
+  type: string;
+  trackingId: string;
+  actorName: string;
+  warehouseCode: string;
+  createdAt: string;
+}
+
+export interface StaffWorkConsoleData {
+  hasWarehouse: boolean;
+  warehouses: { id: string; code: string; name: string }[];
+  /** The staff member's tasks, in the task service's own order. */
+  myTasks: StaffConsoleTask[];
+  myTasksTotal: number;
+  myOverdueTasks: number;
+  perWarehouse: StaffWarehouseQueues[];
+  totals: StaffMyWorkData["totals"];
+  /**
+   * Packages received today (Kathmandu) across the member warehouses
+   * — summed from the existing warehouse-home aggregate. `null` when
+   * there is no warehouse or the aggregate could not be read for a
+   * member warehouse (the console then omits the card rather than
+   * showing a partial sum as a total).
+   */
+  receivedToday: number | null;
+  /**
+   * Latest inventory movements at the member warehouses only, newest
+   * first — the warehouse-home aggregate's movement feed, which is
+   * scoped by its warehouse predicate and carries no finance fields.
+   */
+  recentActivity: StaffConsoleActivityItem[];
+}
+
+export async function getStaffWorkConsole(
+  actor: ActorContext,
+): Promise<StaffWorkConsoleData> {
+  const work = await getStaffMyWork(actor);
+
+  const base: StaffWorkConsoleData = {
+    hasWarehouse: work.hasWarehouse,
+    warehouses: work.warehouses,
+    myTasks: work.myTasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      priority: task.priority,
+      dueAt: task.dueAt,
+      overdue: task.overdue,
+    })),
+    myTasksTotal: work.myTasksTotal,
+    myOverdueTasks: work.myOverdueTasks,
+    perWarehouse: work.perWarehouse,
+    totals: work.totals,
+    receivedToday: null,
+    recentActivity: [],
+  };
+
+  if (!work.hasWarehouse) return base;
+
+  let receivedToday = 0;
+  const activity: StaffConsoleActivityItem[] = [];
+  for (const warehouse of work.warehouses) {
+    let summary: Awaited<ReturnType<typeof getWarehouseHomeSummary>>;
+    try {
+      summary = await getWarehouseHomeSummary(actor, warehouse.id);
+    } catch {
+      // The aggregate is an auxiliary read (today count + movement
+      // feed). If it cannot be read for one member warehouse, omit
+      // BOTH extras entirely — a partial today sum presented as the
+      // total would be a false figure.
+      return base;
+    }
+    receivedToday += summary.metrics.receivedToday;
+    for (const movement of summary.recentMovements) {
+      activity.push({
+        id: `${warehouse.id}:${movement.id}`,
+        type: movement.type,
+        trackingId: movement.trackingId,
+        actorName: movement.actorName,
+        warehouseCode: warehouse.code,
+        createdAt: movement.createdAt,
+      });
+    }
+  }
+
+  // Each warehouse feed is already newest-first; merging several
+  // warehouses' feeds requires one chronological merge to keep the
+  // combined feed newest-first. This sorts ACTIVITY only — the task
+  // queue above keeps the task service's order untouched.
+  activity.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return {
+    ...base,
+    receivedToday,
+    recentActivity: activity.slice(0, 8),
+  };
+}
