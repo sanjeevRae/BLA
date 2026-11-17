@@ -94,7 +94,7 @@ function DriverRows({
           {driver.licenseExpiry}
           {driver.licenseExpired ? " — EXPIRED" : ""}
         </td>
-        <td className={TD_CLASS}>{driver.capabilities.join(", ") || "—"}</td>
+        <td className={TD_CLASS}>{driver.capabilities.map((c) => statusLabel("generic", c)).join(", ") || "—"}</td>
         <td className={TD_CLASS}>
           {driver.emergencyContactName ?? "—"}
           {driver.emergencyContactPhone ? ` · ${driver.emergencyContactPhone}` : ""}

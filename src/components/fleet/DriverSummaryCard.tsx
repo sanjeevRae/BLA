@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { DriverProfileView } from "@/server/services/drivers";
+import { statusLabel } from "@/lib/status/labels";
 import { SectionCard } from "@/components/warehouses/ui";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 
@@ -80,9 +81,9 @@ export function DriverSummaryCard({ profile }: { profile: DriverSummaryProfile }
         </div>
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-3 text-[13px] sm:grid-cols-4">
-        <SummaryField label="Type">{profile.roles.join(", ") || "—"}</SummaryField>
+        <SummaryField label="Type">{profile.roles.map((r) => statusLabel("generic", r)).join(", ") || "—"}</SummaryField>
         <SummaryField label="Capabilities">
-          {profile.capabilities.join(", ") || "—"}
+          {profile.capabilities.map((c) => statusLabel("generic", c)).join(", ") || "—"}
         </SummaryField>
         <SummaryField label="Licence">
           {`${profile.licenseNumber}${profile.licenseCategory ? ` (${profile.licenseCategory})` : ""}`}

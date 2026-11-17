@@ -193,7 +193,7 @@ export function CreateDriverProfileForm({
                   checked={capabilities.includes(cap)}
                   onChange={() => toggleCapability(cap)}
                 />
-                {cap}
+                {statusLabel("generic", cap)}
               </label>
             ))}
           </span>
