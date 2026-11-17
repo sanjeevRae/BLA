@@ -321,7 +321,19 @@ export async function GET(request: Request) {
   }
 
   const url = new URL(request.url);
-  const q = (url.searchParams.get("q") ?? "").trim().slice(0, MAX_QUERY_LENGTH);
+  // F2: strip LIKE wildcard characters (% _ \) from the term before
+  // any service call — the services feed it to Prisma `contains`
+  // (LIKE/ILIKE), so an unescaped "%%" would enumerate every in-scope
+  // record. Stripping (not escaping) is deterministic across
+  // Prisma/Postgres LIKE semantics; search terms are names / IDs /
+  // order numbers, which never legitimately contain those characters.
+  // The <2-char floor applies AFTER stripping ("%%" → "" → empty,
+  // "%a" → "a" → empty), and the stripped q also drives the
+  // tracking-ID exact path in packageGroup.
+  const q = (url.searchParams.get("q") ?? "")
+    .trim()
+    .slice(0, MAX_QUERY_LENGTH)
+    .replace(/[%_\\]/g, "");
   if (q.length < 2) {
     return NextResponse.json({ groups: [] as SearchGroup[] });
   }

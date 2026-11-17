@@ -638,6 +638,44 @@ describe("GET /api/search — driver-primary warehouse exclusion (F1)", () => {
   });
 });
 
+describe("GET /api/search — LIKE wildcard stripping (F2)", () => {
+  it('SUPER_ADMIN q="%%" returns zero results and never leaks the planted tracking ID', async () => {
+    const { status, raw, body } = await search(saActor, "%%");
+    expect(status).toBe(200);
+    expect(body.groups).toEqual([]);
+    expect(raw).not.toContain(fx.ktmTracking);
+  });
+
+  it('SUPER_ADMIN q="%_" returns zero results and never leaks the planted tracking ID', async () => {
+    const { status, raw, body } = await search(saActor, "%_");
+    expect(status).toBe(200);
+    expect(body.groups).toEqual([]);
+    expect(raw).not.toContain(fx.ktmTracking);
+  });
+
+  it('SUPER_ADMIN q="a%" returns zero results and never leaks the planted tracking ID', async () => {
+    const { status, raw, body } = await search(saActor, "a%");
+    expect(status).toBe(200);
+    expect(body.groups).toEqual([]);
+    expect(raw).not.toContain(fx.ktmTracking);
+  });
+
+  it("legitimate partial searches still find the record (tracking prefix + recipient fragment)", async () => {
+    const prefix = fx.ktmTracking.slice(0, 8);
+    const byPrefix = await search(saActor, prefix);
+    const packagesByPrefix = groupOf(byPrefix.body, "packages");
+    expect(packagesByPrefix).toBeDefined();
+    expect(packagesByPrefix!.results.some((r) => r.label === fx.ktmTracking)).toBe(true);
+
+    const byRecipient = await search(saActor, "Recipient");
+    const packagesByRecipient = groupOf(byRecipient.body, "packages");
+    expect(packagesByRecipient).toBeDefined();
+    expect(
+      packagesByRecipient!.results.some((r) => r.label === fx.ktmTracking),
+    ).toBe(true);
+  });
+});
+
 describe("GET /api/search — customer scope", () => {
   it("finds its own package via the public tracking href, and only the packages group", async () => {
     const { status, body } = await search(customerActor, fx.customerTracking);
