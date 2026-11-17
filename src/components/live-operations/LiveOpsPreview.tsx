@@ -258,6 +258,7 @@ export function LiveOpsPreview({
               // Live Operations page.
             }}
             heightClassName="h-[300px]"
+            showLegend
           />
         </div>
 

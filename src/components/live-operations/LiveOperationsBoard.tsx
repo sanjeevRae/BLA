@@ -8,6 +8,8 @@ import { formatPaisa } from "@/components/bookings/ui";
 import { Drawer } from "@/components/ui/Drawer";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { ToneIcon } from "@/components/ui/ToneIcon";
+import type { StatusTone } from "@/lib/status/status-tones";
 import type {
   FreshnessState,
   LiveOperationDetail,
@@ -63,11 +65,19 @@ const FRESHNESS_LABELS: Record<FreshnessState, string> = {
   OFFLINE: "Offline",
 };
 
+const FRESHNESS_TONES: Record<FreshnessState, StatusTone> = {
+  FRESH: "success",
+  DELAYED: "warning",
+  STALE: "danger",
+  OFFLINE: "neutral",
+};
+
 export function FreshnessBadge({ state }: { state: FreshnessState }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${FRESHNESS_CLASSES[state]}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${FRESHNESS_CLASSES[state]}`}
     >
+      <ToneIcon tone={FRESHNESS_TONES[state]} className="h-[12px] w-[12px]" />
       {FRESHNESS_LABELS[state]}
     </span>
   );
@@ -482,10 +492,10 @@ export function LiveOperationsBoard({
             type="button"
             aria-pressed={filter === entry.key}
             onClick={() => setFilter(entry.key)}
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-semibold ${
+            className={`inline-flex min-h-[32px] items-center gap-1.5 rounded-full border px-3 text-[13px] font-medium ${
               filter === entry.key
-                ? "border-primary bg-primary-light text-primary-dark"
-                : "border-border bg-surface-2 text-ink"
+                ? "border-transparent bg-primary-light text-primary-dark"
+                : "border-transparent bg-surface-2 text-ink hover:text-primary-dark"
             }`}
           >
             {filter === entry.key ? (
