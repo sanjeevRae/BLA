@@ -211,7 +211,13 @@ function assignmentLine(a: OwnTrackingAssignmentSummary): string {
 // Panel
 // ---------------------------------------------------------------------------
 
-export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver" }) {
+export function LocationTrackingPanel({
+  variant,
+  framed = true,
+}: {
+  variant: "rider" | "driver";
+  framed?: boolean;
+}) {
   const [data, setData] = useState<OwnTrackingState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [engineUi, setEngineUi] = useState<{
@@ -511,8 +517,7 @@ export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver"
   const health: WatchdogState =
     sessionStatus === "ACTIVE" ? engineUi.health : { state: "ok" };
 
-  return (
-    <SectionCard title="Location tracking">
+  const inner = (
       <div className="flex flex-col gap-3">
         {data === null && loadError === null ? (
           <p className="text-[13px] text-slate2">Loading your tracking state…</p>
@@ -734,6 +739,8 @@ export function LocationTrackingPanel({ variant }: { variant: "rider" | "driver"
           </p>
         ) : null}
       </div>
-    </SectionCard>
   );
+
+  if (!framed) return <div>{inner}</div>;
+  return <SectionCard title="Location tracking">{inner}</SectionCard>;
 }
