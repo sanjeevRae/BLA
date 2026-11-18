@@ -463,7 +463,7 @@ export function SupportHomeView({ data }: { data: SupportConsoleData }) {
                     <span className="text-[12.5px] whitespace-nowrap text-ink-2">
                       {formatDateTime(incident.updatedAt)}
                     </span>
-                    <StatusBadge domain="generic" status={incident.severity} density="compact" />
+                    <PriorityBadge priority={incident.severity} />
                     <StatusBadge domain="generic" status={incident.status} density="compact" />
                   </Link>
                 </li>

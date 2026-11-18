@@ -10,7 +10,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { StatCard } from "@/components/ui/StatCard";
 import { TrendIndicator } from "@/components/ui/TrendIndicator";
 import { BarChart, LineChart, DistributionBar } from "@/components/ui/charts";
-import { StatusBadge } from "@/components/ui/StatusBadge";
+import { PriorityBadge } from "@/components/ui/StatusBadge";
 import { ToneIcon } from "@/components/ui/ToneIcon";
 import { NavIcon } from "@/components/layout/icons";
 import type { NavIconName } from "@/lib/navigation/registry";
@@ -486,7 +486,7 @@ export async function ExecutiveHome({
                           <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink">
                             {humaniseStatusValue(inc.category)}
                           </span>
-                          <StatusBadge domain="exception" status={inc.severity} density="compact" />
+                          <PriorityBadge priority={inc.severity} />
                           <span className="text-[12.5px] text-ink-2">
                             {relativeFromNow(inc.createdAt)}
                           </span>

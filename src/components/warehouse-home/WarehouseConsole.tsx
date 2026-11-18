@@ -306,7 +306,7 @@ export function WarehouseConsole({
                         <span className="font-mono text-[12.5px] text-ink-2">
                           {i.warehouseCode}
                         </span>
-                        <StatusBadge domain="generic" status={i.severity} density="compact" />
+                        <PriorityBadge priority={i.severity} />
                         <StatusBadge domain="generic" status={i.status} density="compact" />
                       </Link>
                     </li>

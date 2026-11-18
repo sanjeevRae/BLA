@@ -3,7 +3,7 @@ import Link from "next/link";
 import { hasPermission, type ActorContext } from "@/lib/auth/actor";
 import { getStaffMyWork } from "@/server/services/home-dashboards";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
-import { StatusBadge } from "@/components/ui/StatusBadge";
+import { PriorityBadge, StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/states";
 
 /**
@@ -126,7 +126,7 @@ export async function StaffMyWorkHome({ actor }: { actor: ActorContext }) {
                   ) : null}
                 </span>
                 <StatusBadge domain="generic" status={task.status} />
-                <StatusBadge domain="generic" status={task.priority} />
+                <PriorityBadge priority={task.priority} />
               </div>
             ))}
           </div>
