@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import { Circle, MapContainer, Marker, Polyline, TileLayer, useMap } from "react-leaflet";
 
@@ -122,6 +122,20 @@ function MapController({
   return null;
 }
 
+/**
+ * Tile-layer load state (V3 Step 10, external-critique fix A1): the
+ * map must never present as an unexplained grey void. While the
+ * first tile batch is in flight a subtle "Loading map…" chip shows;
+ * if a batch completes with every tile failed (offline, tile CDN
+ * unreachable), a labelled panel says so and points at the driver
+ * list beside the map. Partial failures keep the map "ready" — some
+ * tiles rendering is a usable map. The overlay is pointer-events-
+ * none so pan/zoom keep working underneath it, and it hides itself
+ * as soon as a batch loads tiles again. Presentation only: the tile
+ * provider, markers and data flow are untouched.
+ */
+type TileLoadState = "loading" | "ready" | "error";
+
 export interface LiveMapProps {
   items: LiveOperationItem[];
   selectedId: string | null;
@@ -151,6 +165,9 @@ export function LiveMap({
   showLegend = false,
 }: LiveMapProps) {
   const mapRef = useRef<L.Map | null>(null);
+  const [tileState, setTileState] = useState<TileLoadState>("loading");
+  const [tileSettled, setTileSettled] = useState(false);
+  const tileCountsRef = useRef({ loaded: 0, errored: 0 });
   const selected = items.find((item) => item.trackingSessionId === selectedId) ?? null;
   const located = items.filter((item) => item.location !== null);
 
@@ -206,13 +223,35 @@ export function LiveMap({
           Show all authorized
         </button>
       </div>
-      <div className={`${heightClassName} w-full overflow-hidden rounded-lg border border-border`}>
+      <div
+        className={`relative ${heightClassName} w-full overflow-hidden rounded-lg border border-border`}
+      >
         <MapContainer
           center={[NEPAL_CENTRE[0], NEPAL_CENTRE[1]]}
           zoom={DEFAULT_MAP_ZOOM}
           style={{ height: "100%", width: "100%" }}
         >
-          <TileLayer url={OSM_TILE_URL} attribution={OSM_ATTRIBUTION} />
+          <TileLayer
+            url={OSM_TILE_URL}
+            attribution={OSM_ATTRIBUTION}
+            eventHandlers={{
+              loading: () => {
+                tileCountsRef.current = { loaded: 0, errored: 0 };
+                setTileState("loading");
+              },
+              tileload: () => {
+                tileCountsRef.current.loaded += 1;
+              },
+              tileerror: () => {
+                tileCountsRef.current.errored += 1;
+              },
+              load: () => {
+                const { loaded, errored } = tileCountsRef.current;
+                setTileSettled(true);
+                setTileState(loaded > 0 || errored === 0 ? "ready" : "error");
+              },
+            }}
+          />
           <MapController items={items} mapRef={mapRef} />
           {located.map((item) => (
             <Marker
@@ -254,6 +293,26 @@ export function LiveMap({
             />
           ) : null}
         </MapContainer>
+        {tileState === "error" ? (
+          <div className="pointer-events-none absolute inset-0 z-[1100] flex items-center justify-center p-4">
+            <p
+              role="status"
+              className="max-w-sm rounded-lg border border-border bg-card px-4 py-3 text-center text-[13px] font-medium text-ink shadow-pop"
+            >
+              Map tiles could not be loaded — check your connection. Driver positions are
+              listed beside the map.
+            </p>
+          </div>
+        ) : tileState === "loading" && !tileSettled ? (
+          <div className="pointer-events-none absolute inset-0 z-[1100] flex items-center justify-center p-4">
+            <p
+              role="status"
+              className="rounded-full border border-border bg-card px-3 py-1.5 text-[12.5px] font-medium text-ink-2 shadow-pop"
+            >
+              Loading map…
+            </p>
+          </div>
+        ) : null}
       </div>
       <p className="text-[12px] text-ink-2">
         Pins show each driver&apos;s last reported position — the age of every position is
