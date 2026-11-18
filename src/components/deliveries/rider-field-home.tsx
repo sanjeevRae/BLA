@@ -63,7 +63,7 @@ function JobCard({
   return (
     <article
       data-testid="rider-job-card"
-      className={`rounded-lg border bg-surface px-4 py-3 ${
+      className={`rounded-lg border bg-surface px-4 py-3 transition-colors active:border-primary-dark ${
         job.isNext ? "border-primary ring-1 ring-primary" : "border-line"
       }`}
     >
@@ -193,7 +193,10 @@ export function RiderFieldHomeView({
         <SectionCard title="Failed attempts — need action">
           <div className="flex flex-col gap-3">
             {data.failedAttempts.map((a) => (
-              <div key={a.attemptId} className="rounded-lg border border-line bg-redbg px-3 py-3">
+              <div
+                key={a.attemptId}
+                className="rounded-lg border border-line bg-redbg px-3 py-3 transition-colors active:border-danger"
+              >
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-mono text-[14px] font-semibold text-ink">
                     {a.trackingId}
@@ -207,7 +210,7 @@ export function RiderFieldHomeView({
                     ? ` · COD due ${formatPaisa(BigInt(a.codExpectedPaisa))}`
                     : ""}
                 </p>
-                <p className="mt-0.5 text-[13px] text-slate2">
+                <p className="mt-0.5 text-[13px] font-semibold text-ink">
                   Next action: {a.nextAction.replaceAll("_", " ")} · {formatTime(a.attemptedAt)}
                 </p>
                 <Link
@@ -271,32 +274,32 @@ export function RiderFieldHomeView({
       )}
 
       <SectionCard title="Cash on delivery">
-        <dl className="grid grid-cols-1 gap-2 text-[15px]">
-          <div className="flex items-baseline justify-between gap-3">
+        <dl className="flex flex-col divide-y divide-border text-[15px]">
+          <div className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">
             <dt className="text-slate2">Expected today</dt>
             <dd className="tnum font-semibold text-ink">
               {formatPaisa(BigInt(data.cod.expectedPaisa))}
             </dd>
           </div>
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">
             <dt className="text-slate2">Collected</dt>
             <dd className="tnum font-semibold text-ink">
               {formatPaisa(BigInt(data.cod.collectedPaisa))}
             </dd>
           </div>
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">
             <dt className="text-slate2">Still to collect</dt>
             <dd className="tnum font-semibold text-ink">
               {formatPaisa(BigInt(data.cod.remainingPaisa))}
             </dd>
           </div>
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">
             <dt className="text-slate2">To hand over</dt>
             <dd className="tnum font-semibold text-ink">
               {formatPaisa(BigInt(data.cod.awaitingRemittancePaisa))}
             </dd>
           </div>
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex items-baseline justify-between gap-3 py-2 first:pt-0 last:pb-0">
             <dt className="text-slate2">Handed over (verified)</dt>
             <dd className="tnum font-semibold text-ink">
               {formatPaisa(BigInt(data.cod.verifiedRemittedPaisa))}

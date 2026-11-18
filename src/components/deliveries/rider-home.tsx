@@ -93,7 +93,10 @@ export function RiderFailedAttemptsList({ attempts }: { attempts: RiderFailedAtt
   return (
     <div className="flex flex-col gap-3">
       {attempts.map((a) => (
-        <div key={a.attemptId} className="rounded-lg border border-line bg-redbg px-3 py-3">
+        <div
+          key={a.attemptId}
+          className="rounded-lg border border-line bg-redbg px-3 py-3 transition-colors active:border-danger"
+        >
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-[14px] font-semibold text-ink">{a.trackingId}</span>
             <StatusBadge domain="generic" status={a.result} />
@@ -105,7 +108,7 @@ export function RiderFailedAttemptsList({ attempts }: { attempts: RiderFailedAtt
               ? ` · COD due ${formatPaisa(BigInt(a.codExpectedPaisa))}`
               : ""}
           </p>
-          <p className="mt-0.5 text-[13px] text-slate2">
+          <p className="mt-0.5 text-[13px] font-semibold text-ink">
             Next action: {a.nextAction.replaceAll("_", " ")} ·{" "}
             {new Date(a.attemptedAt).toLocaleTimeString("en-GB", {
               hour: "2-digit",
