@@ -33,7 +33,6 @@ import {
 import {
   auditAccessDenied,
   isUniqueViolation,
-  isUniqueViolationOn,
   parse,
   requirePermAudited,
 } from "@/server/services/scoping";
@@ -287,11 +286,13 @@ export async function startTrackingSession(
   }
 
   const now = new Date();
-  let created: TrackingSession;
-  try {
-    created = await prisma.trackingSession.create({
+  // Captured as a const so the create closure below keeps the
+  // non-null narrowing from the driver check above.
+  const driverId = actor.driverId;
+  const createSession = () =>
+    prisma.trackingSession.create({
       data: {
-        driverId: actor.driverId,
+        driverId,
         tripId: data.tripId ?? null,
         deliveryBatchId: data.deliveryBatchId ?? null,
         trackingType,
@@ -302,11 +303,40 @@ export async function startTrackingSession(
         permissionAcknowledgedAt: now,
       },
     });
+  let created: TrackingSession;
+  try {
+    created = await createSession();
   } catch (error) {
-    if (isUniqueViolationOn(error, "TrackingSession_one_active_per_driver")) {
+    // P3R-2 (Phase 3 security review, closed in V3 Step 11): a
+    // unique violation from this INSERT is the partial
+    // one-active-session index firing — the create writes no other
+    // unique value (the PK is a server-generated uuid). Prisma
+    // reports this raw-SQL partial index's P2002 target as the
+    // field list (["driverId"]), NOT the index name, so the old
+    // name-matched check (isUniqueViolationOn) missed it and the
+    // raw P2002 escaped whenever two starts passed the pre-check
+    // above in lock-step — the test only passed when the loser's
+    // pre-check happened to run after the winner's insert. Match
+    // ANY P2002 here (the same lesson the resume path learned in
+    // Phase 3 review F-1) and converge on the winner's session:
+    // still live → the domain conflict; already ended → retry the
+    // create once rather than reporting a phantom conflict.
+    if (!isUniqueViolation(error)) throw error;
+    const winner = await prisma.trackingSession.findFirst({
+      where: { driverId, status: { in: ["ACTIVE", "PAUSED"] } },
+      select: { id: true },
+    });
+    if (winner) {
       throw new ConflictError("You already have an active tracking session");
     }
-    throw error;
+    try {
+      created = await createSession();
+    } catch (retryError) {
+      if (isUniqueViolation(retryError)) {
+        throw new ConflictError("You already have an active tracking session");
+      }
+      throw retryError;
+    }
   }
 
   await auditOps(actor, "tracking.session_started", "TrackingSession", created.id, {

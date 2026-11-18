@@ -572,28 +572,68 @@ describe("P3R-1 identity substitution", { timeout: 120_000 }, () => {
 
 describe("P3R-2 session races", { timeout: 180_000 }, () => {
   it("two concurrent starts for one driver: exactly one wins, the loser gets a clean ConflictError (DB partial-index backstop)", async () => {
+    // Repeated over fresh riders (V3 Step 11 strengthening): a single
+    // pair only exercises the P2002 conversion when the two starts
+    // pass the service pre-check in lock-step, which is exactly the
+    // interleaving that used to leak the raw P2002 (Prisma reports
+    // the partial index's target as ["driverId"], not the index
+    // name — the old name-matched catch missed it). Repetition makes
+    // that interleaving statistically unavoidable.
+    for (let round = 0; round < 3; round++) {
+      const a = await makeRider(fx.w1);
+      const batch1 = await makeBatch(a.driverId, fx.w1);
+      const batch2 = await makeBatch(a.driverId, fx.w1);
+      const results = await Promise.allSettled([
+        trackingSvc.startTrackingSession(a.actor, {
+          deliveryBatchId: batch1.id,
+          permissionAcknowledged: true,
+        }),
+        trackingSvc.startTrackingSession(a.actor, {
+          deliveryBatchId: batch2.id,
+          permissionAcknowledged: true,
+        }),
+      ]);
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      // The loser must surface as the domain ConflictError (409), not a
+      // raw Prisma P2002 escaping the service's unique-violation catch.
+      expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+        errors.ConflictError,
+      );
+      const live = await prisma.trackingSession.count({
+        where: { driverId: a.driverId, status: { in: ["ACTIVE", "PAUSED"] } },
+      });
+      expect(live).toBe(1);
+    }
+  });
+
+  it("four concurrent starts for one driver: exactly one wins, three clean ConflictErrors, one live session", async () => {
     const a = await makeRider(fx.w1);
-    const batch1 = await makeBatch(a.driverId, fx.w1);
-    const batch2 = await makeBatch(a.driverId, fx.w1);
-    const results = await Promise.allSettled([
-      trackingSvc.startTrackingSession(a.actor, {
-        deliveryBatchId: batch1.id,
-        permissionAcknowledged: true,
-      }),
-      trackingSvc.startTrackingSession(a.actor, {
-        deliveryBatchId: batch2.id,
-        permissionAcknowledged: true,
-      }),
+    const batches = await Promise.all([
+      makeBatch(a.driverId, fx.w1),
+      makeBatch(a.driverId, fx.w1),
+      makeBatch(a.driverId, fx.w1),
+      makeBatch(a.driverId, fx.w1),
     ]);
+    const results = await Promise.allSettled(
+      batches.map((batch) =>
+        trackingSvc.startTrackingSession(a.actor, {
+          deliveryBatchId: batch.id,
+          permissionAcknowledged: true,
+        }),
+      ),
+    );
     const fulfilled = results.filter((r) => r.status === "fulfilled");
     const rejected = results.filter((r) => r.status === "rejected");
     expect(fulfilled).toHaveLength(1);
-    expect(rejected).toHaveLength(1);
-    // The loser must surface as the domain ConflictError (409), not a
-    // raw Prisma P2002 escaping the service's unique-violation catch.
-    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
-      errors.ConflictError,
-    );
+    expect(rejected).toHaveLength(3);
+    for (const r of rejected) {
+      expect((r as PromiseRejectedResult).reason).toBeInstanceOf(
+        errors.ConflictError,
+      );
+    }
     const live = await prisma.trackingSession.count({
       where: { driverId: a.driverId, status: { in: ["ACTIVE", "PAUSED"] } },
     });
