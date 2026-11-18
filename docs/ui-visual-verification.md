@@ -571,3 +571,30 @@ Solo/paired confirmations: phase2 + phase3 security reviews
 paired 65/65; step4-executive-home solo 6/6. **Effective
 1211/1211** — every failed file passes outside parallel load,
 exactly as on the pre-critique tree (§11 above).
+
+## 12. Step 11 addendum — Transfer actions card fix + frame re-shot
+
+The §9 carried item is closed: the "Transfer actions" card now
+renders only when the transfer carries instructions OR at least
+one lifecycle action is available to the viewer. Availability is a
+single predicate (`transferLifecycleAvailability` /
+`hasTransferLifecycleActions`) in the NEUTRAL module
+`src/lib/transfers/lifecycle-actions.ts`, used by both the client
+buttons component and the server-side `TransferActionsCard` — the
+first draft kept it in the client module `forms.tsx` and the page
+threw at render time (a server component may not call a
+client-module function); the Step 11 live run-through caught it
+before close-out, which is what the run-through is for.
+
+**Frame re-shot:** `transfer-detail-desktop.png` was re-captured
+from the Step 11 production build (1440×900, same method) against
+a replanted fixture (the VM replacement that interrupted Step 11's
+first regression run also wiped the Step 10 fixture; the replant
+is services-driven, same shape: TRF-1001 IN_TRANSIT KTM→PKR, one
+package, manifest MNF-1001). The frame shows the summary card
+flowing straight into the Packages table — no empty actions card.
+Live positive control: a DRAFT transfer's detail page renders the
+card with its Submit/Cancel actions, verified in the same
+run-through. Component tests (10) pin the card absent/present
+cases and the buttons⇔predicate agreement across every transfer
+status × permission pair.
