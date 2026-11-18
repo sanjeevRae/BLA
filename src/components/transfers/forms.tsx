@@ -30,6 +30,7 @@ import {
   resumeTripAction,
 } from "@/server/actions/transfers";
 import { PACKAGE_CONDITIONS } from "@/lib/bookings/domain";
+import { transferLifecycleAvailability } from "@/lib/transfers/lifecycle-actions";
 import { sendTrackingEventUpdate } from "@/lib/tracking/client-registry";
 import {
   ErrorBox,
@@ -331,9 +332,10 @@ export function TransferLifecycleButtons({
   canApprove: boolean;
 }) {
   const { error, busy, run } = useAction();
+  const availability = transferLifecycleAvailability(status, canCreate, canApprove);
   const buttons: ReactNode[] = [];
 
-  if (canCreate && (status === "DRAFT" || status === "PREPARING")) {
+  if (availability.submit) {
     buttons.push(
       <button
         key="submit"
@@ -346,7 +348,7 @@ export function TransferLifecycleButtons({
       </button>,
     );
   }
-  if (canApprove && status === "REQUESTED") {
+  if (availability.approveReject) {
     buttons.push(
       <button
         key="approve"
@@ -371,7 +373,7 @@ export function TransferLifecycleButtons({
       </button>,
     );
   }
-  if (canCreate && status === "REJECTED") {
+  if (availability.revise) {
     buttons.push(
       <button
         key="revise"
@@ -384,10 +386,7 @@ export function TransferLifecycleButtons({
       </button>,
     );
   }
-  if (
-    canCreate &&
-    ["DRAFT", "PREPARING", "REQUESTED", "APPROVED", "REJECTED", "READY_FOR_DISPATCH"].includes(status)
-  ) {
+  if (availability.cancel) {
     buttons.push(
       <button
         key="cancel"

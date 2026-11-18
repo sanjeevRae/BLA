@@ -30,6 +30,7 @@ import {
   TR_CLASS,
 } from "@/components/ui/table-chrome";
 import { TransferSummaryCard } from "@/components/transfers/TransferSummaryCard";
+import { TransferActionsCard } from "@/components/transfers/TransferActionsCard";
 import { statusLabel } from "@/lib/status/labels";
 import { SectionCard, subtleButtonClass } from "@/components/warehouses/ui";
 import {
@@ -44,7 +45,6 @@ import {
   ReceivingCloseButtons,
   RemoveItemButton,
   ReplaceDriverForm,
-  TransferLifecycleButtons,
   TripProgressForms,
   UnloadButton,
   type CrewDriverOption,
@@ -448,19 +448,11 @@ export async function TransferDetailPage({
 
       <TransferSummaryCard transfer={transfer} />
 
-      <SectionCard title="Transfer actions">
-        {transfer.instructions ? (
-          <p className="text-[13px] text-ink-2">Instructions: {transfer.instructions}</p>
-        ) : null}
-        <div className={transfer.instructions ? "mt-4" : ""}>
-          <TransferLifecycleButtons
-            transferId={transfer.id}
-            status={transfer.status}
-            canCreate={hasPermission(actor, "transfer.create") && (isOrigin || unscoped)}
-            canApprove={hasPermission(actor, "transfer.approve")}
-          />
-        </div>
-      </SectionCard>
+      <TransferActionsCard
+        transfer={transfer}
+        canCreate={hasPermission(actor, "transfer.create") && (isOrigin || unscoped)}
+        canApprove={hasPermission(actor, "transfer.approve")}
+      />
 
       <SectionCard title={`Packages (${transfer.items.length})`}>
         <DensityScope showToggle>
