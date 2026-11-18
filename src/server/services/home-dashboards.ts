@@ -1409,6 +1409,7 @@ export interface LinehaulFieldHomeData {
     expectedCount: number;
     departedAt: string | null;
     arrivedAt: string | null;
+    expectedArrivalAt: string | null;
     loadByStatus: { status: string; count: number }[];
     packages: {
       packageId: string;
@@ -1477,10 +1478,15 @@ function loadByStatus(
  * null) for the manifest code + reconciliation loaded count, and own
  * trip history (listTrips mine) for recent completed/cancelled trips.
  *
- * NO ETA (hard rule): the trip view is field-mapped explicitly and
- * the model carries NO plannedDepartureAt / expectedArrivalAt key
- * anywhere — a field home shows what has happened and what is
- * loaded, never a promised arrival.
+ * ETA rule: the trip view is field-mapped explicitly. The model
+ * carries the CURRENT trip's expectedArrivalAt — the stored,
+ * dispatcher-entered, revisable value from the trip record,
+ * passed through untouched (never computed or estimated here) —
+ * because Meena decided 2026-11-18 that the driver home shows it,
+ * labelled as set by dispatch (warehouse/dispatch surfaces show
+ * the same value). plannedDepartureAt is still never carried, and
+ * no other trip in the model (recent trips, activity) gains the
+ * field.
  *
  * The one new query is the destination warehouse read: it is keyed
  * by the destination of the driver's OWN active trip (never by a
@@ -1618,6 +1624,7 @@ export async function getLinehaulFieldHome(
           expectedCount,
           departedAt: trip.actualDepartureAt,
           arrivedAt: trip.actualArrivalAt,
+          expectedArrivalAt: trip.expectedArrivalAt,
           loadByStatus: loadByStatus(trip.packages),
           packages: trip.packages.map((p) => ({
             packageId: p.packageId,

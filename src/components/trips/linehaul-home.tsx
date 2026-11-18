@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { PriorityBadge, StatusBadge } from "@/components/ui/StatusBadge";
 import { ToneIcon } from "@/components/ui/ToneIcon";
 import { SectionCard } from "@/components/warehouses/ui";
+import { formatDateTime } from "@/components/admin-identity/ui";
 import { LoadScanForm, TripProgressForms } from "@/components/transfers/forms";
 import { DriverTripIncidentForm } from "@/components/operations/forms";
 import {
@@ -21,8 +22,12 @@ import { getMyActiveTrip, type TripView } from "@/server/services/trips";
  * The current trip LEADS: route, manifest summary, recorded
  * milestones and the actions valid for the trip's CURRENT state.
  * Progress is recorded milestones ONLY — loaded count, the actual
- * departure, recorded checkpoints and the actual arrival. No
- * planned or expected time is rendered anywhere on this home.
+ * departure, recorded checkpoints and the actual arrival. The one
+ * forward-looking value is the trip's dispatch-set expected
+ * arrival (a real stored field, entered and revisable by
+ * dispatch): it renders on the trip card labelled "Set by
+ * dispatch" (Meena's decision, 2026-11-18). No planned departure
+ * and no computed or estimated time is rendered anywhere.
  *
  * The actions are the existing flow components (LoadScanForm /
  * TripProgressForms from the transfers module, DriverTripIncidentForm
@@ -296,6 +301,14 @@ export async function LinehaulHomePage({ actor }: { actor: ActorContext }) {
                   {trip.loadedCount} / {trip.expectedCount}
                 </dd>
               </div>
+              {trip.expectedArrivalAt ? (
+                <div className="col-span-2">
+                  <dt className="text-slate2">Expected arrival · set by dispatch</dt>
+                  <dd className="tnum text-[16px] font-semibold text-ink">
+                    {formatDateTime(trip.expectedArrivalAt)}
+                  </dd>
+                </div>
+              ) : null}
             </dl>
 
             <MilestoneList milestones={buildMilestones(trip)} />
