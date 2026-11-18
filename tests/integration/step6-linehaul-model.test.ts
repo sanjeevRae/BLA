@@ -10,9 +10,12 @@ vi.mock("server-only", () => ({}));
  *  - driver A's model carries A's active trip only, A's recent
  *    trips only, and the destination of A's OWN trip (name/code +
  *    PRIMARY address);
- *  - NO ETA (hard rule): the planted trip HAS plannedDepartureAt /
- *    expectedArrivalAt values in the database, and the serialised
- *    model must not contain either key anywhere;
+ *  - ETA rule (revised 2026-11-18, Meena's decision): the planted
+ *    trip HAS plannedDepartureAt / expectedArrivalAt values in the
+ *    database; the model must carry the CURRENT trip's stored
+ *    expectedArrivalAt verbatim, must never contain
+ *    plannedDepartureAt anywhere, and a trip with no stored value
+ *    (driver B) must surface expectedArrivalAt null;
  *  - driver B's model contains none of A's trip numbers;
  *  - a driver with no active trip gets activeTrip null AND
  *    destination null.
@@ -316,7 +319,9 @@ beforeAll(async () => {
   }
 
   // --- Driver A: active IN_TRANSIT trip (with ETA values planted
-  //     in the DB — the model must drop them), plus a completed one.
+  //     in the DB — the model must carry expectedArrivalAt for the
+  //     current trip and drop plannedDepartureAt), plus a completed
+  //     one.
   const active = await makeTrip(fx.driverA, vehicle.id, "IN_TRANSIT", "ACT", {
     actualDepartureAt: new Date("2026-11-17T02:00:00.000Z"),
     plannedDepartureAt: new Date("2026-11-17T01:30:00.000Z"),
@@ -419,18 +424,21 @@ describe("Step 6 — line-haul field home model", () => {
     expect(labels).not.toContain(fx.tripBNumber);
   });
 
-  it("contains no ETA keys anywhere, despite the planted ETA values", async () => {
+  it("carries the current trip's stored expectedArrivalAt; plannedDepartureAt stays out", async () => {
     const model = await homeSvc.getLinehaulFieldHome(driverAActor);
+    // The stored value passes through verbatim — not computed,
+    // not shifted, not dropped (2026-11-18 spec change).
+    expect(model.activeTrip?.expectedArrivalAt).toBe("2026-11-17T09:45:00.000Z");
     const serialised = JSON.stringify(model);
-    expect(serialised).not.toContain("expectedArrival");
     expect(serialised).not.toContain("plannedDeparture");
-    expect(serialised).not.toContain("2026-11-17T09:45:00.000Z");
     expect(serialised).not.toContain("2026-11-17T01:30:00.000Z");
   });
 
   it("driver B's model is B's own — none of A's trip numbers", async () => {
     const model = await homeSvc.getLinehaulFieldHome(driverBActor);
     expect(model.activeTrip?.tripNumber).toBe(fx.tripBNumber);
+    // B's trip has no stored expected arrival: null stays null.
+    expect(model.activeTrip?.expectedArrivalAt).toBeNull();
     const serialised = JSON.stringify(model);
     expect(serialised).not.toContain(fx.tripANumber);
     expect(serialised).not.toContain(fx.tripAOldNumber);

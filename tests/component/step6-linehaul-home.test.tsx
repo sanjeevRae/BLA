@@ -11,9 +11,11 @@ import { cleanup, render, screen } from "@testing-library/react";
  * raw action views (`getMyActiveTrip` / `getTransfer`, which feed
  * TripActions with their existing props) are mocked, and the flow
  * forms are inert stubs — the wiring under test is the home's own
- * rendering: recorded milestones only (no expected/planned times
- * anywhere), the current trip leading, and the sections below
- * filling the page when there is no active trip (audit offender #3).
+ * rendering: recorded milestones only, plus the trip's dispatch-set
+ * expected arrival shown labelled on the trip card (2026-11-18 spec
+ * change — planned times still never render), the current trip
+ * leading, and the sections below filling the page when there is no
+ * active trip (audit offender #3).
  */
 
 const mocks = vi.hoisted(() => ({
@@ -75,6 +77,20 @@ beforeEach(() => {
 
 const DEPARTED_AT = "2026-11-17T08:30:00.000Z";
 const STOP_PASSED_AT = "2026-11-17T10:15:00.000Z";
+const EXPECTED_ARRIVAL_AT = "2026-11-17T15:30:00.000Z";
+
+/** Mirror of the Kathmandu formatDateTime helper the card uses for
+ *  the expected-arrival value (admin-identity/ui). */
+function fmtDateTimeKt(iso: string): string {
+  return new Date(iso).toLocaleString("en-GB", {
+    timeZone: "Asia/Kathmandu",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 /** Mirror of the component's fmtDate so time assertions track the
  *  host timezone instead of hardcoding one. */
@@ -135,6 +151,7 @@ function activeFixture(
       expectedCount: 3,
       departedAt: DEPARTED_AT,
       arrivedAt: null,
+      expectedArrivalAt: EXPECTED_ARRIVAL_AT,
       loadByStatus: [{ status: "LOADED", count: 3 }],
       packages: [
         {
@@ -276,17 +293,31 @@ describe("LinehaulHomePage — active trip", () => {
     );
   });
 
-  it("renders no expected or planned time anywhere", async () => {
+  it("shows the dispatch-set expected arrival on the trip card", async () => {
     mocks.getMyActiveTrip.mockResolvedValue(rawTripFixture());
     const { container } = await renderHome(
       activeFixture(),
       actorWith(["incident.report"]),
     );
+    // Labelled row: the label carries the dispatch qualifier and
+    // the value is the stored time in Kathmandu formatting.
+    expect(container.textContent).toContain("Expected arrival · set by dispatch");
+    expect(container.textContent).toContain(fmtDateTimeKt(EXPECTED_ARRIVAL_AT));
+    // Planned times still never render.
+    expect(container.innerHTML).not.toContain("Planned departure");
+    expect(container.innerHTML).not.toContain("plannedDeparture");
+  });
+
+  it("renders no expected-arrival row when dispatch set none", async () => {
+    mocks.getMyActiveTrip.mockResolvedValue(rawTripFixture());
+    const data = activeFixture();
+    data.activeTrip = { ...data.activeTrip!, expectedArrivalAt: null };
+    const { container } = await renderHome(data, actorWith(["incident.report"]));
     const html = container.innerHTML;
+    // Row entirely absent — no placeholder, no "not set" text.
     expect(html).not.toContain("Expected arrival");
     expect(html).not.toContain("expectedArrival");
-    expect(html).not.toContain("Planned departure");
-    expect(html).not.toContain("plannedDeparture");
+    expect(container.textContent).not.toContain("Not set");
   });
 
   it("hides the incident form without incident.report", async () => {
