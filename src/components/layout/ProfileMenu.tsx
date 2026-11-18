@@ -54,7 +54,7 @@ export function ProfileMenu({
     "flex min-h-[44px] items-center px-3 text-[13px] font-medium text-ink hover:bg-surface-2";
 
   return (
-    <div className="relative" ref={boxRef}>
+    <div className="relative ml-2" ref={boxRef}>
       <button
         type="button"
         aria-haspopup="menu"
@@ -70,10 +70,15 @@ export function ProfileMenu({
           {initials || "?"}
         </span>
         <span className="hidden text-left leading-tight lg:block">
-          <span className="block max-w-[160px] truncate text-[13px] font-semibold text-ink">
+          <span
+            title={name}
+            className="block max-w-[160px] truncate text-[13px] font-semibold text-ink"
+          >
             {name}
           </span>
-          <span className="block max-w-[160px] truncate text-[11px] text-ink-2">{roleLabel}</span>
+          <span title={roleLabel} className="block max-w-[160px] truncate text-[11px] text-ink-2">
+            {roleLabel}
+          </span>
         </span>
       </button>
       {open ? (

@@ -122,10 +122,10 @@ export function ShellFrame(props: ShellFrameProps) {
                 {initials || "?"}
               </span>
               <span className="min-w-0 flex-1 leading-tight">
-                <span className="block truncate text-[13px] font-semibold text-white">
+                <span title={props.userName} className="block truncate text-[13px] font-semibold text-white">
                   {props.userName}
                 </span>
-                <span className="block truncate text-[11.5px] text-sidebar-text">
+                <span title={props.title} className="block truncate text-[11.5px] text-sidebar-text">
                   {props.title}
                 </span>
               </span>
