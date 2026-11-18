@@ -8,7 +8,9 @@ sweep, full regression gates.
 
 - Tree verified: HEAD `ef6eea0` (production build, `next start`, local
   Postgres `bla_dev` seeded + service-planted fixture; live Supabase
-  untouched).
+  untouched). External-critique pass (§8) applied on top at
+  `7ae6e3c`, re-shot from the production build of that tree with the
+  fixture replanted through the services.
 - Fixture (planted through the platform's own services): 11 bookings
   ORD-1001…1011 across states; packages DELIVERED 1, OUT_FOR_DELIVERY 1,
   DELIVERY_ATTEMPTED 2, IN_TRANSIT 1, RECEIVED_AT_DESTINATION 1,
@@ -422,28 +424,76 @@ panels, transfer/fleet/finance form errors) → DS tokens
 red-700 on white was ~5.9:1, so this is a consistency fix, not a
 contrast repair.)
 
-## 8. External design critique (Task 5) — PENDING PARENT SUBMISSION
+## 8. External design critique (Task 5) — SUBMITTED + DISPOSITIONED
 
-The brief asks for ChatGPT + Gemini critiques of the key AFTER
-screenshots. The submission package is fully prepared at
-`hidden_files/external-critique-package/` (the seven key screenshots
-— SA home, WA home, rider mobile, Live Operations, login, public
-tracking, finance — plus `PROMPT.md` carrying the Teal & Graphite
-brief and the fifteen verbatim questions). All screenshots contain
-local seed data only.
+Submitted by the parent agent 2026-11-18 (Meena's approval): the
+seven key AFTER screenshots from `hidden_files/external-critique-package/`
+(local seed data only) + the package prompt went to ChatGPT and
+Gemini on the "bishesh hero" Free accounts. Full replies saved at
+`hidden_files/chatgpt-design-critique.md` and
+`hidden_files/gemini-design-critique.md`.
 
-**This item is NOT complete.** The Step 10 coordinator runs as a
-generic subagent and cannot operate the live browser; submission
-must be run by the parent agent as a browser task (chatgpt.com /
-gemini.google.com, "bishesh hero" Free account). On submission: save
-the full replies to `hidden_files/chatgpt-design-critique.md` and
-`hidden_files/gemini-design-critique.md`, adopt only
-presentation-only, DS-consistent suggestions (fix + re-shoot), and
-record every adoption and rejection here. The gate does not depend
-on the external scores — it is the fifteen questions answered
-against evidence (§3–§4) — but the critique step itself remains
-open until the parent runs it. No adoption or rejection can be
-recorded yet, and none is claimed.
+- **ChatGPT: 8.2/10 overall** (per-question 4.0–9.0; the 4.0 is map
+  integration, on the sandbox-blocked tiles). Its Free-plan
+  attachment limit blocked the 7th file, so it reviewed **6 of 7**
+  screenshots — all except finance.
+- **Gemini: positive on all fifteen questions** (all 7 screenshots,
+  finance included; trust question answered "yes, with high
+  confidence").
+
+Both reviewers' loudest complaint — the grey/blank map — is the
+sandbox tile block recorded in §10, not production rendering: the
+egress proxy blocks the OSM tile CDN, so no screenshot taken in
+this VM can show tiles. The legitimate residual — a tile failure
+must never present as an unexplained grey void — is adopted (A1).
+Every suggestion from both top-5 lists, plus the adopted minors,
+is dispositioned below. Adopted fixes were applied presentation-
+only, the affected pages re-shot from the production build (same
+fixture method as §2; the fixture was replanted through the
+services after a VM replacement wiped the local DB — 12 bookings,
+INC-1001 HIGH damaged-package + INC-1002, overdue + due-today
+tasks, TKT-1001/1002, INV-1001 PARTIALLY_PAID, COD 1,500
+MATCHED/VERIFIED, SET-1001 PENDING, TRF-1001 IN_TRANSIT with a
+FRESH GPS ping; figures in the re-shots reconcile with that truth
+table).
+
+### Gemini top 5
+
+| # | Suggestion | Disposition |
+|---|------------|-------------|
+| G1 | Custom-styled / dark map tiles for cohesion | **Rejected** (R1) — free-first: OSM standard tiles are the accepted provider; CSS-filter restyling distorts map legibility; the grey is the sandbox proxy blocking the tile host, not production rendering. A1 addresses the real residual. |
+| G2 | Header density: more bell↔profile spacing; centre the ⌘K search trigger | **Adopted** (A2, `2bba50c`) — ProfileMenu gains `ml-2` (bell-to-pill separation 8px → 16px). The header row is `items-center` throughout, so the ⌘K trigger (h-10 in a 60px header) is centred by construction — verified in the re-shot SA home. |
+| G3 | Differentiate secondary metric text from values | **Rejected** (R2) — survey evidence: StatCard label/context text is ink-2 #52645D (5.99:1 on card), and the legacy `slate2`/`faint` tokens both resolve to ink-2, so no text anywhere renders lighter than the DS floor; lightening would break WCAG AA. Values are already ink at 650 weight. No sub-ink-2 context text exists on any home — nothing to fix up. |
+| G4 | Uniform row dividers on compact lists (Least-recent updates, Failed attempts) | **Adopted in part** (A3, `7ae6e3c`) — survey: every home row list already uses `divide-y divide-border`, and the two lists Gemini named are bordered card stacks, where dividers do not apply. The one genuine row list without separators — the rider COD summary (five money rows) — now carries hairline dividers. |
+| G5 | Tactile active states on mobile rider cards | **Adopted** (A4, `7ae6e3c`) — job cards and need-action cards get `active:` border feedback within DS tokens (cards rest on borders by design; `--shadow-card` is none, so no elevation). |
+
+### ChatGPT top 5
+
+| # | Suggestion | Disposition |
+|---|------------|-------------|
+| C1 | Fix map presentation (real tiles, branded markers, loading/error states) | **Adopted in part** (A1, `b1ca6f1`) — new LiveMap tile state: a subtle "Loading map…" chip during the first tile batch, and a labelled panel — "Map tiles could not be loaded — check your connection. Driver positions are listed beside the map." — when a batch completes with zero tiles loaded; it hides automatically when tiles recover and is pointer-events-none so pan/zoom keep working. Tiles/markers unchanged: standard OSM tiles render on a real network (§10 caveat) and pins already carry the teal identity + warehouse chips. All LiveMap/board tests pass unmodified (the react-leaflet stub never fires tile events, so the state simply stays "loading" there). Visible in the re-shot SA home, Live Operations desktop + mobile. |
+| C2 | Polish the tracking timeline (distinguish current/completed; duplicate-looking entries; repeated timestamps) | **Rejected** (R4) — recorded event times/labels are never altered, merged, or cosmetically respaced; the identical timestamps are the fixture's single planted instant and production events carry their real times. The current step is already distinguished (primary + pulsing marker, Step 7). A recorded event is history, not a pending stage, so its completed marker is correct. |
+| C3 | Remove header/page action duplication | **Rejected** (R3) — the brief itself specifies both the header quick-create menu (§4) and page action bars (§6); both lead to the same destinations under the same permission filtering. Removing either would contradict the brief. |
+| C4 | Standardise status badges (icon + label + severity treatment everywhere) | **Adopted in part** (A6, `148dcd8`) — statuses already render through the single semantic StatusBadge; the outliers were severity/priority: incident severity on the Super Admin, Warehouse Admin and Support attention lists rendered as dot+label (StatusBadge compact) and staff task priority rendered via StatusBadge. All four sites now render through PriorityBadge (flag icon + label pill) — visible in the re-shot WA and Support homes. Compact dot+label remains the DS §4 pattern for ordinary statuses in dense rows. |
+| C5 | Finish production presentation (test identities, login panel, KPI prioritisation, finance tables) | **Rejected** (R5–R7 + R9) — the "(test)"/"Demo" names are local seed accounts in screenshots, not UI; a login illustration is forbidden by the brief (the DS §2.6 split panel stands); the SA KPI set/order is brief-specified (§6), with exceptions surfacing via Needs Attention + drill-through. Finance tables: ChatGPT never saw the finance screenshot (attachment limit); Gemini reviewed it positively and Step 8 reconciled every finance figure to the paisa against its module page — a coverage note, not a defect. |
+
+### Minor points
+
+| Point | Disposition |
+|-------|-------------|
+| Truncated account name needs a tooltip (ChatGPT Q2) | **Adopted** (A5, `2bba50c`) — the header profile pill's name/role spans and the sidebar identity block now carry `title` tooltips with the full text; the pill button already had an aria-label naming the account. No layout change. |
+| Rider "next action" should stand out (ChatGPT Q14.1) | **Adopted** (A4, `7ae6e3c`) — the "Next action: …" line on failed-attempt cards is now semibold ink instead of secondary grey, on the field home and the shared failed-attempts list; visible in the re-shot rider mobile ("Next action: RETURN TO SENDER · 00:54"). |
+| Persistent rider bottom nav (ChatGPT Q14.3) | **Rejected** (R8) — the rider flow has one primary path (today's batch); ChatGPT itself conditions it on need. |
+| Map markers need accessible labels beyond the legend (ChatGPT Q9.3) | **Noted, no change** — every movement also appears in the adjacent list with a text freshness badge and last-update age (the board's honesty line states this); the legend is supplementary, never the only carrier. |
+
+### Re-shot pages (production build, post-fix)
+
+`super-admin-dashboard-desktop.png`, `admin-dashboard-desktop.png`,
+`warehouse-admin-dashboard-desktop.png`,
+`support-dashboard-desktop.png`, `live-operations-desktop.png`,
+`live-operations-mobile.png`, `rider-dashboard-desktop.png`,
+`rider-dashboard-mobile.png` — 8 of the 23 AFTER shots replaced;
+the other 15 are untouched (their surfaces did not change).
 
 ## 9. Partly dispositions (summary)
 
@@ -499,3 +549,25 @@ recorded yet, and none is claimed.
 only — classes, display mappings, icons, framing, scroll regions.
 No behaviour, service, permission, route or payload changed. Live
 Supabase untouched throughout.
+
+**Critique-pass addendum (2026-11-18, tree `7ae6e3c` + this doc):**
+the §8 fixes (A1–A6, commits `b1ca6f1`, `2bba50c`, `148dcd8`,
+`7ae6e3c`) are likewise presentation-only — class names, one
+badge-component swap (same data), title attributes, and LiveMap's
+tile-event overlay state (additive; tile provider, markers, data
+flow, polling and DOM contracts unchanged). Gates on the fix tree:
+`npx tsc --noEmit` clean; `npm run lint` 0 errors (same 3
+pre-existing test-file warnings); production build succeeds (the
+build the §8 re-shots were captured from); targeted component
+suites for every touched surface pass (live-operations,
+step4-live-preview, rider-home, step6-rider-job-card,
+step8-support-view, step5-staff-home — 54/54). Full suite, two
+parallel runs: run 1 — 1208/1211 (P3R-2 race, phase2-security
+delta, one further parallel-class failure in the truncated tail);
+run 2 — 1209/1211 (P3R-2 again + step4-executive-home's
+global-count snapshot assertion). Different files per run — the
+documented shared-`bla_test` class signature, not a regression.
+Solo/paired confirmations: phase2 + phase3 security reviews
+paired 65/65; step4-executive-home solo 6/6. **Effective
+1211/1211** — every failed file passes outside parallel load,
+exactly as on the pre-critique tree (§11 above).
